@@ -1,0 +1,44 @@
+appId: com.lautarocaballero.hifidelity
+productName: HiFidelity
+copyright: Copyright © 2025 Lautaro Caballero
+
+directories:
+  buildResources: electron-build
+  output: release
+
+files:
+  - out/**/*
+  - package.json
+
+extraResources:
+  - from: native/libs
+    to: native/libs
+    filter: ["**/*"]
+
+asarUnpack:
+  - native/libs/**
+
+mac:
+  category: public.app-category.music
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: electron-build/entitlements.mac.plist
+  entitlementsInherit: electron-build/entitlements.mac.plist
+  notarize: false
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+linux:
+  category: AudioVideo
+  target:
+    - AppImage
+    - deb
