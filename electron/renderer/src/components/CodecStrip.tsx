@@ -52,7 +52,7 @@ export function CodecStrip({ track, compact = false }: { track: Track | null | u
     ? (compact ? `${c.bitDepth}/${c.sampleRate}` : `${c.bitDepth}-bit / ${c.sampleRate} kHz`)
     : null
   const brText = c.bitrate != null
-    ? (compact ? `${Math.round(c.bitrate)}k` : `${c.bitrate.toLocaleString()} kbps`)
+    ? (compact ? `${Math.round(c.bitrate)} kbps` : `${c.bitrate.toLocaleString()} kbps`)
     : null
   return (
     <div className={`codec-strip tier-${c.tier}${compact ? ' compact' : ''}`}>

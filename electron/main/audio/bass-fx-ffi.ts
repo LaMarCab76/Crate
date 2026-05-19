@@ -2,11 +2,12 @@
 // the 10-band peaking equalizer. Reverb / volume FX live in the same library
 // and can be added later by adding more struct definitions and func calls.
 
-import * as koffiNs from 'koffi'
 import { app } from 'electron'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
 
-const koffi = ((koffiNs as unknown as { default?: typeof koffiNs }).default ?? koffiNs)
+const require = createRequire(import.meta.url)
+const koffi = require('koffi') as typeof import('koffi')
 
 // BASS_BFX_PEAKEQ layout (see old_swift/HiFidelity/Core/Audio/bass-include/bass_fx.h).
 export const BASS_BFX_PEAKEQ = koffi.struct('BASS_BFX_PEAKEQ', {

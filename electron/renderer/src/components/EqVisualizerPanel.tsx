@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
 import { useEqStore } from '@renderer/stores/eqStore'
-import { binsToBands, subscribeFft } from '@renderer/utils/fft'
+import { binsToBands, getLatestFft, subscribeFftDemand } from '@renderer/utils/fft'
 import type { Track } from '@shared/types/library'
 
 const EQ_LABELS = ['32', '64', '125', '250', '500', '1k', '2k', '4k', '8k', '16k'] as const
@@ -10,6 +10,7 @@ const GAIN_MAX = 15
 const GAIN_STEP = 0.5
 // Symmetric EMA weight on the previous value — higher = smoother bars.
 const EMA_ALPHA = 0.78
+const SCALE_EPSILON = 0.004
 
 interface Props {
   track: Track
@@ -24,46 +25,112 @@ export function EqVisualizerPanel({ track }: Props) {
   const globalBands = useEqStore(s => s.bands)
   const overrideBands = useEqStore(s => s.overrideBands)
   const setBand = useEqStore(s => s.setBand)
+  const setBands = useEqStore(s => s.setBands)
+  const previewBand = useEqStore(s => s.previewBand)
   const setEnabled = useEqStore(s => s.setEnabled)
   const setTrackOverride = useEqStore(s => s.setTrackOverride)
 
   const overrideActive = overrideBands !== null
   const bands = overrideActive ? overrideBands! : globalBands
+  const [draftBands, setDraftBandsState] = useState<number[] | null>(null)
+  const displayBands = draftBands ?? bands
 
   const fillRefs = useRef<(HTMLDivElement | null)[]>([])
   const smoothedRef = useRef<Float32Array>(new Float32Array(BAND_COUNT))
   const bandScratchRef = useRef<Float32Array>(new Float32Array(BAND_COUNT))
+  const lastScaleRef = useRef<Float32Array>(new Float32Array(BAND_COUNT))
+  const displayBandsRef = useRef<number[]>(displayBands)
+  const draftBandsRef = useRef<number[] | null>(null)
+  const overrideActiveRef = useRef(overrideActive)
+  const trackDbIdRef = useRef(track.dbId)
+  const pendingPreviewRef = useRef<{ index: number; gain: number; scope: 'global' | 'override' } | null>(null)
+  const previewFrameRef = useRef<number | null>(null)
+  const commitSeqRef = useRef(0)
+
+  displayBandsRef.current = displayBands
+  overrideActiveRef.current = overrideActive
+  trackDbIdRef.current = track.dbId
+
+  const syncDraftBands = (next: number[] | null) => {
+    draftBandsRef.current = next
+    setDraftBandsState(next)
+  }
 
   useEffect(() => {
-    return subscribeFft(bins => {
-      const targets = binsToBands(bins, BAND_COUNT, bandScratchRef.current)
+    const stopDemand = subscribeFftDemand('full')
+    lastScaleRef.current.fill(-1)
+
+    let frame = 0
+    const tick = () => {
+      const targets = binsToBands(getLatestFft(), BAND_COUNT, bandScratchRef.current)
       const smoothed = smoothedRef.current
+      const lastScale = lastScaleRef.current
       for (let i = 0; i < BAND_COUNT; i++) {
         smoothed[i] = smoothed[i] * EMA_ALPHA + targets[i] * (1 - EMA_ALPHA)
         const el = fillRefs.current[i]
         if (el) {
-          const h = Math.max(2, Math.min(100, smoothed[i] * 100))
-          el.style.height = `${h}%`
+          const scale = Math.max(0.02, Math.min(1, smoothed[i]))
+          if (Math.abs(scale - lastScale[i]) >= SCALE_EPSILON) {
+            lastScale[i] = scale
+            el.style.transform = `scaleY(${scale})`
+          }
         }
       }
-    })
+      frame = requestAnimationFrame(tick)
+    }
+
+    frame = requestAnimationFrame(tick)
+    return () => {
+      stopDemand()
+      cancelAnimationFrame(frame)
+    }
   }, [])
 
   const [dragging, setDragging] = useState<number | null>(null)
+  const draggingRef = useRef<number | null>(null)
   const dragStartRef = useRef<{ y: number; gain: number; height: number } | null>(null)
 
   const clampGain = (g: number) => Math.max(GAIN_MIN, Math.min(GAIN_MAX, g))
   const snapGain = (g: number) => Math.round(g / GAIN_STEP) * GAIN_STEP
 
-  const handleBandChange = (index: number, gain: number) => {
-    const next = clampGain(gain)
-    if (overrideActive && track.dbId != null) {
-      const updated = [...bands]
-      updated[index] = next
-      void setTrackOverride(track.dbId, { enabled: true, bands: updated })
-    } else {
-      void setBand(index, next)
+  const setDraggingIndex = (index: number | null) => {
+    draggingRef.current = index
+    setDragging(index)
+  }
+
+  const queuePreview = (index: number, gain: number) => {
+    pendingPreviewRef.current = {
+      index,
+      gain,
+      scope: overrideActiveRef.current ? 'override' : 'global',
     }
+    if (previewFrameRef.current !== null) return
+    previewFrameRef.current = requestAnimationFrame(() => {
+      previewFrameRef.current = null
+      const pending = pendingPreviewRef.current
+      pendingPreviewRef.current = null
+      if (pending) void previewBand(pending.index, pending.gain, pending.scope)
+    })
+  }
+
+  const updateDraftBand = (index: number, gain: number) => {
+    const next = clampGain(gain)
+    const base = draftBandsRef.current ?? displayBandsRef.current
+    if (next === (base[index] ?? 0)) return
+    const updated = [...base]
+    updated[index] = next
+    syncDraftBands(updated)
+    queuePreview(index, next)
+  }
+
+  const commitBandChange = (index: number, gain: number, sourceBands = displayBandsRef.current) => {
+    const next = clampGain(gain)
+    if (overrideActiveRef.current && trackDbIdRef.current != null) {
+      const updated = [...sourceBands]
+      updated[index] = next
+      return setTrackOverride(trackDbIdRef.current, { enabled: true, bands: updated })
+    }
+    return setBand(index, next)
   }
 
   const handlePointerDown = (i: number) => (e: PointerEvent<HTMLDivElement>) => {
@@ -71,25 +138,36 @@ export function EqVisualizerPanel({ track }: Props) {
     e.preventDefault()
     e.currentTarget.setPointerCapture(e.pointerId)
     const rect = e.currentTarget.getBoundingClientRect()
-    dragStartRef.current = { y: e.clientY, gain: bands[i], height: rect.height }
-    setDragging(i)
+    const base = [...displayBandsRef.current]
+    syncDraftBands(base)
+    dragStartRef.current = { y: e.clientY, gain: base[i] ?? 0, height: rect.height }
+    setDraggingIndex(i)
   }
 
   const handlePointerMove = (i: number) => (e: PointerEvent<HTMLDivElement>) => {
-    if (dragging !== i || !dragStartRef.current) return
+    if (draggingRef.current !== i || !dragStartRef.current) return
     const { y, gain, height } = dragStartRef.current
     if (height <= 0) return
     const pxPerDb = height / (GAIN_MAX - GAIN_MIN)
     const deltaDb = (y - e.clientY) / pxPerDb
     const next = snapGain(clampGain(gain + deltaDb))
-    if (next !== bands[i]) handleBandChange(i, next)
+    updateDraftBand(i, next)
   }
 
   const handlePointerUp = (i: number) => (e: PointerEvent<HTMLDivElement>) => {
-    if (dragging !== i) return
+    if (draggingRef.current !== i) return
     try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* not captured */ }
+    const finalBands = draftBandsRef.current
+    const finalGain = finalBands?.[i] ?? displayBandsRef.current[i] ?? 0
+    const commitSeq = ++commitSeqRef.current
     dragStartRef.current = null
-    setDragging(null)
+    setDraggingIndex(null)
+    if (!finalBands) return
+    void commitBandChange(i, finalGain, finalBands)
+      .catch(() => { /* keep UI responsive; store sync will recover */ })
+      .finally(() => {
+        if (commitSeqRef.current === commitSeq) syncDraftBands(null)
+      })
   }
 
   const handleKeyDown = (i: number) => (e: KeyboardEvent<HTMLDivElement>) => {
@@ -97,15 +175,27 @@ export function EqVisualizerPanel({ track }: Props) {
     const step = e.shiftKey ? 2 : GAIN_STEP
     if (e.key === 'ArrowUp') {
       e.preventDefault()
-      handleBandChange(i, bands[i] + step)
+      void commitBandChange(i, displayBandsRef.current[i] + step)
     } else if (e.key === 'ArrowDown') {
       e.preventDefault()
-      handleBandChange(i, bands[i] - step)
+      void commitBandChange(i, displayBandsRef.current[i] - step)
     } else if (e.key === 'Home' || e.key === '0') {
       e.preventDefault()
-      handleBandChange(i, 0)
+      void commitBandChange(i, 0)
     }
   }
+
+  useEffect(() => {
+    return () => {
+      if (previewFrameRef.current !== null) cancelAnimationFrame(previewFrameRef.current)
+    }
+  }, [])
+
+  useEffect(() => {
+    dragStartRef.current = null
+    setDraggingIndex(null)
+    syncDraftBands(null)
+  }, [overrideActive, track.dbId])
 
   const handleToggleOverride = () => {
     if (track.dbId == null) return
@@ -120,10 +210,11 @@ export function EqVisualizerPanel({ track }: Props) {
 
   const handleReset = () => {
     const flat = new Array(BAND_COUNT).fill(0)
+    syncDraftBands(null)
     if (overrideActive && track.dbId != null) {
       void setTrackOverride(track.dbId, { enabled: true, bands: flat })
     } else {
-      for (let i = 0; i < BAND_COUNT; i++) void setBand(i, 0)
+      void setBands(flat)
     }
   }
 
@@ -155,7 +246,7 @@ export function EqVisualizerPanel({ track }: Props) {
       <div className="eq-viz-body">
         <div className="eq-bands">
           {EQ_LABELS.map((label, i) => {
-            const gain = bands[i] ?? 0
+            const gain = displayBands[i] ?? 0
             const norm = gain / GAIN_MAX
             const bandStyle = { '--gain-norm': norm.toFixed(3) } as CSSProperties
             return (
@@ -174,7 +265,7 @@ export function EqVisualizerPanel({ track }: Props) {
                 onPointerMove={handlePointerMove(i)}
                 onPointerUp={handlePointerUp(i)}
                 onPointerCancel={handlePointerUp(i)}
-                onDoubleClick={() => { if (enabled) handleBandChange(i, 0) }}
+                onDoubleClick={() => { if (enabled) void commitBandChange(i, 0) }}
                 onKeyDown={handleKeyDown(i)}
               >
                 <div className="eq-band-track">

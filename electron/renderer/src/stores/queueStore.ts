@@ -4,6 +4,7 @@
 // crosses the gapless threshold.
 
 import { create } from 'zustand'
+import { useShallow } from 'zustand/shallow'
 import type { Track } from '@shared/types/library'
 import { usePlaybackStore } from './playbackStore'
 
@@ -31,7 +32,8 @@ let gaplessPreloadFiredFor: string | null = null
 
 async function loadAndPlay(track: Track): Promise<void> {
   if (!track.path) return
-  const info = await window.api.audio.load(track.path)
+  // Pass dbId so the engine can pick up a saved per-track EQ override.
+  const info = await window.api.audio.load(track.path, track.dbId ?? null)
   usePlaybackStore.getState().setStreamInfo(info)
   usePlaybackStore.getState().setCurrentTrack(track)
   await window.api.audio.play()
@@ -150,6 +152,8 @@ if (typeof window !== 'undefined' && window.api?.audio) {
       })
       usePlaybackStore.getState().setCurrentTrack(next)
       gaplessPreloadFiredFor = null
+      // Tell main to re-evaluate the per-track EQ override for the new track.
+      void window.api.audio.setActiveTrack(next.dbId ?? null)
     }
   })
 
@@ -171,5 +175,8 @@ export function useQueueHistory(): Track[] {
   return useQueueStore(s => s.history)
 }
 export function useQueueUpNext(): Track[] {
-  return useQueueStore(s => s.tracks.slice(s.currentIndex + 1))
+  // useShallow compares element-wise so the returned array gets memoized and
+  // we don't trigger an infinite render loop from .slice() returning a new
+  // reference on every read.
+  return useQueueStore(useShallow(s => s.tracks.slice(s.currentIndex + 1)))
 }

@@ -4,7 +4,7 @@ import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
 import { TrackTable } from '@renderer/components/TrackTable'
 import { fmtTotal } from '@renderer/utils/format'
-import { useArtistByUiId } from '@renderer/stores/libraryStore'
+import { toggleArtistFavorite, useArtistByUiId } from '@renderer/stores/libraryStore'
 
 interface Props {
   artist: Artist
@@ -28,7 +28,19 @@ export function ArtistView({ artist, onSelectAlbum }: Props) {
         </div>
         <div className="meta">
           <div className="kicker">Artist</div>
-          <h1>{ar.name}</h1>
+          <h1 style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span>{ar.name}</span>
+            {ar.dbId != null && (
+              <button
+                className="tb-icon-btn"
+                onClick={() => { void toggleArtistFavorite(ar.dbId!, !ar.favorite) }}
+                title={ar.favorite ? 'Remove from favorite artists' : 'Mark as favorite artist'}
+                style={{ width: 28, height: 28 }}
+              >
+                <Icon name={ar.favorite ? 'heartF' : 'heart'} size={16} />
+              </button>
+            )}
+          </h1>
           <div className="stat">
             {ar.albums.length} album{ar.albums.length > 1 ? 's' : ''} · {allTracks.length} tracks ·{' '}
             {allTracks.reduce((s, t) => s + t.plays, 0)} plays

@@ -50,6 +50,8 @@ export interface DbArtist {
   artwork_source_type: string | null
   artwork_path: string | null
   date_added: string
+  is_favorite: number
+  state_updated_at: number | null
 }
 
 export interface DbGenre {
@@ -111,6 +113,7 @@ export interface DbTrack {
   artist_id: number | null
   genre_id: number | null
   r128_integrated_loudness: number | null
+  state_updated_at: number | null
 }
 
 export interface DbPlaylist {

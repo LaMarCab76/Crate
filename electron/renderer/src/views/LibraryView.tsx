@@ -4,10 +4,12 @@ import { fmtTotal } from '@renderer/utils/format'
 import { useLibraryStore, useTracks } from '@renderer/stores/libraryStore'
 
 function EmptyState() {
-  const pickAndAdd = useLibraryStore(s => async () => {
-    const picked = await s.pickFolder()
-    if (picked) await s.addFolder(picked)
-  })
+  const pickFolder = useLibraryStore(s => s.pickFolder)
+  const addFolder = useLibraryStore(s => s.addFolder)
+  const pickAndAdd = async () => {
+    const picked = await pickFolder()
+    if (picked) await addFolder(picked)
+  }
 
   return (
     <div

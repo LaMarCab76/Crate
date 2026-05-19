@@ -12,11 +12,28 @@
 import { broadcast } from '../ipc/events'
 import {
   BASS_ACTIVE_PAUSED, BASS_ACTIVE_PLAYING, BASS_ACTIVE_STOPPED,
-  BASS_ATTRIB_VOL, BASS_POS_BYTE, BASS_SAMPLE_FLOAT,
+  BASS_ATTRIB_VOL, BASS_DATA_FFT2048, BASS_POS_BYTE, BASS_SAMPLE_FLOAT,
   BASS_STREAM_PRESCAN, bassErrorName,
 } from './bass-constants'
 import { loadBass, makeChannelGetInfo, type BassChannelInfo, type HSTREAM } from './bass-ffi'
 import { loadAllPlugins } from './PluginLoader'
+import type { FftMode } from '@shared/types/ipc-contract'
+
+// FFT2048 returns 1024 complex bins as magnitudes (0..1).
+const FFT_BINS_RAW = 1024
+const FFT_BINS_OUT = 64
+// Pre-computed log-spaced indices into the raw FFT array.
+// Skewed so low frequencies get more visual real estate (bass is where most
+// energy lives). Computed as floor(pow(1023, i / (n-1))).
+const FFT_LOG_INDEX: number[] = Array.from({ length: FFT_BINS_OUT }, (_, i) => {
+  const ratio = i / (FFT_BINS_OUT - 1)
+  return Math.max(1, Math.min(FFT_BINS_RAW - 1, Math.floor(Math.pow(FFT_BINS_RAW - 1, ratio))))
+})
+const FFT_INTERVAL_MS: Record<Exclude<FftMode, 'off' | 'screen'>, number> = {
+  mini: 90,
+  full: 33,
+}
+const DEFAULT_SCREEN_FFT_INTERVAL_MS = 16
 
 export type PlaybackStatus = 'stopped' | 'playing' | 'paused' | 'loading'
 
@@ -39,6 +56,12 @@ export class AudioEngine {
   private volume = 1.0
   private status: PlaybackStatus = 'stopped'
   private progressTimer: NodeJS.Timeout | null = null
+  private fftTimer: NodeJS.Timeout | null = null
+  private fftMode: FftMode = 'off'
+  private fftIntervalMs = 0
+  private screenFftIntervalMs = DEFAULT_SCREEN_FFT_INTERVAL_MS
+  private fftBuffer: Float32Array = new Float32Array(FFT_BINS_RAW)
+  private fftOut: number[] = new Array(FFT_BINS_OUT).fill(0)
   private getInfo: ReturnType<typeof makeChannelGetInfo> | null = null
 
   ensureInit(): void {
@@ -171,6 +194,14 @@ export class AudioEngine {
     }
   }
 
+  setFftMode(mode: FftMode, screenHz?: number): void {
+    const nextScreenIntervalMs = this.intervalFromScreenHz(screenHz)
+    if (this.fftMode === mode && this.screenFftIntervalMs === nextScreenIntervalMs) return
+    this.fftMode = mode
+    this.screenFftIntervalMs = nextScreenIntervalMs
+    this.syncFftTimer()
+  }
+
   getStatus(): PlaybackStatus {
     if (this.currentStream === 0) return 'stopped'
     const bass = loadBass()
@@ -245,11 +276,17 @@ export class AudioEngine {
   }
 
   private startProgressTimer(): void {
-    this.stopProgressTimer()
+    this.clearProgressTimer()
     this.progressTimer = setInterval(() => this.emitProgress(), 250)
+    this.syncFftTimer()
   }
 
   private stopProgressTimer(): void {
+    this.clearProgressTimer()
+    this.stopFftTimer()
+  }
+
+  private clearProgressTimer(): void {
     if (this.progressTimer) {
       clearInterval(this.progressTimer)
       this.progressTimer = null
@@ -262,6 +299,59 @@ export class AudioEngine {
       positionSec: this.getPosition(),
       durationSec: this.streamInfo.duration,
     })
+  }
+
+  private syncFftTimer(): void {
+    if (this.fftMode === 'off' || this.getStatus() !== 'playing' || this.currentStream === 0) {
+      this.stopFftTimer()
+      return
+    }
+
+    const nextInterval = this.fftMode === 'screen'
+      ? this.screenFftIntervalMs
+      : FFT_INTERVAL_MS[this.fftMode]
+    if (this.fftTimer && this.fftIntervalMs === nextInterval) return
+
+    this.stopFftTimer(false)
+    this.fftIntervalMs = nextInterval
+    this.emitFft()
+    this.fftTimer = setInterval(() => this.emitFft(), nextInterval)
+  }
+
+  private stopFftTimer(sendFlatline = true): void {
+    if (this.fftTimer) {
+      clearInterval(this.fftTimer)
+      this.fftTimer = null
+      this.fftIntervalMs = 0
+    }
+    if (sendFlatline) {
+      // Send one final flatline frame so the renderer can settle bars to 0.
+      this.fftOut.fill(0)
+      broadcast('audio:fft', { bins: this.fftOut })
+    }
+  }
+
+  private emitFft(): void {
+    if (this.currentStream === 0) return
+    const bass = loadBass()
+    const ret = bass.ChannelGetData(this.currentStream, this.fftBuffer, BASS_DATA_FFT2048)
+    if (ret === 0xFFFFFFFF) return  // -1 as uint32 → error / stream not playing
+    // Downsample to FFT_BINS_OUT log-spaced bins with light scaling so faint
+    // mids/highs are still visible. sqrt() pushes near-zero values up; the *1.6
+    // gain keeps peaks near 1.0 for typical material.
+    for (let i = 0; i < FFT_BINS_OUT; i++) {
+      const idx = FFT_LOG_INDEX[i]
+      const amp = this.fftBuffer[idx]
+      this.fftOut[i] = Math.min(1, Math.sqrt(Math.max(0, amp)) * 1.6)
+    }
+    broadcast('audio:fft', { bins: this.fftOut })
+  }
+
+  private intervalFromScreenHz(screenHz: number | undefined): number {
+    const hz = Number(screenHz)
+    if (!Number.isFinite(hz) || hz <= 0) return DEFAULT_SCREEN_FFT_INTERVAL_MS
+    const clampedHz = Math.max(30, Math.min(240, hz))
+    return Math.max(4, Math.round(1000 / clampedHz))
   }
 
   dispose(): void {

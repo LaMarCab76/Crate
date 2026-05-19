@@ -112,6 +112,14 @@ export const BASS_ERROR_NAMES: Record<number, string> = {
   48: 'PROTOCOL', 49: 'DENIED', [-1 >>> 0]: 'UNKNOWN',
 }
 
+// ChannelGetData flags
+// BASS_DATA_FFT2048 = 0x80000003 → 1024 complex bins (we read the magnitudes)
+// BASS_DATA_FFT_INDIVIDUAL = 0x10 (or-into FFT flag for per-channel FFTs, unused)
+export const BASS_DATA_FFT256   = 0x80000000
+export const BASS_DATA_FFT512   = 0x80000001
+export const BASS_DATA_FFT1024  = 0x80000002
+export const BASS_DATA_FFT2048  = 0x80000003
+
 // ---------------- BASS_FX ----------------
 
 // EQ filter types — we only use PEAKEQ (10-band parametric peak).

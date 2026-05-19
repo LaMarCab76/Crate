@@ -8,10 +8,12 @@
 // We therefore keep every registered SYNCPROC alive in a module-level Map
 // keyed by the sync handle until the corresponding RemoveSync call returns.
 
-import * as koffiNs from 'koffi'
+import { createRequire } from 'node:module'
 import { broadcast } from '../ipc/events'
 
-const koffi = ((koffiNs as unknown as { default?: typeof koffiNs }).default ?? koffiNs)
+const require = createRequire(import.meta.url)
+const koffi = require('koffi') as typeof import('koffi')
+
 import { BASS_SYNC_END, BASS_SYNC_ONETIME } from './bass-constants'
 import { loadBass, SYNCPROC, type HSTREAM, type HSYNC } from './bass-ffi'
 import type { AudioEngine } from './AudioEngine'

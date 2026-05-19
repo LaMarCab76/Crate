@@ -84,6 +84,8 @@ export interface QueueApi {
 export interface LyricsApi {
   get(trackId: number): Promise<DbLyrics | null>
   set(trackId: number, lrcContent: string, source?: string | null, language?: string | null): Promise<void>
+  // Cached fetch with LRCLIB fallback. Use this from UI; `get` is the raw DB read.
+  getForTrack(trackId: number): Promise<LyricsForTrack | null>
 }
 
 export interface MetaApi {
@@ -91,6 +93,8 @@ export interface MetaApi {
 }
 
 export type PlaybackStatus = 'stopped' | 'playing' | 'paused' | 'loading'
+export type FftMode = 'off' | 'mini' | 'full' | 'screen'
+export type EqPreviewScope = 'global' | 'override'
 
 export interface StreamInfoPayload {
   freq: number
@@ -117,34 +121,78 @@ export interface PlaybackStatePayload {
 export interface EqState {
   enabled: boolean
   preset: string
-  bands: number[]
+  bands: number[]              // global 10-band gains in dB
+  overrideBands: number[] | null  // null when no per-track override is active
+}
+
+export interface EqTrackOverride {
+  enabled: boolean
+  bands: number[]              // 10 gains in dB
+}
+
+export interface FftEvent {
+  bins: number[]               // ~64 log-spaced amplitude bins, 0..1
+}
+
+export interface LyricsForTrack {
+  trackId: number
+  lrcContent: string           // either raw LRC (with [mm:ss.xx]) or plain text
+  source: string | null
+  language: string | null
+  synced: boolean
+}
+
+export interface ArtistListMode {
+  mode: 'manual' | 'topPlays'
+  n?: number
 }
 
 export interface AudioApi {
-  load(path: string): Promise<StreamInfoPayload | null>
+  load(path: string, trackId?: number | null): Promise<StreamInfoPayload | null>
   play(): Promise<void>
   pause(): Promise<void>
   stop(): Promise<void>
   seek(positionSec: number): Promise<void>
   setVolume(value: number): Promise<void>
+  setFftMode(mode: FftMode): Promise<void>
   preloadNext(path: string): Promise<void>
   clearNext(): Promise<void>
   swapNow(): Promise<boolean>
+  setActiveTrack(trackId: number | null): Promise<void>
   getStatus(): Promise<PlaybackStatePayload>
 
   onProgress(h: (e: ProgressEvent) => void): EventOff
   onTrackEnded(h: () => void): EventOff
   onGaplessFired(h: (e: { path: string }) => void): EventOff
   onStateChanged(h: (e: { status: PlaybackStatus }) => void): EventOff
+  onFft(h: (e: FftEvent) => void): EventOff
 }
 
 export interface EqApi {
   getState(): Promise<EqState>
   setEnabled(enabled: boolean): Promise<void>
   setBand(index: number, gain: number): Promise<void>
+  setBands(bands: number[]): Promise<void>
+  previewBand(index: number, gain: number, scope: EqPreviewScope): Promise<void>
   setPreset(name: string): Promise<void>
   presets(): Promise<string[]>
+  setTrackOverride(trackId: number, override: EqTrackOverride | null): Promise<void>
+  getTrackOverride(trackId: number): Promise<EqTrackOverride | null>
   onChanged(h: (e: EqState) => void): EventOff
+}
+
+export interface TracksApi {
+  countPlay(trackId: number): Promise<void>
+}
+
+export interface ArtistsApi {
+  setFavorite(id: number, favorite: boolean): Promise<void>
+}
+
+export interface SettingsApi {
+  // Pushes the renderer-side preference into main so the LibraryBackup
+  // service can short-circuit writes when the user has disabled the feature.
+  setLibraryBackup(enabled: boolean): Promise<void>
 }
 
 export interface Api {
@@ -154,6 +202,9 @@ export interface Api {
   lyrics: LyricsApi
   audio: AudioApi
   eq: EqApi
+  tracks: TracksApi
+  artists: ArtistsApi
+  settings: SettingsApi
 }
 
 declare global {

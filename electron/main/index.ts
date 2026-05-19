@@ -7,6 +7,7 @@ import { registerAudioChannel } from './ipc/audio-channel'
 import { registerProtocolHandlers, registerProtocolSchemes } from './protocol'
 import { getFolderWatcher } from './library/FolderWatcher'
 import { getAudioEngine } from './audio/AudioEngine'
+import { getLibraryBackup } from './services/LibraryBackup'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -28,7 +29,7 @@ function createMainWindow(): BrowserWindow {
     vibrancy: 'sidebar',
     visualEffectState: 'active',
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
+      preload: join(__dirname, '../preload/index.mjs'),
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
@@ -36,6 +37,21 @@ function createMainWindow(): BrowserWindow {
   })
 
   win.once('ready-to-show', () => win.show())
+  // Safety net: if the renderer crashes before first paint, ready-to-show
+  // never fires and the window stays hidden. In dev we force-show after a
+  // short delay so the resulting blank/error page is at least visible.
+  if (isDev) setTimeout(() => { if (!win.isVisible()) win.show() }, 1500)
+
+  win.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    console.error(`[renderer] did-fail-load code=${code} desc=${desc} url=${url}`)
+  })
+  win.webContents.on('render-process-gone', (_e, details) => {
+    console.error('[renderer] render-process-gone', details)
+  })
+  win.webContents.on('console-message', (_e, level, message, line, src) => {
+    const tag = level === 3 ? 'ERROR' : level === 2 ? 'WARN' : 'LOG'
+    console.log(`[renderer:${tag}] ${src}:${line} — ${message}`)
+  })
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
@@ -44,6 +60,7 @@ function createMainWindow(): BrowserWindow {
 
   if (isDev && process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    win.webContents.openDevTools({ mode: 'detach' })
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'))
   }
@@ -75,6 +92,9 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
+  // Flush any pending portable-library backup writes before we close the DB,
+  // otherwise the JSON would miss the last few mutations of the session.
+  try { getLibraryBackup().flushAll() } catch (err) { console.error('[backup] flush failed:', err) }
   getFolderWatcher().stopAll()
   try { getAudioEngine().dispose() } catch { /* engine may not have initialized */ }
   closeDatabase()

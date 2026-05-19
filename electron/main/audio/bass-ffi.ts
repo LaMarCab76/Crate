@@ -2,14 +2,17 @@
 // Loaded lazily so the module can be imported in test environments without
 // the native libraries being present.
 
-// koffi ships a CJS default export at runtime but a named-export .d.ts.
-// We import everything as a namespace, then unwrap .default if present so
-// koffi.load / koffi.struct / koffi.proto resolve correctly under ESM.
-import * as koffiNs from 'koffi'
+// koffi exports a single `default` from its ESM entry. Under Electron the
+// `import * as` + unwrap dance fails at runtime in the bundled output, so
+// we go through `createRequire` to grab the CJS export directly — this gives
+// us the koffi object straight, no interop quirks.
 import { app } from 'electron'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
 
-const koffi = ((koffiNs as unknown as { default?: typeof koffiNs }).default ?? koffiNs)
+const require = createRequire(import.meta.url)
+type KoffiNs = typeof import('koffi')
+const koffi = require('koffi') as KoffiNs
 
 // Numeric handle types — all DWORDs (uint32) under the hood.
 export type HSTREAM = number
@@ -74,6 +77,7 @@ interface BassBindings {
   ChannelSetFX: (handle: number, type: number, priority: number) => number
   ChannelRemoveFX: (handle: number, fx: number) => number
   ChannelGetInfo: (handle: number, info: object) => number
+  ChannelGetData: (handle: number, buffer: Float32Array, length: number) => number
 }
 
 let bindings: BassBindings | null = null
@@ -107,6 +111,7 @@ export function loadBass(): BassBindings {
     ChannelSetFX:       lib.func('uint32_t BASS_ChannelSetFX(uint32_t, uint32_t, int32_t)'),
     ChannelRemoveFX:    lib.func('int32_t BASS_ChannelRemoveFX(uint32_t, uint32_t)'),
     ChannelGetInfo:     lib.func('int32_t BASS_ChannelGetInfo(uint32_t, _Out_ BASS_CHANNELINFO *)'),
+    ChannelGetData:     lib.func('uint32_t BASS_ChannelGetData(uint32_t, _Out_ float *, uint32_t)'),
   } as unknown as BassBindings
 
   // Force koffi to register the struct under the name used in func signatures above.

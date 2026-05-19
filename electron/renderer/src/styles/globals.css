@@ -301,7 +301,7 @@ html, body {
   flex-shrink: 0;
 }
 .pp-top .art {
-  width: min(100%, 240px); aspect-ratio: 1;
+  width: 100%; aspect-ratio: 1;
   border-radius: 8px; overflow: hidden;
   box-shadow: 0 10px 28px rgba(0,0,0,0.35), 0 0 0 0.5px rgba(255,255,255,0.06);
 }
@@ -327,13 +327,13 @@ html, body {
 }
 
 /* Codec / quality strip — minimal monospace line, audiophile style.
-   Color tier is set by .tier-* class on the strip; the LED dot mirrors it.
+   Color tier is set by .tier-* class on the strip.
    Tone palette:
      low    (<256 lossy)              → neutral gray
      mid    (256 lossy)                → muted yellow
      high   (320 lossy)                → muted green
      cd     (FLAC/ALAC 16/44.1)        → cool blue
-     studio (24-bit / 44.1–88k)        → blue-gold (warm cyan-amber)
+     studio (24-bit / 44.1–88k)        → soft blue
      master (24-bit / 96k)             → orange
      ref    (24-bit / 176k+)           → gold
 */
@@ -347,35 +347,26 @@ html, body {
   overflow: hidden;
   margin-top: 4px;
   --tier: #8e8e93;        /* base color */
-  --tier-soft: rgba(142,142,147,0.55);
   color: var(--tier);
 }
-.codec-strip .res, .codec-strip .codec { color: var(--tier); font-weight: 600; }
-.codec-strip > span:not(.res):not(.codec):not(.sep) { color: var(--tier-soft); }
-.codec-strip .sep { color: var(--tier-soft); }
-.codec-strip.tier-low    { --tier: #8e8e93; --tier-soft: rgba(142,142,147,0.55); }
-.codec-strip.tier-mid    { --tier: #d6b94a; --tier-soft: rgba(214,185,74,0.55); }
-.codec-strip.tier-high   { --tier: #6cc080; --tier-soft: rgba(108,192,128,0.55); }
-.codec-strip.tier-cd     { --tier: #5aa8e8; --tier-soft: rgba(90,168,232,0.55); }
-.codec-strip.tier-studio { --tier: #8fb8d6; --tier-soft: rgba(143,184,214,0.55); }
-.codec-strip.tier-master { --tier: #e6914a; --tier-soft: rgba(230,145,74,0.55); }
-.codec-strip.tier-ref    { --tier: #d4af37; --tier-soft: rgba(212,175,55,0.55); }
-
-/* For the "studio" tier we paint res in blue-leaning, codec/bitrate in gold,
-   so the dual nature reads at a glance. */
-.codec-strip.tier-studio .res { color: #6f9ec2; }
-.codec-strip.tier-studio .codec { color: #c8a45e; }
+.codec-strip > span { color: inherit; }
+.codec-strip .res, .codec-strip .codec { font-weight: 600; }
+.codec-strip.tier-low    { --tier: #8e8e93; }
+.codec-strip.tier-mid    { --tier: #d6b94a; }
+.codec-strip.tier-high   { --tier: #6cc080; }
+.codec-strip.tier-cd     { --tier: #5aa8e8; }
+.codec-strip.tier-studio { --tier: #8fb8d6; }
+.codec-strip.tier-master { --tier: #e6914a; }
+.codec-strip.tier-ref    { --tier: #d4af37; }
 
 /* Light theme — bump saturation/darken a touch so it doesn't look washed out */
-.theme-light .codec-strip.tier-low    { --tier: #6e6e73; --tier-soft: rgba(110,110,115,0.55); }
-.theme-light .codec-strip.tier-mid    { --tier: #a8881f; --tier-soft: rgba(168,136,31,0.55); }
-.theme-light .codec-strip.tier-high   { --tier: #2f8c4a; --tier-soft: rgba(47,140,74,0.55); }
-.theme-light .codec-strip.tier-cd     { --tier: #1f6fb8; --tier-soft: rgba(31,111,184,0.55); }
-.theme-light .codec-strip.tier-studio { --tier: #4f7ea3; --tier-soft: rgba(79,126,163,0.55); }
-.theme-light .codec-strip.tier-master { --tier: #c66a1f; --tier-soft: rgba(198,106,31,0.55); }
-.theme-light .codec-strip.tier-ref    { --tier: #a8851c; --tier-soft: rgba(168,133,28,0.55); }
-.theme-light .codec-strip.tier-studio .res { color: #3b6a8f; }
-.theme-light .codec-strip.tier-studio .codec { color: #8a6e2a; }
+.theme-light .codec-strip.tier-low    { --tier: #6e6e73; }
+.theme-light .codec-strip.tier-mid    { --tier: #a8881f; }
+.theme-light .codec-strip.tier-high   { --tier: #2f8c4a; }
+.theme-light .codec-strip.tier-cd     { --tier: #1f6fb8; }
+.theme-light .codec-strip.tier-studio { --tier: #4f7ea3; }
+.theme-light .codec-strip.tier-master { --tier: #c66a1f; }
+.theme-light .codec-strip.tier-ref    { --tier: #a8851c; }
 
 /* Progress + controls inside player pane */
 .pp-progress {
@@ -615,15 +606,18 @@ html, body {
 /* Mini equalizer indicator */
 .eq-bars { display: inline-flex; align-items: flex-end; gap: 1.5px; height: 12px; width: 12px; }
 .eq-bars > i {
-  display: block; width: 2px; background: currentColor;
+  display: block; width: 2px; height: 100%; background: currentColor;
   border-radius: 1px;
+  transform: scaleY(0.25);
+  transform-origin: bottom;
+  will-change: transform;
   animation: eq 0.9s ease-in-out infinite alternate;
 }
 .eq-bars > i:nth-child(1) { animation-delay: 0s; }
 .eq-bars > i:nth-child(2) { animation-delay: 0.2s; }
 .eq-bars > i:nth-child(3) { animation-delay: 0.4s; }
 @keyframes eq {
-  0% { height: 25%; } 100% { height: 100%; }
+  0% { transform: scaleY(0.25); } 100% { transform: scaleY(1); }
 }
 
 /* Library page header */
@@ -997,7 +991,10 @@ html, body {
 .eq-viz .eq-band-fill {
   position: absolute;
   left: 0; right: 0; bottom: 0;
-  height: 2%;
+  height: 100%;
+  transform: scaleY(0.02);
+  transform-origin: bottom;
+  will-change: transform;
   border-radius: 3px 3px 0 0;
   background: color-mix(in oklab,
     var(--text-tertiary),
@@ -1046,7 +1043,6 @@ html, body {
   margin: 0; gap: 4px;
   font-size: 10px;
 }
-.codec-strip.compact .sep { opacity: 0.5; }
 
 /* Mini player */
 .mini-player {

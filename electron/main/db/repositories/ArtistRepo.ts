@@ -7,6 +7,7 @@ export class ArtistRepo {
   private stmtByNormalized
   private stmtById
   private stmtAll
+  private stmtSetFavorite
   private stmtInsert
 
   constructor(db: BetterSqliteDatabase) {
@@ -14,6 +15,9 @@ export class ArtistRepo {
     this.stmtByNormalized = db.prepare<[string], DbArtist>(`SELECT * FROM artists WHERE normalized_name = ?`)
     this.stmtById = db.prepare<[number], DbArtist>(`SELECT * FROM artists WHERE id = ?`)
     this.stmtAll = db.prepare<unknown[], DbArtist>(`SELECT * FROM artists ORDER BY sort_name COLLATE NOCASE ASC`)
+    this.stmtSetFavorite = db.prepare<[number, number, number]>(
+      `UPDATE artists SET is_favorite = ?, state_updated_at = ? WHERE id = ?`,
+    )
     this.stmtInsert = db.prepare(`
       INSERT INTO artists (name, normalized_name, sort_name, date_added)
       VALUES (?, ?, ?, ?)
@@ -34,5 +38,9 @@ export class ArtistRepo {
 
   getAll(): DbArtist[] {
     return this.stmtAll.all()
+  }
+
+  setFavorite(id: number, favorite: boolean): void {
+    this.stmtSetFavorite.run(favorite ? 1 : 0, Date.now(), id)
   }
 }

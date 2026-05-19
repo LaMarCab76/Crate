@@ -44,12 +44,15 @@ export interface Album {
 
 export interface Artist {
   id: string
+  dbId?: number
   name: string
   albums: Album[]
   seed: number
   palette: [string, string, string]
   pattern: Pattern
   bio?: string
+  favorite?: boolean
+  trackCount: number
 }
 
 export type PlaylistKind = 'manual' | 'smart'

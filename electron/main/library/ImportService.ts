@@ -6,6 +6,7 @@ import { getRepos } from '../db/repositories'
 import { readTrackMetadata, type TrackMetadata } from './MetadataExtractor'
 import { parseArtistName } from './ArtistNameParser'
 import { broadcast } from '../ipc/events'
+import { getLibraryBackup } from '../services/LibraryBackup'
 import type { DbFolder, DbTrackInsert } from '@shared/types/db'
 
 const AUDIO_EXTENSIONS = new Set([
@@ -95,6 +96,7 @@ function buildTrackInsert(
     artist_id: artistId,
     genre_id: genreId,
     r128_integrated_loudness: null,
+    state_updated_at: null,
   }
 }
 
@@ -212,6 +214,20 @@ export class ImportService {
       flush()
 
       this.repos.folders.updateTrackCount(folderId, imported + (files.length - fresh.length))
+
+      // After the scan is done, fold in any per-track state that lives in the
+      // folder's portable `.hifidelity-library.json`, then refresh the file
+      // so it reflects the new ground truth.
+      const backup = getLibraryBackup()
+      const restore = backup.readForFolder(folderPath)
+      if (restore) {
+        try {
+          backup.mergeIntoDb(folderPath, restore)
+        } catch (err) {
+          console.error(`[backup] merge failed for ${folderPath}:`, (err as Error).message)
+        }
+      }
+      backup.writeForFolderImmediate(folderId)
 
       broadcast('library:import:complete', { folderId, totalImported: imported, total })
       broadcast('library:changed', { reason: 'import' })

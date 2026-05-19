@@ -37,7 +37,7 @@ function patternFor(seed: number): Pattern {
 //   FLAC 24-bit / 96 kHz → "24/96"
 //   ALAC 16-bit / 44.1   → "ALAC"
 //   AAC 256 kbps         → "AAC 256"
-//   MP3 320 kbps         → "320k"
+//   MP3 320 kbps         → "320 kbps"
 function buildQualityString(t: DbTrack): string {
   const codec = (t.codec ?? t.format ?? '').toUpperCase()
   const lossless = codec === 'FLAC' || codec === 'ALAC' || codec === 'WAV' || codec === 'AIFF'
@@ -53,7 +53,7 @@ function buildQualityString(t: DbTrack): string {
   }
   if (codec === 'MP3') {
     const kbps = t.bitrate ? Math.round(t.bitrate / 1000) : 320
-    return `${kbps}k`
+    return `${kbps} kbps`
   }
   if (t.bit_depth && t.sample_rate) {
     return `${t.bit_depth}/${Math.round(t.sample_rate / 1000)}`
@@ -126,11 +126,14 @@ export function dbToUiArtist(ar: DbArtist, albums: Album[] = []): Artist {
   const seed = ar.id || 1
   return {
     id: `ar${ar.id}`,
+    dbId: ar.id,
     name: ar.name,
     albums,
     seed,
     palette: palette(seed),
     pattern: patternFor(seed),
+    favorite: ar.is_favorite === 1,
+    trackCount: ar.track_count,
   }
 }
 
@@ -149,4 +152,3 @@ export function dbToUiPlaylist(p: DbPlaylist, tracks: Track[] = []): Playlist {
     tracks,
   }
 }
-

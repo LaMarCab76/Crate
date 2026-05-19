@@ -2,11 +2,16 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type {
   AddFolderResult,
   Api,
+  EqPreviewScope,
   EqState,
+  EqTrackOverride,
   EventOff,
+  FftEvent,
+  FftMode,
   ImportCompleteEvent,
   ImportProgressEvent,
   ListTracksOpts,
+  LyricsForTrack,
   PickFolderResult,
   PlaybackStatePayload,
   PlaybackStatus,
@@ -93,9 +98,12 @@ const api: Api = {
         source: source ?? null,
         language: language ?? null,
       }) as Promise<void>,
+    getForTrack: (trackId: number) =>
+      ipcRenderer.invoke('lyrics:getForTrack', trackId) as Promise<LyricsForTrack | null>,
   },
   audio: {
-    load: (path: string) => ipcRenderer.invoke('audio:load', { path }) as Promise<StreamInfoPayload | null>,
+    load: (path: string, trackId?: number | null) =>
+      ipcRenderer.invoke('audio:load', { path, trackId: trackId ?? null }) as Promise<StreamInfoPayload | null>,
     play: () => ipcRenderer.invoke('audio:play') as Promise<void>,
     pause: () => ipcRenderer.invoke('audio:pause') as Promise<void>,
     stop: () => ipcRenderer.invoke('audio:stop') as Promise<void>,
@@ -103,15 +111,20 @@ const api: Api = {
       ipcRenderer.invoke('audio:seek', { positionSec }) as Promise<void>,
     setVolume: (value: number) =>
       ipcRenderer.invoke('audio:setVolume', { value }) as Promise<void>,
+    setFftMode: (mode: FftMode) =>
+      ipcRenderer.invoke('audio:setFftMode', { mode }) as Promise<void>,
     preloadNext: (path: string) =>
       ipcRenderer.invoke('audio:preloadNext', { path }) as Promise<void>,
     clearNext: () => ipcRenderer.invoke('audio:clearNext') as Promise<void>,
     swapNow: () => ipcRenderer.invoke('audio:swapNow') as Promise<boolean>,
+    setActiveTrack: (trackId: number | null) =>
+      ipcRenderer.invoke('audio:setActiveTrack', { trackId }) as Promise<void>,
     getStatus: () => ipcRenderer.invoke('audio:getStatus') as Promise<PlaybackStatePayload>,
     onProgress: (h) => subscribe<ProgressEvent>('audio:progress', h),
     onTrackEnded: (h) => subscribe<void>('audio:track-ended', () => h()),
     onGaplessFired: (h) => subscribe<{ path: string }>('audio:gapless-fired', h),
     onStateChanged: (h) => subscribe<{ status: PlaybackStatus }>('audio:state-changed', h),
+    onFft: (h) => subscribe<FftEvent>('audio:fft', h),
   },
   eq: {
     getState: () => ipcRenderer.invoke('eq:getState') as Promise<EqState>,
@@ -119,10 +132,30 @@ const api: Api = {
       ipcRenderer.invoke('eq:setEnabled', { enabled }) as Promise<void>,
     setBand: (index: number, gain: number) =>
       ipcRenderer.invoke('eq:setBand', { index, gain }) as Promise<void>,
+    setBands: (bands: number[]) =>
+      ipcRenderer.invoke('eq:setBands', { bands }) as Promise<void>,
+    previewBand: (index: number, gain: number, scope: EqPreviewScope) =>
+      ipcRenderer.invoke('eq:previewBand', { index, gain, scope }) as Promise<void>,
     setPreset: (name: string) =>
       ipcRenderer.invoke('eq:setPreset', { name }) as Promise<void>,
     presets: () => ipcRenderer.invoke('eq:presets') as Promise<string[]>,
+    setTrackOverride: (trackId: number, override: EqTrackOverride | null) =>
+      ipcRenderer.invoke('eq:setTrackOverride', { trackId, override }) as Promise<void>,
+    getTrackOverride: (trackId: number) =>
+      ipcRenderer.invoke('eq:getTrackOverride', trackId) as Promise<EqTrackOverride | null>,
     onChanged: (h) => subscribe<EqState>('eq:changed', h),
+  },
+  tracks: {
+    countPlay: (trackId: number) =>
+      ipcRenderer.invoke('track:countPlay', trackId) as Promise<void>,
+  },
+  artists: {
+    setFavorite: (id: number, favorite: boolean) =>
+      ipcRenderer.invoke('artist:setFavorite', { id, favorite }) as Promise<void>,
+  },
+  settings: {
+    setLibraryBackup: (enabled: boolean) =>
+      ipcRenderer.invoke('settings:setLibraryBackup', enabled) as Promise<void>,
   },
 }
 

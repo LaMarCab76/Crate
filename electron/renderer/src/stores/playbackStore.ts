@@ -3,6 +3,7 @@
 // components can render without awaiting an IPC roundtrip every frame.
 
 import { create } from 'zustand'
+import { useShallow } from 'zustand/shallow'
 import type { PlaybackStatus, StreamInfoPayload } from '@shared/types/ipc-contract'
 import type { Track } from '@shared/types/library'
 
@@ -40,15 +41,72 @@ export const usePlaybackStore = create<PlaybackState>(set => ({
     }),
 }))
 
-// Subscribe once on module load to keep the store in sync with main-process
-// push events. Safe to do at import time — preload exposes window.api before
-// the renderer JS bundle runs.
+// ---------------- Play-count threshold ----------------
+//
+// A track counts as a play once 30s of audible playback has accumulated
+// for it. We track listen seconds locally and fire a single
+// `tracks.countPlay(id)` IPC the moment we cross the threshold. The set is
+// reset when the track changes, so re-playing the same track starts a new
+// accumulation (matches Apple Music's behavior).
+const PLAY_COUNT_THRESHOLD_SEC = 30
+const listenAccumByTrack = new Map<number, number>()
+const countedThisSession = new Set<number>()
+let lastTickTrackId: number | null = null
+let lastTickPositionSec = 0
+
+function resetForTrack(trackId: number | null): void {
+  lastTickTrackId = trackId
+  lastTickPositionSec = 0
+  if (trackId != null) listenAccumByTrack.delete(trackId)
+}
+
 if (typeof window !== 'undefined' && window.api?.audio) {
   window.api.audio.onProgress(({ positionSec, durationSec }) => {
     usePlaybackStore.getState().setProgress(positionSec, durationSec)
+
+    const track = usePlaybackStore.getState().currentTrack
+    const trackId = track?.dbId
+    if (trackId == null) {
+      lastTickTrackId = null
+      return
+    }
+
+    // Track changes reset the accumulator. A scrub backwards keeps the
+    // counter (you've still listened for that time); a scrub forwards
+    // bumps the position but the elapsed delta still counts.
+    if (trackId !== lastTickTrackId) {
+      resetForTrack(trackId)
+      // Align last position to the current playhead so the very next tick
+      // computes a real per-tick delta instead of crediting the whole new
+      // track position as elapsed time.
+      lastTickPositionSec = positionSec
+    } else {
+      const delta = positionSec - lastTickPositionSec
+      // Tick only credits "natural forward play", capped at 1s so a wild
+      // seek doesn't dump 5 minutes of listen time onto the meter.
+      if (delta > 0 && delta < 1.5 && usePlaybackStore.getState().status === 'playing') {
+        const accum = (listenAccumByTrack.get(trackId) ?? 0) + delta
+        listenAccumByTrack.set(trackId, accum)
+        if (accum >= PLAY_COUNT_THRESHOLD_SEC && !countedThisSession.has(trackId)) {
+          countedThisSession.add(trackId)
+          void window.api.tracks.countPlay(trackId)
+        }
+      }
+      lastTickPositionSec = positionSec
+    }
   })
   window.api.audio.onStateChanged(({ status }) => {
     usePlaybackStore.getState().setStatus(status)
+  })
+
+  // When the in-store currentTrack changes, reset the play-count window so a
+  // fresh listen of the same song can be credited again.
+  usePlaybackStore.subscribe((state, prev) => {
+    if (state.currentTrack?.dbId !== prev.currentTrack?.dbId) {
+      const newId = state.currentTrack?.dbId ?? null
+      countedThisSession.delete(prev.currentTrack?.dbId ?? -1)
+      resetForTrack(newId)
+    }
   })
 
   // Refresh on boot in case there was a playback session before reload (dev).
@@ -74,7 +132,9 @@ export function useCurrentTrack(): Track | null {
   return usePlaybackStore(s => s.currentTrack)
 }
 export function usePlaybackProgress(): { positionSec: number; durationSec: number } {
-  return usePlaybackStore(s => ({ positionSec: s.positionSec, durationSec: s.durationSec }))
+  return usePlaybackStore(
+    useShallow(s => ({ positionSec: s.positionSec, durationSec: s.durationSec })),
+  )
 }
 export function usePlaybackVolume(): number {
   return usePlaybackStore(s => s.volume)

@@ -2,7 +2,7 @@ import type { Album } from '@shared/types/library'
 import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
 import { TrackTable } from '@renderer/components/TrackTable'
-import { fmtTotal } from '@renderer/utils/format'
+import { fmtTime } from '@renderer/utils/format'
 import { useAlbumByUiId } from '@renderer/stores/libraryStore'
 
 interface Props {
@@ -21,10 +21,10 @@ export function AlbumView({ album }: Props) {
       <div className="album-hero">
         <div className="art"><Artwork album={a} radius={8} /></div>
         <div className="meta">
-          <div className="kicker">{a.genre} · {a.year}</div>
+          <div className="kicker">{a.genre}</div>
           <h1>{a.title}</h1>
           <div className="credits">
-            <a>{a.artist}</a> · {a.tracks.length} tracks · {fmtTotal(totalDur)}
+            <a>{a.artist}</a> · {a.year} · {a.tracks.length} tracks · {fmtTime(totalDur)}
           </div>
           <div className="ctas">
             <button className="btn primary"><Icon name="play" size={12} /> Play</button>

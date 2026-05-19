@@ -1,5 +1,6 @@
 import type { Track } from '@shared/types/library'
 import { Artwork } from './Artwork'
+import { CodecStrip } from './CodecStrip'
 import { Icon } from './Icon'
 import { EQBars } from './EQBars'
 import { fmtTime } from '@renderer/utils/format'
@@ -70,7 +71,7 @@ export function TrackTable({
                 {t.loved && <Icon name="heartF" size={13} />}
               </td>
               {showPlays && <td className="plays">{t.plays}</td>}
-              {showFmt && <td className="fmt">{t.q}</td>}
+              {showFmt && <td className="fmt"><CodecStrip track={t} compact /></td>}
               <td className="dur">{fmtTime(t.d)}</td>
             </tr>
           )

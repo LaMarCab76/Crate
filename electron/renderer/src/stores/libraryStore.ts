@@ -3,6 +3,7 @@
 // Search runs on demand through the FTS5 IPC channel.
 
 import { create } from 'zustand'
+import { useShallow } from 'zustand/shallow'
 import type { Album, Artist, Playlist, Track } from '@shared/types/library'
 import type { DbFolder } from '@shared/types/db'
 import type { ImportProgressEvent } from '@shared/types/ipc-contract'
@@ -13,6 +14,24 @@ import {
   dbToUiTrack,
   type UiGenre,
 } from './adapters'
+
+const TRACK_NO_WITHOUT = Number.MAX_SAFE_INTEGER
+
+function compareTrackNumberAsc(a: Track, b: Track): number {
+  const aNo = a.no > 0 ? a.no : TRACK_NO_WITHOUT
+  const bNo = b.no > 0 ? b.no : TRACK_NO_WITHOUT
+  if (aNo !== bNo) return aNo - bNo
+
+  const byAdded = (a.added || '').localeCompare(b.added || '')
+  if (byAdded !== 0) return byAdded
+
+  return (a.dbId ?? 0) - (b.dbId ?? 0)
+}
+
+function firstTrackAddedDateInAlbum(tracks: Track[]): string {
+  if (tracks.length === 0) return ''
+  return tracks[0]?.added || ''
+}
 
 interface LibraryState {
   tracks: Track[]
@@ -64,23 +83,47 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
 
       const tracks = dbTracks.map(dbToUiTrack)
       const tracksByAlbumId = new Map<number, Track[]>()
+      const tracksByArtistId = new Map<number, Track[]>()
       for (let i = 0; i < dbTracks.length; i++) {
         const aid = dbTracks[i].album_id
         if (aid == null) continue
-        const arr = tracksByAlbumId.get(aid) ?? []
-        arr.push(tracks[i])
-        tracksByAlbumId.set(aid, arr)
-      }
-      const tracksByArtistId = new Map<number, Track[]>()
-      for (let i = 0; i < dbTracks.length; i++) {
-        const aid = dbTracks[i].artist_id
-        if (aid == null) continue
-        const arr = tracksByArtistId.get(aid) ?? []
-        arr.push(tracks[i])
-        tracksByArtistId.set(aid, arr)
+        const sortedByAlbum = tracksByAlbumId.get(aid) ?? []
+        sortedByAlbum.push(tracks[i])
+        tracksByAlbumId.set(aid, sortedByAlbum)
+
+        const artistId = dbTracks[i].artist_id
+        if (artistId == null) continue
+        const artistTracks = tracksByArtistId.get(artistId) ?? []
+        artistTracks.push(tracks[i])
+        tracksByArtistId.set(artistId, artistTracks)
       }
 
-      const albums = dbAlbums.map(a => dbToUiAlbum(a, tracksByAlbumId.get(a.id) ?? []))
+      const albumsById = new Map<number, Album>()
+      for (const album of dbAlbums) {
+        const albumTracks = tracksByAlbumId.get(album.id) ?? []
+        const sortedTracks = [...albumTracks].sort(compareTrackNumberAsc)
+        albumsById.set(album.id, dbToUiAlbum(album, sortedTracks))
+
+        tracksByAlbumId.set(album.id, sortedTracks)
+      }
+
+      const albumOrderForSongs = [...tracksByAlbumId.entries()]
+        .map(([, tracksInAlbum]) => ({
+          tracksInAlbum,
+          firstTrackAdded: firstTrackAddedDateInAlbum(tracksInAlbum),
+        }))
+        .sort((a, b) => {
+          const byDate = b.firstTrackAdded.localeCompare(a.firstTrackAdded)
+          if (byDate !== 0) return byDate
+
+          const aTrackId = a.tracksInAlbum[0]?.dbId ?? 0
+          const bTrackId = b.tracksInAlbum[0]?.dbId ?? 0
+          return bTrackId - aTrackId
+        })
+
+      const orderedTracks = albumOrderForSongs.flatMap(item => item.tracksInAlbum)
+
+      const albums = dbAlbums.map(a => albumsById.get(a.id) ?? dbToUiAlbum(a, tracksByAlbumId.get(a.id) ?? []))
       const artists = dbArtists.map(ar => {
         const artistTracks = tracksByArtistId.get(ar.id) ?? []
         const albumIdsForArtist = new Set(artistTracks.map(t => t.albumId))
@@ -91,7 +134,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       const playlists = dbPlaylists.map(p => dbToUiPlaylist(p, []))
 
       set({
-        tracks,
+        tracks: orderedTracks,
         albums,
         artists,
         genres: dbGenres.map(g => ({ id: `g${g.id}`, name: g.name })),
@@ -123,6 +166,17 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   },
 }))
 
+// Mutations that don't fit cleanly inside the store creator (they need access
+// to window.api but no shared state changes beyond a refresh).
+export async function toggleArtistFavorite(artistDbId: number, favorite: boolean): Promise<void> {
+  await window.api.artists.setFavorite(artistDbId, favorite)
+  // The library:changed broadcast already debounces a refresh, but flip the
+  // local flag immediately so the UI feels instant.
+  useLibraryStore.setState(state => ({
+    artists: state.artists.map(ar => (ar.dbId === artistDbId ? { ...ar, favorite } : ar)),
+  }))
+}
+
 // Subscribe once, on module load, to main-process push events so the store
 // stays fresh without each component wiring its own listener.
 if (typeof window !== 'undefined' && window.api?.library) {
@@ -153,6 +207,13 @@ export function useAlbums(): Album[] {
 export function useArtists(): Artist[] {
   return useLibraryStore(s => s.artists)
 }
+
+export function useFavoriteArtists(): Artist[] {
+  // useShallow keeps the React tree stable when the filtered list happens to
+  // be the same set even though the array reference changed.
+  return useLibraryStore(useShallow(s => s.artists.filter(ar => ar.favorite)))
+}
+
 export function useGenres(): UiGenre[] {
   return useLibraryStore(s => s.genres)
 }

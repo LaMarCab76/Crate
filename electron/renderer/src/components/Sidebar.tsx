@@ -2,7 +2,7 @@ import type { CSSProperties } from 'react'
 import type { Artist, Playlist } from '@shared/types/library'
 import { Icon, type IconName } from './Icon'
 import type { View } from '@renderer/App'
-import { useArtists, usePlaylists, useTrackCount } from '@renderer/stores/libraryStore'
+import { useFavoriteArtists, usePlaylists, useTrackCount } from '@renderer/stores/libraryStore'
 
 interface SidebarProps {
   setView: (v: View) => void
@@ -26,7 +26,7 @@ function SectionLabel({ label, onAdd, title }: { label: string; onAdd?: () => vo
 }
 
 export function Sidebar({ setView, selectedKey, translucent, onSelectPlaylist, onSelectArtist }: SidebarProps) {
-  const artists = useArtists()
+  const artists = useFavoriteArtists()
   const playlists = usePlaylists()
   const trackCount = useTrackCount()
 
@@ -94,7 +94,7 @@ export function Sidebar({ setView, selectedKey, translucent, onSelectPlaylist, o
 
         {artists.length > 0 && (
           <>
-            <SectionLabel label="Artists" onAdd={() => setView({ kind: 'artists' })} title="Pin an artist" />
+            <SectionLabel label="Favorite Artists" onAdd={() => setView({ kind: 'artists' })} title="Manage favorites" />
             {artists.slice(0, 5).map(ar => (
               <div
                 key={ar.id}

@@ -120,6 +120,7 @@ export class FolderWatcher {
         artist_id: artist.id,
         genre_id: genre?.id ?? null,
         r128_integrated_loudness: null,
+        state_updated_at: null,
       }
 
       repos.tracks.insert(row)

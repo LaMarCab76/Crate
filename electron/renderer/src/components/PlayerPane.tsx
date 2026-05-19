@@ -1,4 +1,4 @@
-import { useRef, useState, type PointerEvent } from 'react'
+import { useEffect, useRef, useState, type PointerEvent } from 'react'
 import { Artwork } from './Artwork'
 import { CodecStrip } from './CodecStrip'
 import { Icon } from './Icon'
@@ -34,6 +34,68 @@ export function PlayerPane({ expanded, onExpand, onMini }: PlayerPaneProps) {
   const [playerH, setPlayerH] = useState(450)
   const [dragging, setDragging] = useState(false)
 
+  const MIN_TOP_HEIGHT = 300
+  const MIN_QUEUE_HEIGHT = 120
+
+  const getPanelMetrics = () => {
+    const container = containerRef.current
+    if (!container) return null
+
+    const header = container.querySelector('.pp-header')
+    const splitter = container.querySelector('.pp-splitter')
+    const containerH = container.clientHeight
+    const headerH = header?.clientHeight ?? 0
+    const splitterH = splitter?.clientHeight ?? 14
+
+    return { containerH, headerH, splitterH }
+  }
+
+  const getHeightLimits = () => {
+    const metrics = getPanelMetrics()
+    if (!metrics) return null
+
+    const availableForTop = Math.max(0, metrics.containerH - metrics.headerH - metrics.splitterH)
+    const maxTopHeight = Math.max(0, availableForTop - MIN_QUEUE_HEIGHT)
+    const minTopHeight = Math.min(MIN_TOP_HEIGHT, maxTopHeight)
+
+    return { minTopHeight, maxTopHeight }
+  }
+
+  const clampTopHeight = (value: number) => {
+    const limits = getHeightLimits()
+    if (!limits) return value
+
+    const maxTopHeight = Math.max(0, limits.maxTopHeight)
+    const minTopHeight = Math.min(Math.max(0, limits.minTopHeight), maxTopHeight)
+
+    return Math.max(minTopHeight, Math.min(maxTopHeight, value))
+  }
+
+  const applyLayoutHeight = () => {
+    setPlayerH(current => clampTopHeight(current))
+  }
+
+  useEffect(() => {
+    if (!containerRef.current) return
+
+    applyLayoutHeight()
+
+    const ro = new ResizeObserver(() => {
+      applyLayoutHeight()
+    })
+
+    ro.observe(containerRef.current)
+    return () => ro.disconnect()
+  }, [track])
+
+  useEffect(() => {
+    const updateHeight = () => {
+      applyLayoutHeight()
+    }
+    window.addEventListener('resize', updateHeight)
+    return () => window.removeEventListener('resize', updateHeight)
+  }, [])
+
   if (!track || expanded) return null
 
   const playing = status === 'playing'
@@ -47,9 +109,11 @@ export function PlayerPane({ expanded, onExpand, onMini }: PlayerPaneProps) {
 
     const move = (ev: globalThis.PointerEvent) => {
       const nextHeight = startH + (ev.clientY - startY)
-      const containerH = containerRef.current?.clientHeight || 800
-      const min = 300
-      const max = Math.max(min + 80, containerH - 140)
+      const limits = getHeightLimits()
+      if (!limits) return
+
+      const max = limits.maxTopHeight
+      const min = limits.minTopHeight
       setPlayerH(Math.max(min, Math.min(max, nextHeight)))
     }
     const up = () => {

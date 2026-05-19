@@ -30,11 +30,13 @@ function ProgressBar({ value, max }: { value: number; max: number }) {
 export function ImportView() {
   const folders = useFolders()
   const importing = useImporting()
-  const pickAndAdd = useLibraryStore(s => async () => {
-    const picked = await s.pickFolder()
-    if (picked) await s.addFolder(picked)
-  })
+  const pickFolder = useLibraryStore(s => s.pickFolder)
+  const addFolder = useLibraryStore(s => s.addFolder)
   const removeFolder = useLibraryStore(s => s.removeFolder)
+  const pickAndAdd = async () => {
+    const picked = await pickFolder()
+    if (picked) await addFolder(picked)
+  }
 
   return (
     <div>

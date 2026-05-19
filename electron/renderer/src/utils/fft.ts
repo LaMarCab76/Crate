@@ -1,33 +1,104 @@
-// FFT broadcast hub. The main process emits ~30 spectrum frames per second.
-// Components that visualize the spectrum (EQBars in track rows, the
-// fullscreen EqVisualizerPanel) subscribe here and update the DOM via refs —
-// pushing every frame through React state would re-render the entire view
-// 30 times a second.
-//
-// `getLatest()` is for read-on-demand consumers; `subscribe()` is for the
-// per-frame consumers.
+// FFT demand + broadcast hub. The renderer tells the main process how much
+// spectrum data is actually needed: foreground bars use the active display
+// cadence, visible background windows keep the balanced feed, and hidden or
+// no-consumer states turn analysis off.
 
+import type { FftMode } from '@shared/types/ipc-contract'
+
+type FftSubscriptionMode = Exclude<FftMode, 'off' | 'screen'>
 type Listener = (bins: number[]) => void
+type Subscription = {
+  cb?: Listener
+  mode: FftSubscriptionMode
+}
 
 let latest: number[] = new Array(64).fill(0)
-const listeners = new Set<Listener>()
+const flatline: number[] = new Array(64).fill(0)
+const subscriptions = new Set<Subscription>()
+let appliedMode: FftMode = 'off'
+let windowFocused = typeof document === 'undefined' ? true : document.hasFocus()
 
 if (typeof window !== 'undefined' && window.api?.audio) {
   window.api.audio.onFft(({ bins }) => {
     latest = bins
-    for (const l of listeners) {
-      try { l(bins) } catch { /* ignore */ }
-    }
+    publish(bins)
   })
+
+  window.addEventListener('focus', () => {
+    windowFocused = true
+    syncFftMode()
+  })
+  window.addEventListener('blur', () => {
+    windowFocused = false
+    syncFftMode()
+  })
+
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      windowFocused = document.hasFocus()
+      if (document.visibilityState === 'hidden') {
+        latest = flatline
+        publish(flatline)
+      }
+      syncFftMode()
+    })
+  }
 }
 
-export function subscribeFft(cb: Listener): () => void {
-  listeners.add(cb)
-  return () => { listeners.delete(cb) }
+export function subscribeFft(cb: Listener, mode: FftSubscriptionMode = 'mini'): () => void {
+  const sub: Subscription = { cb, mode }
+  subscriptions.add(sub)
+  syncFftMode()
+  return () => {
+    subscriptions.delete(sub)
+    syncFftMode()
+  }
+}
+
+export function subscribeFftDemand(mode: FftSubscriptionMode): () => void {
+  const sub: Subscription = { mode }
+  subscriptions.add(sub)
+  syncFftMode()
+  return () => {
+    subscriptions.delete(sub)
+    syncFftMode()
+  }
 }
 
 export function getLatestFft(): number[] {
   return latest
+}
+
+function publish(bins: number[]): void {
+  for (const sub of subscriptions) {
+    if (!sub.cb) continue
+    try { sub.cb(bins) } catch { /* ignore */ }
+  }
+}
+
+function syncFftMode(): void {
+  if (typeof window === 'undefined' || !window.api?.audio) return
+
+  let nextMode: FftMode = 'off'
+  const visible = typeof document === 'undefined' || document.visibilityState !== 'hidden'
+  if (visible && subscriptions.size > 0) {
+    if (windowFocused) {
+      nextMode = 'screen'
+    } else {
+      nextMode = 'mini'
+    }
+    for (const sub of subscriptions) {
+      if (windowFocused) break
+      if (sub.mode === 'full') {
+        nextMode = 'full'
+        break
+      }
+    }
+  }
+
+  if (nextMode === appliedMode) return
+  appliedMode = nextMode
+  void window.api.audio.setFftMode(nextMode).catch(() => { /* main not ready */ })
 }
 
 // Collapse the 64 log-spaced bins emitted by the audio engine into N band

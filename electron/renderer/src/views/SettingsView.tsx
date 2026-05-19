@@ -121,6 +121,30 @@ export function SettingsView({ tweak, setTweak }: Props) {
       </div>
 
       <div className="set-section">
+        <h2>Library</h2>
+        <div className="set-card">
+          <div className="set-row">
+            <div>
+              <div className="lbl">Keep portable backup in folder</div>
+              <div className="sub">
+                Saves your plays, favorites, ratings, lyrics and EQ overrides into a hidden{' '}
+                <code style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>.hifidelity-library.json</code>
+                {' '}at the root of each library folder. When you reconnect the folder elsewhere those
+                are merged back automatically.
+              </div>
+            </div>
+            <div
+              className={`toggle ${tweak.libraryBackup ? 'on' : ''}`}
+              onClick={() => setTweak('libraryBackup', !tweak.libraryBackup)}
+              role="switch"
+              aria-checked={tweak.libraryBackup}
+              tabIndex={0}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="set-section">
         <h2>Equalizer</h2>
         <EqPanel />
       </div>
