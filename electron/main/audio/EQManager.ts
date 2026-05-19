@@ -1,13 +1,8 @@
 // Multi-band peaking equalizer. We attach one BASS_FX_BFX_PEAKEQ effect per band
 // to the current stream and update its parameters whenever a band's gain
-// changes. The FX handles must be re-attached when the underlying stream
-// changes (gapless swap, track change), so AudioEngine notifies us via the
-// reapply() entry point.
-//
-// On top of the GLOBAL EQ, the manager supports a per-track OVERRIDE: the
-// user can pin a different curve for the currently-playing song. When an
-// override is active the FX use the override bands; clearing the override
-// transparently restores the global curve.
+// changes. The FX handles must be re-attached when the underlying stream changes
+// (gapless swap, track change), so AudioEngine notifies us via the reapply()
+// entry point.
 
 import { BASS_FX_BFX_PEAKEQ } from './bass-constants'
 import {
@@ -16,7 +11,6 @@ import {
   type PeakEqParams,
 } from './bass-fx-ffi'
 import { loadBass, type HFX, type HSTREAM } from './bass-ffi'
-import type { EqPreviewScope } from '@shared/types/ipc-contract'
 import {
   EQ_BAND_COUNT,
   EQ_BAND_FREQUENCIES,
@@ -49,22 +43,12 @@ let manager: EQManager | null = null
 
 export class EQManager {
   private state: EQState = { enabled: false, preset: 'Flat', bands: [...FLAT_BANDS] }
-  // Bands currently being pushed to BASS via the override path; null means
-  // "use global state.bands". Distinct from the DB-persisted override so we
-  // can flip between override / global without re-reading from disk.
-  private activeOverride: number[] | null = null
   private currentStream: HSTREAM = 0
   private fxHandles: HFX[] = []
 
   getState(): EQState {
     return { ...this.state, bands: [...this.state.bands] }
   }
-
-  getOverrideBands(): number[] | null {
-    return this.activeOverride ? [...this.activeOverride] : null
-  }
-
-  hasOverride(): boolean { return this.activeOverride !== null }
 
   getPresetNames(): string[] {
     return Object.keys(PRESETS)
@@ -81,8 +65,7 @@ export class EQManager {
     if (!preset) return
     this.state.preset = name
     this.state.bands = [...preset]
-    // Preset change only impacts what's playing when no override is active.
-    if (this.state.enabled && !this.activeOverride && this.currentStream !== 0) {
+    if (this.state.enabled && this.currentStream !== 0) {
       this.applyAllBandsToFx()
     }
   }
@@ -92,9 +75,7 @@ export class EQManager {
     const clamped = clampEqGain(gainDb)
     this.state.bands[index] = clamped
     this.state.preset = 'Custom'
-    // Only push to FX if no override is active — otherwise the override would
-    // be silently clobbered.
-    if (this.state.enabled && !this.activeOverride && this.fxHandles[index]) {
+    if (this.state.enabled && this.fxHandles[index]) {
       this.applyBand(index)
     }
   }
@@ -103,49 +84,22 @@ export class EQManager {
     if (!Array.isArray(bands)) return
     this.state.bands = normalizeEqBands(bands)
     this.state.preset = 'Custom'
-    if (this.state.enabled && !this.activeOverride && this.currentStream !== 0) {
-      this.applyAllBandsToFx()
-    }
-  }
-
-  previewBand(index: number, gainDb: number, scope: EqPreviewScope): boolean {
-    if (!this.state.enabled || this.currentStream === 0) return false
-    if (index < 0 || index >= EQ_BAND_COUNT) return false
-    if (scope === 'override' && !this.activeOverride) return false
-    if (scope === 'global' && this.activeOverride) return false
-    if (!this.fxHandles[index]) return false
-    this.applyBandWithGain(index, clampEqGain(gainDb))
-    return true
-  }
-
-  // Activate or clear a per-track override. Pass `null` to drop back to global.
-  applyOverride(bands: number[] | null): void {
-    if (Array.isArray(bands)) {
-      this.activeOverride = normalizeEqBands(bands)
-    } else {
-      this.activeOverride = null
-    }
     if (this.state.enabled && this.currentStream !== 0) {
       this.applyAllBandsToFx()
     }
   }
 
-  // Mutate one band of the active override (UI dragging a slider in "custom
-  // for this track" mode). No-op if no override is currently active.
-  setOverrideBand(index: number, gainDb: number): boolean {
-    if (!this.activeOverride) return false
+  previewBand(index: number, gainDb: number): boolean {
+    if (!this.state.enabled || this.currentStream === 0) return false
     if (index < 0 || index >= EQ_BAND_COUNT) return false
-    const clamped = clampEqGain(gainDb)
-    this.activeOverride[index] = clamped
-    if (this.state.enabled && this.fxHandles[index]) {
-      this.applyBand(index)
-    }
+    if (!this.fxHandles[index]) return false
+    this.applyBandWithGain(index, clampEqGain(gainDb))
     return true
   }
 
   // Called whenever the underlying stream changes (initial load, gapless swap).
-  // Tears down old FX handles (they were attached to a stream that may no
-  // longer exist) and re-attaches if the EQ is enabled.
+  // Tears down old FX handles (they were attached to a stream that may no longer
+  // exist) and re-attaches if the EQ is enabled.
   reapply(stream: HSTREAM): void {
     this.currentStream = stream
     this.reattachFX()
@@ -179,8 +133,7 @@ export class EQManager {
   }
 
   private applyBand(index: number): void {
-    const bands = this.activeOverride ?? this.state.bands
-    this.applyBandWithGain(index, bands[index])
+    this.applyBandWithGain(index, this.state.bands[index])
   }
 
   private applyBandWithGain(index: number, gainDb: number): void {
@@ -205,3 +158,4 @@ export function getEQManager(): EQManager {
 }
 
 export { EQ_BAND_FREQUENCIES, PRESETS }
+

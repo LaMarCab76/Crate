@@ -60,7 +60,9 @@ function createMainWindow(): BrowserWindow {
 
   if (isDev && process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'])
-    win.webContents.openDevTools({ mode: 'detach' })
+    if (process.env['HIFI_OPEN_DEVTOOLS'] === '1') {
+      win.webContents.openDevTools({ mode: 'detach' })
+    }
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'))
   }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
 import { useEqStore } from '@renderer/stores/eqStore'
+import { usePlaybackStore } from '@renderer/stores/playbackStore'
 import { binsToBands, getLatestFft, subscribeFftDemand } from '@renderer/utils/fft'
 import type { Track } from '@shared/types/library'
 import {
@@ -11,8 +12,9 @@ import {
 } from '@shared/constants/equalizer'
 
 // Symmetric EMA weight on the previous value — higher = smoother bars.
-const EMA_ALPHA = 0.78
-const SCALE_EPSILON = 0.004
+const EMA_ALPHA = 0.88
+const SCALE_EPSILON = 0.003
+const IDLE_BAR_SCALE = 0.02
 
 interface Props {
   track: Track
@@ -25,17 +27,19 @@ interface Props {
 export function EqVisualizerPanel({ track }: Props) {
   const enabled = useEqStore(s => s.enabled)
   const globalBands = useEqStore(s => s.bands)
-  const overrideBands = useEqStore(s => s.overrideBands)
   const setBand = useEqStore(s => s.setBand)
   const setBands = useEqStore(s => s.setBands)
   const previewBand = useEqStore(s => s.previewBand)
   const setEnabled = useEqStore(s => s.setEnabled)
-  const setTrackOverride = useEqStore(s => s.setTrackOverride)
+  const playbackStatus = usePlaybackStore(s => s.status)
+  const [windowActive, setWindowActive] = useState(() =>
+    typeof document === 'undefined'
+      ? true
+      : document.visibilityState !== 'hidden' && document.hasFocus(),
+  )
 
-  const overrideActive = overrideBands !== null
-  const bands = overrideActive ? overrideBands! : globalBands
   const [draftBands, setDraftBandsState] = useState<number[] | null>(null)
-  const displayBands = draftBands ?? bands
+  const displayBands = draftBands ?? globalBands
 
   const fillRefs = useRef<(HTMLDivElement | null)[]>([])
   const smoothedRef = useRef<Float32Array>(new Float32Array(EQ_BAND_COUNT))
@@ -43,15 +47,11 @@ export function EqVisualizerPanel({ track }: Props) {
   const lastScaleRef = useRef<Float32Array>(new Float32Array(EQ_BAND_COUNT))
   const displayBandsRef = useRef<number[]>(displayBands)
   const draftBandsRef = useRef<number[] | null>(null)
-  const overrideActiveRef = useRef(overrideActive)
-  const trackDbIdRef = useRef(track.dbId)
-  const pendingPreviewRef = useRef<{ index: number; gain: number; scope: 'global' | 'override' } | null>(null)
+  const pendingPreviewRef = useRef<{ index: number; gain: number } | null>(null)
   const previewFrameRef = useRef<number | null>(null)
   const commitSeqRef = useRef(0)
 
   displayBandsRef.current = displayBands
-  overrideActiveRef.current = overrideActive
-  trackDbIdRef.current = track.dbId
 
   const syncDraftBands = (next: number[] | null) => {
     draftBandsRef.current = next
@@ -59,6 +59,32 @@ export function EqVisualizerPanel({ track }: Props) {
   }
 
   useEffect(() => {
+    if (typeof document === 'undefined') return
+
+    const syncActive = () => {
+      setWindowActive(document.visibilityState !== 'hidden' && document.hasFocus())
+    }
+    window.addEventListener('focus', syncActive)
+    window.addEventListener('blur', syncActive)
+    document.addEventListener('visibilitychange', syncActive)
+    return () => {
+      window.removeEventListener('focus', syncActive)
+      window.removeEventListener('blur', syncActive)
+      document.removeEventListener('visibilitychange', syncActive)
+    }
+  }, [])
+
+  useEffect(() => {
+    const shouldAnimate = playbackStatus === 'playing' && windowActive
+    if (!shouldAnimate) {
+      smoothedRef.current.fill(0)
+      lastScaleRef.current.fill(IDLE_BAR_SCALE)
+      for (const el of fillRefs.current) {
+        if (el) el.style.transform = `scaleY(${IDLE_BAR_SCALE})`
+      }
+      return
+    }
+
     const stopDemand = subscribeFftDemand('full')
     lastScaleRef.current.fill(-1)
 
@@ -71,7 +97,7 @@ export function EqVisualizerPanel({ track }: Props) {
         smoothed[i] = smoothed[i] * EMA_ALPHA + targets[i] * (1 - EMA_ALPHA)
         const el = fillRefs.current[i]
         if (el) {
-          const scale = Math.max(0.02, Math.min(1, smoothed[i]))
+          const scale = Math.max(IDLE_BAR_SCALE, Math.min(1, smoothed[i]))
           if (Math.abs(scale - lastScale[i]) >= SCALE_EPSILON) {
             lastScale[i] = scale
             el.style.transform = `scaleY(${scale})`
@@ -86,7 +112,7 @@ export function EqVisualizerPanel({ track }: Props) {
       stopDemand()
       cancelAnimationFrame(frame)
     }
-  }, [])
+  }, [playbackStatus, windowActive])
 
   const [dragging, setDragging] = useState<number | null>(null)
   const draggingRef = useRef<number | null>(null)
@@ -101,17 +127,13 @@ export function EqVisualizerPanel({ track }: Props) {
   }
 
   const queuePreview = (index: number, gain: number) => {
-    pendingPreviewRef.current = {
-      index,
-      gain,
-      scope: overrideActiveRef.current ? 'override' : 'global',
-    }
+    pendingPreviewRef.current = { index, gain }
     if (previewFrameRef.current !== null) return
     previewFrameRef.current = requestAnimationFrame(() => {
       previewFrameRef.current = null
       const pending = pendingPreviewRef.current
       pendingPreviewRef.current = null
-      if (pending) void previewBand(pending.index, pending.gain, pending.scope)
+      if (pending) void previewBand(pending.index, pending.gain)
     })
   }
 
@@ -125,13 +147,8 @@ export function EqVisualizerPanel({ track }: Props) {
     queuePreview(index, next)
   }
 
-  const commitBandChange = (index: number, gain: number, sourceBands = displayBandsRef.current) => {
+  const commitBandChange = (index: number, gain: number) => {
     const next = clampGain(gain)
-    if (overrideActiveRef.current && trackDbIdRef.current != null) {
-      const updated = [...sourceBands]
-      updated[index] = next
-      return setTrackOverride(trackDbIdRef.current, { enabled: true, bands: updated })
-    }
     return setBand(index, next)
   }
 
@@ -164,8 +181,9 @@ export function EqVisualizerPanel({ track }: Props) {
     const commitSeq = ++commitSeqRef.current
     dragStartRef.current = null
     setDraggingIndex(null)
+    draggingRef.current = null
     if (!finalBands) return
-    void commitBandChange(i, finalGain, finalBands)
+    void commitBandChange(i, finalGain)
       .catch(() => { /* keep UI responsive; store sync will recover */ })
       .finally(() => {
         if (commitSeqRef.current === commitSeq) syncDraftBands(null)
@@ -196,32 +214,18 @@ export function EqVisualizerPanel({ track }: Props) {
   useEffect(() => {
     dragStartRef.current = null
     setDraggingIndex(null)
+    draggingRef.current = null
     syncDraftBands(null)
-  }, [overrideActive, track.dbId])
-
-  const handleToggleOverride = () => {
-    if (track.dbId == null) return
-    if (overrideActive) {
-      void setTrackOverride(track.dbId, null)
-    } else {
-      // Snapshot the current global bands so the slider doesn't jump to 0 on
-      // first activation.
-      void setTrackOverride(track.dbId, { enabled: true, bands: [...globalBands] })
-    }
-  }
+  }, [track.dbId])
 
   const handleReset = () => {
     const flat = new Array(EQ_BAND_COUNT).fill(0)
     syncDraftBands(null)
-    if (overrideActive && track.dbId != null) {
-      void setTrackOverride(track.dbId, { enabled: true, bands: flat })
-    } else {
-      void setBands(flat)
-    }
+    void setBands(flat)
   }
 
   return (
-    <div className={`eq-viz${overrideActive ? ' override-active' : ''}`} style={{ opacity: enabled ? 1 : 0.55 }}>
+    <div className="eq-viz" style={{ opacity: enabled ? 1 : 0.55 }}>
       <div className="eq-viz-head">
         <div
           className={`toggle ${enabled ? 'on' : ''}`}
@@ -232,16 +236,6 @@ export function EqVisualizerPanel({ track }: Props) {
           title={enabled ? 'EQ on' : 'EQ off'}
         />
         <span className="switch-label">EQ</span>
-        <div style={{ width: 12 }} />
-        <div
-          className={`toggle ${overrideActive ? 'on' : ''}`}
-          onClick={handleToggleOverride}
-          role="switch"
-          aria-checked={overrideActive}
-          tabIndex={0}
-          title="Custom EQ for this song only"
-        />
-        <span className="switch-label">Custom for this track</span>
         <div style={{ flex: 1 }} />
         <button className="btn ghost sm" onClick={handleReset}>Reset</button>
       </div>
@@ -289,3 +283,4 @@ export function EqVisualizerPanel({ track }: Props) {
     </div>
   )
 }
+

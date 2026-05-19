@@ -94,7 +94,6 @@ export interface MetaApi {
 
 export type PlaybackStatus = 'stopped' | 'playing' | 'paused' | 'loading'
 export type FftMode = 'off' | 'mini' | 'full' | 'screen'
-export type EqPreviewScope = 'global' | 'override'
 
 export interface StreamInfoPayload {
   freq: number
@@ -132,12 +131,6 @@ export interface EqState {
   enabled: boolean
   preset: string
   bands: number[]              // global EQ gains in dB
-  overrideBands: number[] | null  // null when no per-track override is active
-}
-
-export interface EqTrackOverride {
-  enabled: boolean
-  bands: number[]              // EQ gains in dB
 }
 
 export interface FftEvent {
@@ -168,7 +161,6 @@ export interface AudioApi {
   preloadNext(path: string): Promise<void>
   clearNext(): Promise<void>
   swapNow(): Promise<boolean>
-  setActiveTrack(trackId: number | null): Promise<void>
   getStatus(): Promise<PlaybackStatePayload>
   listOutputDevices(): Promise<AudioOutputDevice[]>
   setOutputDevice(deviceId: number): Promise<AudioOutputDevice>
@@ -186,11 +178,9 @@ export interface EqApi {
   setEnabled(enabled: boolean): Promise<void>
   setBand(index: number, gain: number): Promise<void>
   setBands(bands: number[]): Promise<void>
-  previewBand(index: number, gain: number, scope: EqPreviewScope): Promise<void>
+  previewBand(index: number, gain: number): Promise<void>
   setPreset(name: string): Promise<void>
   presets(): Promise<string[]>
-  setTrackOverride(trackId: number, override: EqTrackOverride | null): Promise<void>
-  getTrackOverride(trackId: number): Promise<EqTrackOverride | null>
   onChanged(h: (e: EqState) => void): EventOff
 }
 

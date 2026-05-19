@@ -2,9 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type {
   AddFolderResult,
   Api,
-  EqPreviewScope,
   EqState,
-  EqTrackOverride,
   EventOff,
   FftEvent,
   FftMode,
@@ -117,8 +115,6 @@ const api: Api = {
       ipcRenderer.invoke('audio:preloadNext', { path }) as Promise<void>,
     clearNext: () => ipcRenderer.invoke('audio:clearNext') as Promise<void>,
     swapNow: () => ipcRenderer.invoke('audio:swapNow') as Promise<boolean>,
-    setActiveTrack: (trackId: number | null) =>
-      ipcRenderer.invoke('audio:setActiveTrack', { trackId }) as Promise<void>,
     getStatus: () => ipcRenderer.invoke('audio:getStatus') as Promise<PlaybackStatePayload>,
     listOutputDevices: () => ipcRenderer.invoke('audio:devices:list'),
     setOutputDevice: (deviceId: number) =>
@@ -138,15 +134,11 @@ const api: Api = {
       ipcRenderer.invoke('eq:setBand', { index, gain }) as Promise<void>,
     setBands: (bands: number[]) =>
       ipcRenderer.invoke('eq:setBands', { bands }) as Promise<void>,
-    previewBand: (index: number, gain: number, scope: EqPreviewScope) =>
-      ipcRenderer.invoke('eq:previewBand', { index, gain, scope }) as Promise<void>,
+    previewBand: (index: number, gain: number) =>
+      ipcRenderer.invoke('eq:previewBand', { index, gain }) as Promise<void>,
     setPreset: (name: string) =>
       ipcRenderer.invoke('eq:setPreset', { name }) as Promise<void>,
     presets: () => ipcRenderer.invoke('eq:presets') as Promise<string[]>,
-    setTrackOverride: (trackId: number, override: EqTrackOverride | null) =>
-      ipcRenderer.invoke('eq:setTrackOverride', { trackId, override }) as Promise<void>,
-    getTrackOverride: (trackId: number) =>
-      ipcRenderer.invoke('eq:getTrackOverride', trackId) as Promise<EqTrackOverride | null>,
     onChanged: (h) => subscribe<EqState>('eq:changed', h),
   },
   tracks: {

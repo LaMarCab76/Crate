@@ -40,7 +40,8 @@ const FFT_INTERVAL_MS: Record<Exclude<FftMode, 'off' | 'screen'>, number> = {
   mini: 90,
   full: 33,
 }
-const DEFAULT_SCREEN_FFT_INTERVAL_MS = 16
+const MAX_SCREEN_FFT_HZ = 60
+const DEFAULT_SCREEN_FFT_INTERVAL_MS = Math.round(1000 / MAX_SCREEN_FFT_HZ)
 const DEFAULT_OUTPUT_FREQ = 48000
 const DEFAULT_OUTPUT_FLAGS = 0
 
@@ -454,8 +455,8 @@ export class AudioEngine {
   private intervalFromScreenHz(screenHz: number | undefined): number {
     const hz = Number(screenHz)
     if (!Number.isFinite(hz) || hz <= 0) return DEFAULT_SCREEN_FFT_INTERVAL_MS
-    const clampedHz = Math.max(30, Math.min(240, hz))
-    return Math.max(4, Math.round(1000 / clampedHz))
+    const clampedHz = Math.max(30, Math.min(MAX_SCREEN_FFT_HZ, hz))
+    return Math.max(DEFAULT_SCREEN_FFT_INTERVAL_MS, Math.round(1000 / clampedHz))
   }
 
   dispose(): void {

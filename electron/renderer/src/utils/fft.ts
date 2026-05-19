@@ -1,6 +1,6 @@
 // FFT demand + broadcast hub. The renderer tells the main process how much
-// spectrum data is actually needed: foreground bars use the active display
-// cadence, visible background windows keep the balanced feed, and hidden or
+// spectrum data is actually needed: focused fullscreen consumers use the active
+// display cadence, focused mini bars use a lighter feed, and background or
 // no-consumer states turn analysis off.
 
 import type { FftMode } from '@shared/types/ipc-contract'
@@ -31,16 +31,14 @@ if (typeof window !== 'undefined' && window.api?.audio) {
   })
   window.addEventListener('blur', () => {
     windowFocused = false
+    publishFlatline()
     syncFftMode()
   })
 
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
       windowFocused = document.hasFocus()
-      if (document.visibilityState === 'hidden') {
-        latest = flatline
-        publish(flatline)
-      }
+      if (document.visibilityState === 'hidden') publishFlatline()
       syncFftMode()
     })
   }
@@ -77,23 +75,24 @@ function publish(bins: number[]): void {
   }
 }
 
+function publishFlatline(): void {
+  latest = flatline
+  publish(flatline)
+}
+
 function syncFftMode(): void {
   if (typeof window === 'undefined' || !window.api?.audio) return
 
   let nextMode: FftMode = 'off'
   const visible = typeof document === 'undefined' || document.visibilityState !== 'hidden'
-  if (visible && subscriptions.size > 0) {
-    if (windowFocused) {
-      nextMode = 'screen'
-    } else {
-      nextMode = 'mini'
-    }
+  const foreground = visible && windowFocused
+  if (foreground && subscriptions.size > 0) {
     for (const sub of subscriptions) {
-      if (windowFocused) break
       if (sub.mode === 'full') {
-        nextMode = 'full'
+        nextMode = 'screen'
         break
       }
+      nextMode = 'mini'
     }
   }
 

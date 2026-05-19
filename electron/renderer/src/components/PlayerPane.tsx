@@ -1,4 +1,4 @@
-import { type MouseEvent, useEffect, useRef, useState } from 'react'
+import { type MouseEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { Artwork } from './Artwork'
 import { CodecStrip } from './CodecStrip'
 import { Icon } from './Icon'
@@ -43,6 +43,17 @@ export function PlayerPane({ expanded, onExpand, onMini }: PlayerPaneProps) {
   const [deviceError, setDeviceError] = useState<string | null>(null)
   const deviceMenuRef = useRef<HTMLDivElement>(null)
   const showLyricsPanel = track?.dbId != null && lyricsEntry.status !== 'idle'
+
+  const totalQueueRemainingSec =
+    Math.max(0, durationSec - positionSec) + queueNext.reduce((sum, item) => sum + item.d, 0)
+  const totalQueueRemainingText = useMemo(() => {
+    const total = Math.max(0, Math.floor(totalQueueRemainingSec))
+    const hh = Math.floor(total / 3600)
+    const mm = Math.floor((total % 3600) / 60)
+    const ss = total % 60
+    if (hh > 0) return `${hh}:${mm.toString().padStart(2, '0')}:${ss.toString().padStart(2, '0')}`
+    return `${mm}:${ss.toString().padStart(2, '0')}`
+  }, [totalQueueRemainingSec])
 
   useEffect(() => {
     if (track?.dbId == null) return
@@ -222,7 +233,7 @@ export function PlayerPane({ expanded, onExpand, onMini }: PlayerPaneProps) {
                 </div>
                 <div className="a">{track.artist} · {track.albumTitle}</div>
                 <div className="pp-quality-chip">
-                  <CodecStrip track={track} />
+                  <CodecStrip track={track} compact />
                 </div>
               </div>
             </div>
@@ -268,7 +279,12 @@ export function PlayerPane({ expanded, onExpand, onMini }: PlayerPaneProps) {
         ) : (
           <div className="pp-queue">
             <div className="queue-head">
-              <h3>Up Next</h3>
+              <div className="queue-head-main">
+                <h3>Up Next</h3>
+                <div className="queue-remaining">
+                  {`Ends in ${totalQueueRemainingText} (including now playing)`}
+                </div>
+              </div>
               <div style={{ display: 'flex', gap: 4 }}>
                 <button className="btn ghost sm" onClick={() => useQueueStore.getState().clear()}>Clear</button>
               </div>

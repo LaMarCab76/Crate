@@ -1,7 +1,7 @@
 // Portable library metadata file dropped at the root of every imported folder
 // as `.hifidelity-library.json`. Carries user-modifiable state (favorites,
-// play counts, ratings, lyrics, EQ overrides) so it can travel with the audio
-// files between machines.
+// play counts, ratings, lyrics) so it can travel with the audio files between
+// machines.
 //
 // Track keys are POSIX-normalized paths relative to the folder root (forward
 // slashes even on Windows) so the entry stays valid when the folder is moved
@@ -17,11 +17,6 @@
 export const BACKUP_VERSION = 1
 export const BACKUP_FILENAME = '.hifidelity-library.json'
 
-export interface BackupEqOverride {
-  enabled: boolean
-  bands: number[]   // EQ gains in dB; older backups are normalized on import
-}
-
 export interface BackupLyrics {
   lrc: string
   language: string | null
@@ -33,7 +28,6 @@ export interface BackupTrack {
   lastPlayedAt?: string | null   // ISO 8601
   favorite?: boolean
   rating?: number | null
-  eqOverride?: BackupEqOverride | null
   lyrics?: BackupLyrics | null
   stateUpdatedAt?: string | null // ISO 8601
 }

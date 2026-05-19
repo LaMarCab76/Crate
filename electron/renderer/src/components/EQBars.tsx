@@ -9,10 +9,11 @@ export function EQBars({ style }: { style?: CSSProperties }) {
   const ref0 = useRef<HTMLElement>(null)
   const ref1 = useRef<HTMLElement>(null)
   const ref2 = useRef<HTMLElement>(null)
-  const smoothed = useRef<[number, number, number]>([0.3, 0.3, 0.3])
+  const target = useRef<[number, number, number]>([0.3, 0.3, 0.3])
+  const current = useRef<[number, number, number]>([0.3, 0.3, 0.3])
 
   useEffect(() => {
-    return subscribeFft(bins => {
+    const stopFft = subscribeFft(bins => {
       // Average over 3 ranges of the 64-bin log-spaced FFT.
       let bass = 0, mid = 0, treble = 0
       for (let i = 0; i < 5; i++) bass += bins[i] ?? 0
@@ -24,20 +25,33 @@ export function EQBars({ style }: { style?: CSSProperties }) {
       for (let i = 40; i < 58; i++) { treble += bins[i] ?? 0; count++ }
       treble /= Math.max(1, count)
 
+      target.current = [
+        Math.max(0, Math.min(1, bass)),
+        Math.max(0, Math.min(1, mid)),
+        Math.max(0, Math.min(1, treble)),
+      ]
+    }, 'mini')
+
+    let frame = 0
+    const tick = () => {
       const refs = [ref0, ref1, ref2]
-      const targets = [bass, mid, treble]
       for (let i = 0; i < 3; i++) {
-        const ema = smoothed.current[i] * 0.6 + targets[i] * 0.4
-        smoothed.current[i] = ema
+        const next = current.current[i] + (target.current[i] - current.current[i]) * 0.2
+        current.current[i] = next
         const el = refs[i].current
         if (el) {
-          // Override the keyframe-based animation with a direct scale set.
-          el.style.animation = 'none'
-          const scale = Math.max(0.22, Math.min(1, ema * 1.1))
+          const scale = Math.max(0.22, Math.min(1, next * 1.1))
           el.style.transform = `scaleY(${scale})`
         }
       }
-    }, 'mini')
+      frame = requestAnimationFrame(tick)
+    }
+
+    frame = requestAnimationFrame(tick)
+    return () => {
+      stopFft()
+      cancelAnimationFrame(frame)
+    }
   }, [])
 
   return (
@@ -46,3 +60,4 @@ export function EQBars({ style }: { style?: CSSProperties }) {
     </span>
   )
 }
+

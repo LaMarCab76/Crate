@@ -16,12 +16,10 @@ import { getDatabase } from '../db/database'
 import { getRepos } from '../db/repositories'
 import type {
   BackupArtist,
-  BackupEqOverride,
   BackupFile,
   BackupTrack,
 } from '@shared/types/library-backup'
 import { BACKUP_FILENAME, BACKUP_VERSION } from '@shared/types/library-backup'
-import { isSupportedEqBandCount, normalizeEqBands } from '@shared/constants/equalizer'
 
 const DEBOUNCE_MS = 2000
 const APP_NAME = 'HiFidelity2'
@@ -36,20 +34,6 @@ function pickMaxIso(a: string | null, b: string | null): string | null {
   if (!a) return b
   if (!b) return a
   return a > b ? a : b
-}
-
-function parseExtMetaEq(jsonStr: string | null): BackupEqOverride | null {
-  if (!jsonStr) return null
-  try {
-    const blob = JSON.parse(jsonStr) as { eqOverride?: BackupEqOverride }
-    const eq = blob.eqOverride
-    if (eq && Array.isArray(eq.bands) && isSupportedEqBandCount(eq.bands.length)) {
-      return { enabled: !!eq.enabled, bands: normalizeEqBands(eq.bands) }
-    }
-  } catch {
-    /* malformed JSON in the column — treat as absent */
-  }
-  return null
 }
 
 function writeJsonAtomic(target: string, payload: BackupFile): void {
@@ -111,8 +95,7 @@ class LibraryBackupService {
   private mergeTracks(folderPath: string, tracks: Record<string, BackupTrack>): void {
     const update = this.db.prepare(`
       UPDATE tracks
-      SET play_count = ?, last_played_date = ?, is_favorite = ?, rating = ?,
-          extended_metadata = ?, state_updated_at = ?
+      SET play_count = ?, last_played_date = ?, is_favorite = ?, rating = ?, state_updated_at = ?
       WHERE id = ?
     `)
 
@@ -132,33 +115,10 @@ class LibraryBackupService {
       const nextRating =
         jsonWins && jt.rating !== undefined ? jt.rating : dbTrack.rating
 
-      // EQ override lives inside extended_metadata JSON. JSON wins when newer,
-      // and also fills in when DB has none (the "no risk of losing local
-      // tweaks" case).
       let nextExtMeta = dbTrack.extended_metadata
-      if (jt.eqOverride !== undefined) {
-        const dbEq = parseExtMetaEq(dbTrack.extended_metadata)
-        const takeJson = jsonWins || dbEq === null
-        if (takeJson) {
-          let blob: Record<string, unknown> = {}
-          if (dbTrack.extended_metadata) {
-            try {
-              blob = (JSON.parse(dbTrack.extended_metadata) as Record<string, unknown>) ?? {}
-            } catch {
-              blob = {}
-            }
-          }
-          if (jt.eqOverride === null) {
-            delete blob.eqOverride
-          } else if (Array.isArray(jt.eqOverride.bands) && isSupportedEqBandCount(jt.eqOverride.bands.length)) {
-            blob.eqOverride = {
-              enabled: !!jt.eqOverride.enabled,
-              bands: normalizeEqBands(jt.eqOverride.bands),
-            }
-          }
-          nextExtMeta = Object.keys(blob).length === 0 ? null : JSON.stringify(blob)
-        }
-      }
+      // Keep existing extended_metadata untouched. Old eqOverride values are no
+      // longer read anywhere, so we leave legacy values untouched for DB
+      // compatibility.
 
       const nextStateTs = Math.max(dbTs, jsonTs)
       update.run(
@@ -318,12 +278,11 @@ class LibraryBackupService {
           last_played_date: string | null
           is_favorite: number
           rating: number | null
-          extended_metadata: string | null
           state_updated_at: number | null
         }
       >(
         `SELECT id, path, play_count, last_played_date, is_favorite, rating,
-                extended_metadata, state_updated_at
+                state_updated_at
          FROM tracks WHERE folder_id = ?`,
       )
       .all(folderId)
@@ -348,14 +307,12 @@ class LibraryBackupService {
 
     const tracks: Record<string, BackupTrack> = {}
     for (const row of trackRows) {
-      const eq = parseExtMetaEq(row.extended_metadata)
       const lyrics = lyricsByTrack.get(row.id) ?? null
       const isDefault =
         (row.play_count ?? 0) === 0 &&
         !row.last_played_date &&
         (row.is_favorite ?? 0) === 0 &&
         row.rating == null &&
-        eq == null &&
         !lyrics
       if (isDefault) continue
       const rel = toPosixRelative(folderPath, row.path)
@@ -364,7 +321,6 @@ class LibraryBackupService {
       if (row.last_played_date) entry.lastPlayedAt = row.last_played_date
       if (row.is_favorite) entry.favorite = true
       if (row.rating != null) entry.rating = row.rating
-      if (eq) entry.eqOverride = eq
       if (lyrics) entry.lyrics = lyrics
       if (row.state_updated_at) entry.stateUpdatedAt = new Date(row.state_updated_at).toISOString()
       tracks[rel] = entry

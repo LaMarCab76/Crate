@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef } from 'react'
-import { useLyrics, useLyricsStore } from '@renderer/stores/lyricsStore'
+import { useEffect, useRef, useState } from 'react'
+import { useLyrics, useLyricsStore, type LyricLine } from '@renderer/stores/lyricsStore'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
 import type { Track } from '@shared/types/library'
 
@@ -8,12 +8,26 @@ interface Props {
   variant?: 'full' | 'sidebar'
 }
 
+function findCurrentLineIdx(lines: LyricLine[], positionSec: number): number {
+  if (lines.length === 0) return -1
+  const posMs = positionSec * 1000
+  let lo = 0
+  let hi = lines.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (lines[mid].ms <= posMs) lo = mid + 1
+    else hi = mid
+  }
+  return lo - 1
+}
+
 export function LyricsPanel({ track, variant = 'full' }: Props) {
   const trackId = track.dbId
   const fetch = useLyricsStore(s => s.fetch)
   const entry = useLyrics(trackId)
-  const positionSec = usePlaybackStore(s => s.positionSec)
   const scrollerRef = useRef<HTMLDivElement>(null)
+  const currentLineIdxRef = useRef(-1)
+  const [currentLineIdx, setCurrentLineIdx] = useState(-1)
   const isSidebar = variant === 'sidebar'
 
   useEffect(() => {
@@ -21,19 +35,24 @@ export function LyricsPanel({ track, variant = 'full' }: Props) {
     void fetch(trackId)
   }, [trackId, fetch])
 
-  // Binary search for the latest line whose start time is <= the playhead.
-  const currentLineIdx = useMemo(() => {
-    if (!entry.synced || entry.lines.length === 0) return -1
-    const posMs = positionSec * 1000
-    let lo = 0
-    let hi = entry.lines.length
-    while (lo < hi) {
-      const mid = (lo + hi) >>> 1
-      if (entry.lines[mid].ms <= posMs) lo = mid + 1
-      else hi = mid
+  useEffect(() => {
+    const publishLine = (next: number) => {
+      if (currentLineIdxRef.current === next) return
+      currentLineIdxRef.current = next
+      setCurrentLineIdx(next)
     }
-    return lo - 1
-  }, [positionSec, entry])
+
+    if (!entry.synced || entry.lines.length === 0) {
+      publishLine(-1)
+      return
+    }
+
+    publishLine(findCurrentLineIdx(entry.lines, usePlaybackStore.getState().positionSec))
+    return usePlaybackStore.subscribe((state, prev) => {
+      if (state.positionSec === prev.positionSec) return
+      publishLine(findCurrentLineIdx(entry.lines, state.positionSec))
+    })
+  }, [entry.synced, entry.lines])
 
   useEffect(() => {
     if (currentLineIdx < 0) return

@@ -1,6 +1,5 @@
 import type { Database as BetterSqliteDatabase, Statement } from 'better-sqlite3'
 import type { DbTrack, DbTrackInsert } from '@shared/types/db'
-import { isSupportedEqBandCount, normalizeEqBands } from '@shared/constants/equalizer'
 
 const ALL_COLUMNS = `
   id, path, filename, title, artist, album, duration, format, folder_id,
@@ -21,11 +20,6 @@ export interface ListOpts {
   orderBy?: 'date_added_desc' | 'date_added_asc' | 'title' | 'artist' | 'play_count_desc'
 }
 
-export interface EqOverride {
-  enabled: boolean
-  bands: number[]  // EQ gains in dB
-}
-
 export class TrackRepo {
   private db: BetterSqliteDatabase
   private stmtById: Statement
@@ -34,8 +28,6 @@ export class TrackRepo {
   private stmtUpdatePlays: Statement
   private stmtSetFavorite: Statement
   private stmtByFolderWithAlbum: Statement
-  private stmtGetExtMeta: Statement
-  private stmtSetExtMeta: Statement
   private stmtUpdateMetadata: Statement
   private stmtInsert: Statement
   private listStmtCache = new Map<string, Statement>()
@@ -60,12 +52,6 @@ export class TrackRepo {
       WHERE folder_id = ? AND album_id IS NOT NULL
       ORDER BY date_added DESC
     `)
-    this.stmtGetExtMeta = db.prepare<[number], { extended_metadata: string | null }>(
-      `SELECT extended_metadata FROM tracks WHERE id = ?`,
-    )
-    this.stmtSetExtMeta = db.prepare(
-      `UPDATE tracks SET extended_metadata = ?, state_updated_at = ? WHERE id = ?`,
-    )
     this.stmtUpdateMetadata = db.prepare(`
       UPDATE tracks
       SET
@@ -248,32 +234,5 @@ export class TrackRepo {
   count(): number {
     return (this.db.prepare(`SELECT COUNT(*) as c FROM tracks`).get() as { c: number }).c
   }
-
-  getEqOverride(id: number): EqOverride | null {
-    const row = this.stmtGetExtMeta.get(id) as { extended_metadata: string | null } | undefined
-    if (!row?.extended_metadata) return null
-    try {
-      const parsed = JSON.parse(row.extended_metadata) as { eqOverride?: EqOverride }
-      const eq = parsed.eqOverride
-      if (!eq || !Array.isArray(eq.bands) || !isSupportedEqBandCount(eq.bands.length)) return null
-      return { enabled: !!eq.enabled, bands: normalizeEqBands(eq.bands) }
-    } catch {
-      return null
-    }
-  }
-
-  setEqOverride(id: number, override: EqOverride | null): void {
-    const row = this.stmtGetExtMeta.get(id) as { extended_metadata: string | null } | undefined
-    let blob: Record<string, unknown> = {}
-    if (row?.extended_metadata) {
-      try { blob = JSON.parse(row.extended_metadata) ?? {} } catch { blob = {} }
-    }
-    if (override === null) {
-      delete blob.eqOverride
-    } else {
-      blob.eqOverride = { enabled: !!override.enabled, bands: normalizeEqBands(override.bands) }
-    }
-    const next = Object.keys(blob).length === 0 ? null : JSON.stringify(blob)
-    this.stmtSetExtMeta.run(next, Date.now(), id)
-  }
 }
+

@@ -40,10 +40,9 @@ export function TrackTable({
         <tr>
           <th className="num">#</th>
           {showArt && <th className="art" />}
-          <th>Title</th>
+          <th className="title">Title</th>
           {showAlbum && <th>Album</th>}
           {showPath && <th className="path">Ruta</th>}
-          <th className="heart" />
           {showPlays && <th className="plays">Plays</th>}
           {showFmt && <th className="fmt">Format</th>}
           <th className="dur">Time</th>
@@ -62,29 +61,14 @@ export function TrackTable({
               className={isP ? 'playing' : ''}
               onDoubleClick={() => { void playNow(t, tracks) }}
             >
-              <td className="num">
-                {isP ? <EQBars /> : t.no || i + 1}
-              </td>
-              {showArt && (
-                <td className="art">
-                <div className="mini-art">
-                  <Artwork album={album} radius={3} />
-                </div>
-              </td>
-            )}
-              <td className="title">
-                {t.t}
-                {!showArt && showAlbum && <span className="title-sub">{t.artist}</span>}
-              </td>
-              {showAlbum && <td className="sec">{t.albumTitle}</td>}
-              {showPath && <td className="path" title={t.path}>{pathValue}</td>}
-              <td className="heart">
-                {t.dbId == null ? (
-                  <Icon name="heart" size={13} />
-                ) : (
+              <td className={`num ${t.dbId != null ? 'has-like' : ''}`}>
+                <span className="track-index">
+                  {isP ? <EQBars /> : t.no || i + 1}
+                </span>
+                {t.dbId != null && (
                   <button
                     type="button"
-                    className="tb-icon-btn"
+                    className="tb-icon-btn track-like"
                     onClick={e => {
                       e.stopPropagation()
                       void toggleTrackFavorite(t.dbId!, !t.loved)
@@ -96,6 +80,19 @@ export function TrackTable({
                   </button>
                 )}
               </td>
+              {showArt && (
+                <td className="art">
+                  <div className="mini-art">
+                    <Artwork album={album} radius={3} />
+                  </div>
+                </td>
+              )}
+              <td className="title">
+                <span className="title-main">{t.t}</span>
+                {!showArt && showAlbum && <span className="title-sub">{t.artist}</span>}
+              </td>
+              {showAlbum && <td className="sec">{t.albumTitle}</td>}
+              {showPath && <td className="path" title={t.path}>{pathValue}</td>}
               {showPlays && <td className="plays">{t.plays}</td>}
               {showFmt && <td className="fmt"><CodecStrip track={t} compact /></td>}
               <td className="dur">{fmtTime(t.d)}</td>
