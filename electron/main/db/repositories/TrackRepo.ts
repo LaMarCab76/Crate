@@ -9,7 +9,7 @@ const ALL_COLUMNS = `
   compilation, release_date, original_release_date, bpm, media_type,
   sort_title, sort_artist, sort_album, sort_album_artist,
   bitrate, sample_rate, channels, codec, bit_depth,
-  artwork_data, date_added, is_duplicate, primary_track_id, duplicate_group_id,
+  artwork_data, artwork_path, date_added, is_duplicate, primary_track_id, duplicate_group_id,
   extended_metadata, album_id, artist_id, genre_id, r128_integrated_loudness
 `
 
@@ -49,7 +49,7 @@ export class TrackRepo {
         compilation, release_date, original_release_date, bpm, media_type,
         sort_title, sort_artist, sort_album, sort_album_artist,
         bitrate, sample_rate, channels, codec, bit_depth,
-        artwork_data, date_added, is_duplicate, primary_track_id, duplicate_group_id,
+        artwork_data, artwork_path, date_added, is_duplicate, primary_track_id, duplicate_group_id,
         extended_metadata, album_id, artist_id, genre_id, r128_integrated_loudness
       ) VALUES (
         @path, @filename, @title, @artist, @album, @duration, @format, @folder_id,
@@ -59,7 +59,7 @@ export class TrackRepo {
         @compilation, @release_date, @original_release_date, @bpm, @media_type,
         @sort_title, @sort_artist, @sort_album, @sort_album_artist,
         @bitrate, @sample_rate, @channels, @codec, @bit_depth,
-        @artwork_data, @date_added, @is_duplicate, @primary_track_id, @duplicate_group_id,
+        @artwork_data, @artwork_path, @date_added, @is_duplicate, @primary_track_id, @duplicate_group_id,
         @extended_metadata, @album_id, @artist_id, @genre_id, @r128_integrated_loudness
       )
     `)

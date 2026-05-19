@@ -32,6 +32,7 @@ export interface DbAlbum {
   total_duration: number
   is_compilation: number
   artwork_data: Buffer | null
+  artwork_path: string | null
   date_added: string
 }
 
@@ -47,6 +48,7 @@ export interface DbArtist {
   album_count: number
   artwork_data: Buffer | null
   artwork_source_type: string | null
+  artwork_path: string | null
   date_added: string
 }
 
@@ -99,6 +101,7 @@ export interface DbTrack {
   codec: string | null
   bit_depth: number | null
   artwork_data: Buffer | null
+  artwork_path: string | null
   date_added: string
   is_duplicate: number
   primary_track_id: number | null

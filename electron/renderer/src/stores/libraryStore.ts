@@ -5,6 +5,7 @@
 import { create } from 'zustand'
 import type { Album, Artist, Playlist, Track } from '@shared/types/library'
 import type { DbFolder } from '@shared/types/db'
+import type { ImportProgressEvent } from '@shared/types/ipc-contract'
 import {
   dbToUiAlbum,
   dbToUiArtist,
@@ -24,16 +25,11 @@ interface LibraryState {
   loaded: boolean
   loading: boolean
   error: string | null
+  importing: ImportProgressEvent | null
   refresh(): Promise<void>
   addFolder(path: string): Promise<void>
   removeFolder(id: number): Promise<void>
   pickFolder(): Promise<string | null>
-}
-
-function indexBy<T, K extends string | number>(items: T[], key: (t: T) => K): Map<K, T> {
-  const m = new Map<K, T>()
-  for (const i of items) m.set(key(i), i)
-  return m
 }
 
 export const useLibraryStore = create<LibraryState>((set, get) => ({
@@ -47,6 +43,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   loaded: false,
   loading: false,
   error: null,
+  importing: null,
 
   async refresh() {
     if (get().loading) return
@@ -56,7 +53,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
 
       const [dbTracks, dbAlbums, dbArtists, dbGenres, dbPlaylists, dbFolders, count] =
         await Promise.all([
-          api.tracks({ limit: 5000 }),
+          api.tracks({ limit: 10000 }),
           api.albums(),
           api.artists(),
           api.genres(),
@@ -84,7 +81,6 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       }
 
       const albums = dbAlbums.map(a => dbToUiAlbum(a, tracksByAlbumId.get(a.id) ?? []))
-      const albumsByOrigId = indexBy(albums, a => a.id)
       const artists = dbArtists.map(ar => {
         const artistTracks = tracksByArtistId.get(ar.id) ?? []
         const albumIdsForArtist = new Set(artistTracks.map(t => t.albumId))
@@ -93,8 +89,6 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       })
 
       const playlists = dbPlaylists.map(p => dbToUiPlaylist(p, []))
-      // Silence unused-warning while indexed lookups land in Session 2.
-      void albumsByOrigId
 
       set({
         tracks,
@@ -129,6 +123,27 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   },
 }))
 
+// Subscribe once, on module load, to main-process push events so the store
+// stays fresh without each component wiring its own listener.
+if (typeof window !== 'undefined' && window.api?.library) {
+  let refreshDebounce: number | undefined
+  const scheduleRefresh = () => {
+    if (refreshDebounce) window.clearTimeout(refreshDebounce)
+    refreshDebounce = window.setTimeout(() => {
+      useLibraryStore.getState().refresh()
+    }, 200)
+  }
+
+  window.api.library.onImportProgress(payload => {
+    useLibraryStore.setState({ importing: payload })
+  })
+  window.api.library.onImportComplete(() => {
+    useLibraryStore.setState({ importing: null })
+    scheduleRefresh()
+  })
+  window.api.library.onLibraryChanged(scheduleRefresh)
+}
+
 export function useTracks(): Track[] {
   return useLibraryStore(s => s.tracks)
 }
@@ -152,6 +167,9 @@ export function useTrackCount(): number {
 }
 export function useLibraryLoaded(): boolean {
   return useLibraryStore(s => s.loaded)
+}
+export function useImporting(): ImportProgressEvent | null {
+  return useLibraryStore(s => s.importing)
 }
 
 export function useAlbumByUiId(uiId: string | undefined): Album | undefined {

@@ -3,10 +3,15 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { closeDatabase, getDatabase } from './db/database'
 import { registerLibraryChannel } from './ipc/library-channel'
+import { registerProtocolHandlers, registerProtocolSchemes } from './protocol'
+import { getFolderWatcher } from './library/FolderWatcher'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
 const isDev = !app.isPackaged
+
+// Privileged protocol schemes must be registered BEFORE app.whenReady.
+registerProtocolSchemes()
 
 function createMainWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -48,7 +53,12 @@ app.whenReady().then(() => {
   // Initialize the SQLite database before the renderer can call any IPC handler.
   // Migrations are applied during the first getDatabase() call.
   getDatabase()
+  registerProtocolHandlers()
   registerLibraryChannel()
+
+  // Start watching every already-registered folder so we pick up disk changes
+  // without requiring a rescan.
+  getFolderWatcher().startAll()
 
   createMainWindow()
 
@@ -62,5 +72,6 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
+  getFolderWatcher().stopAll()
   closeDatabase()
 })

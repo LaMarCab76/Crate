@@ -13,6 +13,7 @@ export interface ArtworkSource {
   seed: number
   palette: [string, string, string]
   pattern: Pattern
+  artworkPath?: string
 }
 
 export interface ArtworkProps {
@@ -24,6 +25,23 @@ export interface ArtworkProps {
 
 export function Artwork({ album, radius = 6, style }: ArtworkProps) {
   if (!album) return null
+
+  // If we have a real cover cached on disk, render the bitmap. The hifi://
+  // protocol is registered in the main process and serves files from
+  // userData/artwork/. Procedural SVG remains the fallback so the UI always
+  // renders something even before any artwork is extracted.
+  const artworkPath = album.artworkPath
+  if (artworkPath) {
+    return (
+      <img
+        src={`hifi://artwork/${encodeURIComponent(artworkPath)}`}
+        alt=""
+        draggable={false}
+        style={{ display: 'block', width: '100%', height: '100%', objectFit: 'cover', borderRadius: radius, ...style }}
+      />
+    )
+  }
+
   const [c0, c1, c2] = album.palette
   const seed = album.seed || 1
   const pat: Pattern = album.pattern || 'grid'

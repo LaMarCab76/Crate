@@ -1,6 +1,8 @@
 import { dialog, ipcMain } from 'electron'
-import { basename } from 'node:path'
 import { getRepos } from '../db/repositories'
+import { getImportService } from '../library/ImportService'
+import { getFolderWatcher } from '../library/FolderWatcher'
+import { broadcast } from './events'
 import type {
   AddFolderResult,
   ListTracksOpts,
@@ -10,6 +12,8 @@ import type {
 
 export function registerLibraryChannel(): void {
   const repos = getRepos()
+  const importer = getImportService()
+  const watcher = getFolderWatcher()
 
   ipcMain.handle('library:tracks', (_, opts: ListTracksOpts = {}) => repos.tracks.getAll(opts))
   ipcMain.handle('library:track:byId', (_, id: number) => repos.tracks.getById(id) ?? null)
@@ -26,9 +30,22 @@ export function registerLibraryChannel(): void {
   ipcMain.handle('library:genres', () => repos.genres.getAll())
   ipcMain.handle('library:genre:tracks', (_, id: number) => repos.entityTracks.getTracksForGenre(id))
 
-  // Playlists are read-only stubs in Session 1 (PlaylistRepo lands in Session 2).
-  ipcMain.handle('library:playlists', () => [])
-  ipcMain.handle('library:playlist:tracks', () => [])
+  ipcMain.handle('library:playlists', () => repos.playlists.list())
+  ipcMain.handle('library:playlist:byId', (_, id: number) => repos.playlists.getById(id) ?? null)
+  ipcMain.handle('library:playlist:tracks', (_, id: number) =>
+    repos.entityTracks.getTracksForPlaylist(id),
+  )
+  ipcMain.handle('library:playlist:create', (_, p: { name: string; description?: string; isSmart?: boolean }) =>
+    repos.playlists.create(p.name, p.description ?? null, p.isSmart === true),
+  )
+  ipcMain.handle('library:playlist:delete', (_, id: number) => {
+    repos.playlists.delete(id)
+    broadcast('library:changed', { reason: 'playlist-delete' })
+  })
+  ipcMain.handle('library:playlist:addTracks', (_, p: { playlistId: number; trackIds: number[] }) => {
+    repos.playlists.addTracks(p.playlistId, p.trackIds)
+    broadcast('library:changed', { reason: 'playlist-tracks' })
+  })
 
   ipcMain.handle('library:search', (_, query: string, limit?: number): SearchResultsPayload =>
     repos.search.search(query, limit ?? 20),
@@ -36,7 +53,9 @@ export function registerLibraryChannel(): void {
 
   ipcMain.handle('library:folders', () => repos.folders.list())
   ipcMain.handle('library:folders:remove', (_, id: number) => {
+    watcher.stop(id)
     repos.folders.remove(id)
+    broadcast('library:changed', { reason: 'folder-remove' })
   })
 
   ipcMain.handle('library:folders:pick', async (): Promise<PickFolderResult> => {
@@ -51,10 +70,21 @@ export function registerLibraryChannel(): void {
   })
 
   ipcMain.handle('library:folders:add', async (_, path: string): Promise<AddFolderResult> => {
-    const name = basename(path) || path
-    const folder = repos.folders.add(path, name)
-    // Scanning lands in Session 2 (ImportService). For now we just register
-    // the folder so the UI can show it.
-    return { folder, startedScan: false }
+    const result = await importer.addFolder(path)
+    watcher.start(result.folder.id, result.folder.path)
+    broadcast('library:changed', { reason: 'folder-add' })
+    return result
   })
+
+  // Queue persistence
+  ipcMain.handle('queue:save', (_, payload: { trackIds: number[]; currentIndex: number }) => {
+    repos.queue.save(payload.trackIds, payload.currentIndex)
+  })
+  ipcMain.handle('queue:load', () => repos.queue.load())
+
+  // Lyrics
+  ipcMain.handle('lyrics:get', (_, trackId: number) => repos.lyrics.get(trackId) ?? null)
+  ipcMain.handle('lyrics:set', (_, payload: { trackId: number; lrcContent: string; source: string | null; language: string | null }) =>
+    repos.lyrics.set(payload.trackId, payload.lrcContent, payload.source ?? null, payload.language ?? null),
+  )
 }

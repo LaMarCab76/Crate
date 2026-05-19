@@ -83,6 +83,8 @@ function inferFormat(t: DbTrack): Track['fmt'] {
 export function dbToUiTrack(t: DbTrack): Track {
   return {
     id: `t${t.id}`,
+    dbId: t.id,
+    path: t.path,
     t: t.title,
     d: t.duration,
     fmt: inferFormat(t),
@@ -97,11 +99,15 @@ export function dbToUiTrack(t: DbTrack): Track {
     no: t.track_number ?? 0,
     added: t.date_added,
     loved: t.is_favorite === 1,
+    artworkPath: t.artwork_path ?? undefined,
   }
 }
 
 export function dbToUiAlbum(a: DbAlbum, tracks: Track[] = []): Album {
   const seed = a.id || 1
+  // Prefer the album's own artwork_path, but fall back to the first track's
+  // artwork — embedded covers are usually identical across an album anyway.
+  const firstTrackArt = tracks.find(t => t.artworkPath)?.artworkPath
   return {
     id: `a${a.id}`,
     title: a.title,
@@ -112,6 +118,7 @@ export function dbToUiAlbum(a: DbAlbum, tracks: Track[] = []): Album {
     pattern: patternFor(seed),
     genre: tracks[0]?.genre ?? '',
     tracks,
+    artworkPath: a.artwork_path ?? firstTrackArt,
   }
 }
 

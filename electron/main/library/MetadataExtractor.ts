@@ -1,0 +1,118 @@
+import { parseFile } from 'music-metadata'
+import { basename, extname } from 'node:path'
+import { statSync } from 'node:fs'
+import { saveArtwork, type ArtworkSaveResult } from './ArtworkCache'
+
+export interface TrackMetadata {
+  title: string
+  artist: string
+  album: string
+  albumArtist: string | null
+  composer: string
+  genre: string
+  year: string
+  trackNumber: number | null
+  totalTracks: number | null
+  discNumber: number | null
+  totalDiscs: number | null
+  duration: number // seconds
+  format: string
+  codec: string | null
+  bitrate: number | null     // bits per second
+  sampleRate: number | null  // Hz
+  bitDepth: number | null
+  channels: number | null
+  fileSize: number | null
+  dateModified: string | null
+  artwork: ArtworkSaveResult | null
+  replayGainTrack: number | null
+  replayGainAlbum: number | null
+  isCompilation: boolean
+}
+
+function asString(v: unknown, fallback = ''): string {
+  if (v == null) return fallback
+  return String(v)
+}
+
+function joinList(v: unknown): string {
+  if (Array.isArray(v)) return v.filter(Boolean).join(', ')
+  return asString(v, '')
+}
+
+function inferFormat(filePath: string, fmtName: string | undefined): string {
+  if (fmtName) return fmtName.toUpperCase()
+  const ext = extname(filePath).slice(1).toUpperCase()
+  return ext || 'AUDIO'
+}
+
+function parseGainDb(s: string | undefined | null): number | null {
+  if (!s) return null
+  const m = /(-?\d+(?:\.\d+)?)/.exec(s)
+  return m ? parseFloat(m[1]) : null
+}
+
+export async function readTrackMetadata(filePath: string): Promise<TrackMetadata> {
+  const stats = statSync(filePath)
+  const filename = basename(filePath)
+  const fallbackTitle = filename.replace(/\.[^.]+$/, '')
+
+  const meta = await parseFile(filePath, {
+    skipCovers: false,
+    skipPostHeaders: false,
+    includeChapters: false,
+  })
+
+  const common = meta.common
+  const format = meta.format
+
+  const title = asString(common.title, fallbackTitle).trim() || fallbackTitle
+  const artist = asString(common.artist || joinList(common.artists), 'Unknown Artist').trim()
+  const album = asString(common.album, 'Unknown Album').trim()
+  const albumArtist = common.albumartist ? String(common.albumartist).trim() : null
+  const composer = joinList(common.composer)
+  const genre = joinList(common.genre)
+  const year = common.year != null ? String(common.year) : asString(common.date).slice(0, 4)
+  const trackNumber = common.track?.no ?? null
+  const totalTracks = common.track?.of ?? null
+  const discNumber = common.disk?.no ?? null
+  const totalDiscs = common.disk?.of ?? null
+
+  let artwork: ArtworkSaveResult | null = null
+  const pictures = common.picture
+  if (pictures && pictures.length > 0) {
+    const p = pictures[0]
+    try {
+      artwork = saveArtwork(Buffer.from(p.data), p.format)
+    } catch (err) {
+      console.warn(`[metadata] artwork save failed for ${filePath}:`, (err as Error).message)
+    }
+  }
+
+  return {
+    title,
+    artist,
+    album,
+    albumArtist,
+    composer,
+    genre,
+    year,
+    trackNumber,
+    totalTracks,
+    discNumber,
+    totalDiscs,
+    duration: format.duration ?? 0,
+    format: inferFormat(filePath, format.container ?? format.codec),
+    codec: format.codec ?? null,
+    bitrate: format.bitrate ?? null,
+    sampleRate: format.sampleRate ?? null,
+    bitDepth: format.bitsPerSample ?? null,
+    channels: format.numberOfChannels ?? null,
+    fileSize: stats.size,
+    dateModified: stats.mtime.toISOString(),
+    artwork,
+    replayGainTrack: parseGainDb(common.replaygain_track_gain?.dB?.toString()),
+    replayGainAlbum: parseGainDb(common.replaygain_album_gain?.dB?.toString()),
+    isCompilation: Boolean(common.compilation),
+  }
+}

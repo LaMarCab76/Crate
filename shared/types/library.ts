@@ -10,10 +10,12 @@ export type Pattern = 'circles' | 'sun' | 'rays' | 'grid' | 'wave' | 'stripes' |
 
 export interface Track {
   id: string
-  t: string             // title
-  d: number             // duration seconds
+  dbId?: number          // numeric primary key in the SQLite tracks table
+  path?: string          // filesystem path for the audio engine to load
+  t: string              // title
+  d: number              // duration seconds
   fmt: AudioFormat
-  q: string             // quality string (e.g. "24/96", "AAC 256", "320k", "ALAC")
+  q: string              // quality string (e.g. "24/96", "AAC 256", "320k", "ALAC")
   plays: number
   albumId: string
   albumTitle: string
@@ -21,9 +23,10 @@ export interface Track {
   artistId: string
   year: number
   genre: string
-  no: number            // track number
+  no: number             // track number
   added: string
   loved: boolean
+  artworkPath?: string   // filename under userData/artwork/, served via hifi://
 }
 
 export interface Album {
@@ -36,6 +39,7 @@ export interface Album {
   pattern: Pattern
   genre: string
   tracks: Track[]
+  artworkPath?: string  // filename under userData/artwork/, served via hifi://
 }
 
 export interface Artist {

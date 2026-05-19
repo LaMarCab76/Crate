@@ -6,6 +6,9 @@ import { ArtistRepo } from './ArtistRepo'
 import { GenreRepo } from './GenreRepo'
 import { EntityTracksRepo } from './EntityTracksRepo'
 import { SearchRepo } from './SearchRepo'
+import { PlaylistRepo } from './PlaylistRepo'
+import { QueueRepo } from './QueueRepo'
+import { LyricsRepo } from './LyricsRepo'
 
 let cached: Repos | null = null
 
@@ -17,6 +20,9 @@ export interface Repos {
   genres: GenreRepo
   entityTracks: EntityTracksRepo
   search: SearchRepo
+  playlists: PlaylistRepo
+  queue: QueueRepo
+  lyrics: LyricsRepo
 }
 
 export function getRepos(): Repos {
@@ -30,8 +36,22 @@ export function getRepos(): Repos {
     genres: new GenreRepo(db),
     entityTracks: new EntityTracksRepo(db),
     search: new SearchRepo(db),
+    playlists: new PlaylistRepo(db),
+    queue: new QueueRepo(db),
+    lyrics: new LyricsRepo(db),
   }
   return cached
 }
 
-export { FolderRepo, TrackRepo, AlbumRepo, ArtistRepo, GenreRepo, EntityTracksRepo, SearchRepo }
+export {
+  FolderRepo,
+  TrackRepo,
+  AlbumRepo,
+  ArtistRepo,
+  GenreRepo,
+  EntityTracksRepo,
+  SearchRepo,
+  PlaylistRepo,
+  QueueRepo,
+  LyricsRepo,
+}
