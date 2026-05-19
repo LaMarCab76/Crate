@@ -1,20 +1,20 @@
+import { type CSSProperties, useEffect, useState } from 'react'
 import { Artwork } from './Artwork'
 import { CodecStrip } from './CodecStrip'
 import { EqVisualizerPanel } from './EqVisualizerPanel'
 import { Icon } from './Icon'
-import { LyricsPanel } from './LyricsPanel'
 import { fmtTime } from '@renderer/utils/format'
 import { useAlbumByUiId } from '@renderer/stores/libraryStore'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
 import { useQueueStore } from '@renderer/stores/queueStore'
+import { useTweakStore } from '@renderer/stores/settingsStore'
+import { extractDominantColor } from '@renderer/utils/colorExtract'
 
 interface NowPlayingFullProps {
-  showLyrics: boolean
-  setShowLyrics: (v: boolean) => void
   onCollapse: () => void
 }
 
-export function NowPlayingFull({ showLyrics, setShowLyrics, onCollapse }: NowPlayingFullProps) {
+export function NowPlayingFull({ onCollapse }: NowPlayingFullProps) {
   const track = usePlaybackStore(s => s.currentTrack)
   const status = usePlaybackStore(s => s.status)
   const positionSec = usePlaybackStore(s => s.positionSec)
@@ -23,6 +23,28 @@ export function NowPlayingFull({ showLyrics, setShowLyrics, onCollapse }: NowPla
   const togglePlay = useQueueStore(s => s.togglePlay)
   const next = useQueueStore(s => s.next)
   const previous = useQueueStore(s => s.previous)
+  const playerTintSource = useTweakStore(s => s.tweak.playerTintSource)
+  const playerTintColor = useTweakStore(s => s.tweak.playerTintColor)
+  const artworkPath = track?.artworkPath ?? album?.artworkPath ?? null
+  const [artworkTint, setArtworkTint] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (playerTintSource !== 'artwork' || !artworkPath) {
+      setArtworkTint(null)
+      return
+    }
+    let cancelled = false
+    const src = `hifi://artwork/${encodeURIComponent(artworkPath)}`
+    void extractDominantColor(src).then(hex => {
+      if (!cancelled) setArtworkTint(hex)
+    })
+    return () => { cancelled = true }
+  }, [playerTintSource, artworkPath])
+
+  const tint =
+    playerTintSource === 'artwork' ? artworkTint
+    : playerTintSource === 'preset' || playerTintSource === 'custom' ? playerTintColor
+    : null
 
   if (!track) return null
 
@@ -30,7 +52,7 @@ export function NowPlayingFull({ showLyrics, setShowLyrics, onCollapse }: NowPla
   const progress = durationSec > 0 ? positionSec / durationSec : 0
 
   return (
-    <div className="np-full">
+    <div className="np-full" style={{ '--np-tint': tint ?? 'transparent' } as CSSProperties}>
       <div className="np-full-head">
         <div style={{ width: 70 }} />
         <div style={{ flex: 1, textAlign: 'center', fontSize: 12.5, color: 'var(--text-secondary)', fontWeight: 500 }}>
@@ -71,17 +93,11 @@ export function NowPlayingFull({ showLyrics, setShowLyrics, onCollapse }: NowPla
 
         <div className="np-full-right">
           <div className="np-full-tabs">
-            <button className={`btn ${showLyrics ? 'primary' : 'ghost'} sm`} onClick={() => setShowLyrics(true)}>Lyrics</button>
-            <button className={`btn ${showLyrics ? 'ghost' : 'primary'} sm`} onClick={() => setShowLyrics(false)}>EQ</button>
             <div style={{ flex: 1 }} />
             <button className="btn ghost sm"><Icon name="tag" size={12} /> Metadata</button>
           </div>
 
-          {showLyrics ? (
-            <LyricsPanel track={track} />
-          ) : (
-            <EqVisualizerPanel track={track} />
-          )}
+          <EqVisualizerPanel track={track} />
         </div>
       </div>
     </div>

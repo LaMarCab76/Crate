@@ -66,16 +66,16 @@ export function ArtistsView({ onSelect }: { onSelect?: (ar: Artist) => void }) {
       ) : (
         <div style={{ padding: '4px 12px 24px' }}>
           {list.map(ar => (
-            <div
-              key={ar.id}
-              className="sb-item"
-              style={{ height: 56, margin: '2px 0', padding: '0 12px', gap: 14 }}
-              onClick={() => onSelect?.(ar)}
-              role="button"
-              tabIndex={0}
-            >
+                <div
+                  key={ar.id}
+                  className="sb-item"
+                  style={{ height: 56, margin: '2px 0', padding: '0 12px', gap: 14 }}
+                  onClick={() => onSelect?.(ar)}
+                role="button"
+                  tabIndex={0}
+                >
               <div style={{ width: 40, height: 40, borderRadius: '50%', overflow: 'hidden', flexShrink: 0 }}>
-                <Artwork album={{ seed: ar.seed, palette: ar.palette, pattern: ar.pattern }} radius={20} />
+                <Artwork album={ar} radius={20} />
               </div>
               <div>
                 <div style={{ fontSize: 14, fontWeight: 600 }}>{ar.name}</div>

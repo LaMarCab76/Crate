@@ -4,10 +4,12 @@ import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
 import { useAlbums } from '@renderer/stores/libraryStore'
 import { useQueueStore } from '@renderer/stores/queueStore'
+import { useAlbumActions } from '@renderer/components/MediaActions'
 
 export function AlbumsView({ onSelect }: { onSelect?: (al: Album) => void }) {
   const albums = useAlbums()
   const playNow = useQueueStore(s => s.playNow)
+  const albumActions = useAlbumActions()
 
   const playAlbum = (album: Album, e?: MouseEvent<HTMLElement>) => {
     if (e) e.stopPropagation()
@@ -38,7 +40,14 @@ export function AlbumsView({ onSelect }: { onSelect?: (al: Album) => void }) {
       </div>
       <div className="grid">
         {albums.map(al => (
-          <div key={al.id} className="card" onClick={() => onSelect?.(al)} role="button" tabIndex={0}>
+          <div
+            key={al.id}
+            className="card"
+            onClick={() => onSelect?.(al)}
+            onContextMenu={e => albumActions.openAlbumMenu(e, al)}
+            role="button"
+            tabIndex={0}
+          >
             <div className="art">
               <Artwork album={al} radius={6} />
               <div className="play-overlay">
@@ -59,6 +68,7 @@ export function AlbumsView({ onSelect }: { onSelect?: (al: Album) => void }) {
           </div>
         ))}
       </div>
+      {albumActions.elements}
     </>
   )
 }

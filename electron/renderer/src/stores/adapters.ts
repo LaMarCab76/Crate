@@ -29,6 +29,32 @@ function palette(seed: number): [string, string, string] {
   const c2 = `hsl(${(hue + 50) % 360}, 45%, 65%)`
   return [c0, c1, c2]
 }
+
+function toAlbumId(albumId: string): number {
+  const rawId = albumId.startsWith('a') ? albumId.slice(1) : albumId
+  const parsed = Number.parseInt(rawId, 10)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function latestTrackAdded(album: Album): number {
+  return album.tracks.reduce((max, track) => {
+    if (!track.added) return max
+    const ts = Date.parse(track.added)
+    if (Number.isNaN(ts)) return max
+    return Math.max(max, ts)
+  }, Number.MIN_SAFE_INTEGER)
+}
+
+function sortAlbumsByFreshness(a: Album, b: Album): number {
+  const yearDiff = b.year - a.year
+  if (yearDiff !== 0) return yearDiff
+
+  const aTrackTs = latestTrackAdded(a)
+  const bTrackTs = latestTrackAdded(b)
+  if (aTrackTs !== bTrackTs) return bTrackTs - aTrackTs
+
+  return toAlbumId(b.id) - toAlbumId(a.id)
+}
 function patternFor(seed: number): Pattern {
   return PATTERNS[seed % PATTERNS.length]
 }
@@ -85,6 +111,7 @@ export function dbToUiTrack(t: DbTrack): Track {
     id: `t${t.id}`,
     dbId: t.id,
     path: t.path,
+    filename: t.filename,
     t: t.title,
     d: t.duration,
     fmt: inferFormat(t),
@@ -94,11 +121,23 @@ export function dbToUiTrack(t: DbTrack): Track {
     albumTitle: t.album,
     artist: t.artist,
     artistId: t.artist_id != null ? `ar${t.artist_id}` : `ar-${t.artist}`,
+    albumArtist: t.album_artist,
+    composer: t.composer,
     year: parseInt(t.year || `${new Date(t.date_added).getFullYear()}`, 10) || 0,
     genre: t.genre,
     no: t.track_number ?? 0,
+    totalTracks: t.total_tracks,
+    discNumber: t.disc_number,
+    totalDiscs: t.total_discs,
     added: t.date_added,
+    dateModified: t.date_modified,
     loved: t.is_favorite === 1,
+    fileSize: t.file_size,
+    codec: t.codec,
+    bitrate: t.bitrate,
+    sampleRate: t.sample_rate,
+    channels: t.channels,
+    bitDepth: t.bit_depth,
     artworkPath: t.artwork_path ?? undefined,
   }
 }
@@ -123,6 +162,8 @@ export function dbToUiAlbum(a: DbAlbum, tracks: Track[] = []): Album {
 }
 
 export function dbToUiArtist(ar: DbArtist, albums: Album[] = []): Artist {
+  const sorted = [...albums].sort(sortAlbumsByFreshness)
+  const latestArt = sorted.find(a => a.artworkPath)?.artworkPath
   const seed = ar.id || 1
   return {
     id: `ar${ar.id}`,
@@ -132,6 +173,7 @@ export function dbToUiArtist(ar: DbArtist, albums: Album[] = []): Artist {
     seed,
     palette: palette(seed),
     pattern: patternFor(seed),
+    artworkPath: latestArt,
     favorite: ar.is_favorite === 1,
     trackCount: ar.track_count,
   }

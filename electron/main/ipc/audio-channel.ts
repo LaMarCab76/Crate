@@ -2,8 +2,9 @@ import { BrowserWindow, ipcMain, screen, type WebContents } from 'electron'
 import { getAudioEngine, type StreamInfo } from '../audio/AudioEngine'
 import { getEQManager } from '../audio/EQManager'
 import { GaplessController } from '../audio/GaplessController'
+import { getExclusiveModeManager } from '../audio/ExclusiveModeManager'
 import { broadcast } from './events'
-import type { FftMode } from '@shared/types/ipc-contract'
+import type { AudioOutputDevice, FftMode } from '@shared/types/ipc-contract'
 
 let gapless: GaplessController | null = null
 
@@ -47,6 +48,11 @@ function getSenderDisplayHz(sender: WebContents): number | undefined {
 export function registerAudioChannel(): void {
   const engine = getAudioEngine()
   const eq = getEQManager()
+  // Construct the exclusive-mode manager eagerly so it wires its
+  // setOnDeviceChanged callback into the engine before any IPC arrives.
+  // Otherwise the first device switch could fire before the manager exists,
+  // missing a hog-transfer opportunity.
+  getExclusiveModeManager()
 
   ipcMain.handle('audio:load', (_, payload: { path: string; trackId?: number | null }) => {
     const info = engine.load(payload.path)
@@ -82,15 +88,32 @@ export function registerAudioChannel(): void {
     currentPath: engine.getCurrentPath(),
   }))
 
-  ipcMain.handle('audio:devices:list', () => engine.listOutputDevices())
-  ipcMain.handle('audio:devices:current', () => engine.getOutputDevice())
+  const decorate = (device: AudioOutputDevice): AudioOutputDevice => ({
+    ...device,
+    supportsExclusive: getExclusiveModeManager().isSupportedDevice(device),
+  })
+
+  ipcMain.handle('audio:devices:list', () => engine.listOutputDevices().map(decorate))
+  ipcMain.handle('audio:devices:current', () => {
+    const current = engine.getOutputDevice()
+    return current ? decorate(current) : null
+  })
   ipcMain.handle('audio:devices:set', (_, payload: { deviceId: number }) => {
     const selected = engine.setOutputDevice(payload.deviceId)
+    // Invalidate any cached CoreAudio mapping so the next exclusive-mode
+    // check sees a fresh device list.
+    getExclusiveModeManager().invalidateCache()
     const movedPreload = getGapless().movePreloadedToOutputDevice(selected.id)
     if (!movedPreload) {
       console.warn(`[audio] cleared preloaded stream after output device switch to ${selected.name}`)
     }
-    return selected
+    return decorate(selected)
+  })
+
+  ipcMain.handle('audio:exclusive:get', () => getExclusiveModeManager().getState())
+  ipcMain.handle('audio:exclusive:set', async (_, payload: { enabled: boolean }) => {
+    const mgr = getExclusiveModeManager()
+    return payload.enabled ? await mgr.enable() : await mgr.disable()
   })
 
   // ---------------- EQ ----------------

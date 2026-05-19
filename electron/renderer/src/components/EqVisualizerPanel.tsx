@@ -13,18 +13,26 @@ import {
 
 // Symmetric EMA weight on the previous value — higher = smoother bars.
 const EMA_ALPHA = 0.88
-const SCALE_EPSILON = 0.003
-const IDLE_BAR_SCALE = 0.02
+// Number of discrete LED-style segments per band. The visualizer renders
+// SEGMENT_COUNT divs inside each band track; --lit on the track drives which
+// segments light up via CSS, so the JS hot loop only writes one custom
+// property per band per frame.
+const SEGMENT_COUNT = 12
+// Suppress writes when the smoothed lit value barely moves (≈ 0.25% of one
+// segment), so an idle FFT doesn't churn DOM style writes.
+const LIT_EPSILON = 0.03
 
 interface Props {
   track: Track
+  interactive?: boolean
 }
 
 // Unified columns: bar height tracks the live FFT for each EQ band; the
 // fill color tints toward the accent on boost / fades on cut; a thin
 // horizontal thumb shows the band's gain. Dragging any column changes its
-// gain, double-click resets to 0 dB.
-export function EqVisualizerPanel({ track }: Props) {
+// gain, double-click resets to 0 dB. With `interactive=false`, controls and
+// the gain thumb/label are hidden — the panel renders as a pure visualizer.
+export function EqVisualizerPanel({ track, interactive = true }: Props) {
   const enabled = useEqStore(s => s.enabled)
   const globalBands = useEqStore(s => s.bands)
   const setBand = useEqStore(s => s.setBand)
@@ -41,10 +49,10 @@ export function EqVisualizerPanel({ track }: Props) {
   const [draftBands, setDraftBandsState] = useState<number[] | null>(null)
   const displayBands = draftBands ?? globalBands
 
-  const fillRefs = useRef<(HTMLDivElement | null)[]>([])
+  const trackRefs = useRef<(HTMLDivElement | null)[]>([])
   const smoothedRef = useRef<Float32Array>(new Float32Array(EQ_BAND_COUNT))
   const bandScratchRef = useRef<Float32Array>(new Float32Array(EQ_BAND_COUNT))
-  const lastScaleRef = useRef<Float32Array>(new Float32Array(EQ_BAND_COUNT))
+  const lastLitRef = useRef<Float32Array>(new Float32Array(EQ_BAND_COUNT))
   const displayBandsRef = useRef<number[]>(displayBands)
   const draftBandsRef = useRef<number[] | null>(null)
   const pendingPreviewRef = useRef<{ index: number; gain: number } | null>(null)
@@ -78,30 +86,30 @@ export function EqVisualizerPanel({ track }: Props) {
     const shouldAnimate = playbackStatus === 'playing' && windowActive
     if (!shouldAnimate) {
       smoothedRef.current.fill(0)
-      lastScaleRef.current.fill(IDLE_BAR_SCALE)
-      for (const el of fillRefs.current) {
-        if (el) el.style.transform = `scaleY(${IDLE_BAR_SCALE})`
+      lastLitRef.current.fill(0)
+      for (const el of trackRefs.current) {
+        if (el) el.style.setProperty('--lit', '0')
       }
       return
     }
 
     const stopDemand = subscribeFftDemand('full')
-    lastScaleRef.current.fill(-1)
+    // Force a write on the first frame even if the value didn't change.
+    lastLitRef.current.fill(-1)
 
     let frame = 0
     const tick = () => {
       const targets = binsToBands(getLatestFft(), EQ_BAND_COUNT, bandScratchRef.current)
       const smoothed = smoothedRef.current
-      const lastScale = lastScaleRef.current
+      const lastLit = lastLitRef.current
       for (let i = 0; i < EQ_BAND_COUNT; i++) {
         smoothed[i] = smoothed[i] * EMA_ALPHA + targets[i] * (1 - EMA_ALPHA)
-        const el = fillRefs.current[i]
-        if (el) {
-          const scale = Math.max(IDLE_BAR_SCALE, Math.min(1, smoothed[i]))
-          if (Math.abs(scale - lastScale[i]) >= SCALE_EPSILON) {
-            lastScale[i] = scale
-            el.style.transform = `scaleY(${scale})`
-          }
+        const el = trackRefs.current[i]
+        if (!el) continue
+        const lit = Math.max(0, Math.min(SEGMENT_COUNT, smoothed[i] * SEGMENT_COUNT))
+        if (Math.abs(lit - lastLit[i]) >= LIT_EPSILON) {
+          lastLit[i] = lit
+          el.style.setProperty('--lit', lit.toFixed(2))
         }
       }
       frame = requestAnimationFrame(tick)
@@ -225,22 +233,35 @@ export function EqVisualizerPanel({ track }: Props) {
   }
 
   return (
-    <div className="eq-viz" style={{ opacity: enabled ? 1 : 0.55 }}>
-      <div className="eq-viz-head">
-        <div
-          className={`toggle ${enabled ? 'on' : ''}`}
-          onClick={() => { void setEnabled(!enabled) }}
-          role="switch"
-          aria-checked={enabled}
-          tabIndex={0}
-          title={enabled ? 'EQ on' : 'EQ off'}
-        />
-        <span className="switch-label">EQ</span>
-        <div style={{ flex: 1 }} />
-        <button className="btn ghost sm" onClick={handleReset}>Reset</button>
-      </div>
+    <div className={`eq-viz${interactive ? '' : ' readonly'}`} style={{ opacity: enabled ? 1 : 0.55 }}>
+      {interactive && (
+        <div className="eq-viz-head">
+          <div
+            className={`toggle ${enabled ? 'on' : ''}`}
+            onClick={() => { void setEnabled(!enabled) }}
+            role="switch"
+            aria-checked={enabled}
+            tabIndex={0}
+            title={enabled ? 'EQ on' : 'EQ off'}
+          />
+          <span className="switch-label">EQ</span>
+          <div style={{ flex: 1 }} />
+          <button className="btn ghost sm" onClick={handleReset}>Reset</button>
+        </div>
+      )}
       <div className="eq-viz-body">
         <div className="eq-bands">
+          <div className="eq-db-scale" aria-hidden="true">
+            <div className="eq-db-track">
+              <span>0</span>
+              <span>-6</span>
+              <span>-12</span>
+              <span>-20</span>
+              <span>-40</span>
+            </div>
+            <div className="eq-db-spacer">&nbsp;</div>
+            {interactive && <div className="eq-db-spacer">&nbsp;</div>}
+          </div>
           {EQ_BAND_LABELS.map((label, i) => {
             const gain = displayBands[i] ?? 0
             const norm = gain / EQ_GAIN_MAX
@@ -248,33 +269,41 @@ export function EqVisualizerPanel({ track }: Props) {
             return (
               <div
                 key={label}
-                className={`eq-band${dragging === i ? ' dragging' : ''}`}
+                className={`eq-band${interactive && dragging === i ? ' dragging' : ''}`}
                 style={bandStyle}
-                role="slider"
-                aria-label={`${label} Hz`}
-                aria-valuemin={EQ_GAIN_MIN}
-                aria-valuemax={EQ_GAIN_MAX}
-                aria-valuenow={gain}
-                aria-disabled={!enabled}
-                tabIndex={enabled ? 0 : -1}
-                onPointerDown={handlePointerDown(i)}
-                onPointerMove={handlePointerMove(i)}
-                onPointerUp={handlePointerUp(i)}
-                onPointerCancel={handlePointerUp(i)}
-                onDoubleClick={() => { if (enabled) void commitBandChange(i, 0) }}
-                onKeyDown={handleKeyDown(i)}
+                role={interactive ? 'slider' : undefined}
+                aria-label={interactive ? `${label} Hz` : undefined}
+                aria-valuemin={interactive ? EQ_GAIN_MIN : undefined}
+                aria-valuemax={interactive ? EQ_GAIN_MAX : undefined}
+                aria-valuenow={interactive ? gain : undefined}
+                aria-disabled={interactive ? !enabled : undefined}
+                tabIndex={interactive ? (enabled ? 0 : -1) : undefined}
+                onPointerDown={interactive ? handlePointerDown(i) : undefined}
+                onPointerMove={interactive ? handlePointerMove(i) : undefined}
+                onPointerUp={interactive ? handlePointerUp(i) : undefined}
+                onPointerCancel={interactive ? handlePointerUp(i) : undefined}
+                onDoubleClick={interactive ? () => { if (enabled) void commitBandChange(i, 0) } : undefined}
+                onKeyDown={interactive ? handleKeyDown(i) : undefined}
               >
-                <div className="eq-band-track">
-                  <div
-                    className="eq-band-fill"
-                    ref={el => { fillRefs.current[i] = el }}
-                  />
-                  <div className="eq-band-thumb" />
+                <div
+                  className="eq-band-track"
+                  ref={el => { trackRefs.current[i] = el }}
+                >
+                  {Array.from({ length: SEGMENT_COUNT }).map((_, segIdx) => (
+                    <div
+                      key={segIdx}
+                      className="eq-band-segment"
+                      style={{ '--idx': SEGMENT_COUNT - 1 - segIdx } as CSSProperties}
+                    />
+                  ))}
+                  {interactive && <div className="eq-band-thumb" />}
                 </div>
                 <div className="hz">{label}</div>
-                <div className="gain">
-                  {gain > 0 ? `+${gain.toFixed(0)}` : gain.toFixed(0)}
-                </div>
+                {interactive && (
+                  <div className="gain">
+                    {gain > 0 ? `+${gain.toFixed(0)}` : gain.toFixed(0)}
+                  </div>
+                )}
               </div>
             )
           })}

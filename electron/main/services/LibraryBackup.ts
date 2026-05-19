@@ -1,6 +1,6 @@
 // Portable library metadata. Each imported folder gets a hidden
 // `.hifidelity-library.json` at its root that mirrors the user-modifiable
-// pieces of state from the SQLite DB (plays, favorites, ratings, lyrics, EQ
+// pieces of state from the SQLite DB (plays, favorites, ratings, EQ
 // overrides). When the folder is reconnected on another machine the file is
 // read first and its values are merged into the freshly-scanned DB rows.
 //
@@ -130,18 +130,6 @@ class LibraryBackupService {
         nextStateTs > 0 ? nextStateTs : null,
         dbTrack.id,
       )
-
-      if (jt.lyrics?.lrc) {
-        const existing = this.repos.lyrics.get(dbTrack.id)
-        if (!existing) {
-          this.repos.lyrics.set(
-            dbTrack.id,
-            jt.lyrics.lrc,
-            jt.lyrics.source ?? null,
-            jt.lyrics.language ?? null,
-          )
-        }
-      }
     }
   }
 
@@ -287,33 +275,13 @@ class LibraryBackupService {
       )
       .all(folderId)
 
-    const lyricsByTrack = new Map<
-      number,
-      { lrc: string; language: string | null; source: string | null }
-    >()
-    const lyricsRows = this.db
-      .prepare<
-        [number],
-        { track_id: number; lrc_content: string; language: string | null; source: string | null }
-      >(
-        `SELECT l.track_id, l.lrc_content, l.language, l.source
-         FROM lyrics l JOIN tracks t ON t.id = l.track_id
-         WHERE t.folder_id = ?`,
-      )
-      .all(folderId)
-    for (const lr of lyricsRows) {
-      lyricsByTrack.set(lr.track_id, { lrc: lr.lrc_content, language: lr.language, source: lr.source })
-    }
-
     const tracks: Record<string, BackupTrack> = {}
     for (const row of trackRows) {
-      const lyrics = lyricsByTrack.get(row.id) ?? null
       const isDefault =
         (row.play_count ?? 0) === 0 &&
         !row.last_played_date &&
         (row.is_favorite ?? 0) === 0 &&
-        row.rating == null &&
-        !lyrics
+        row.rating == null
       if (isDefault) continue
       const rel = toPosixRelative(folderPath, row.path)
       const entry: BackupTrack = {}
@@ -321,7 +289,6 @@ class LibraryBackupService {
       if (row.last_played_date) entry.lastPlayedAt = row.last_played_date
       if (row.is_favorite) entry.favorite = true
       if (row.rating != null) entry.rating = row.rating
-      if (lyrics) entry.lyrics = lyrics
       if (row.state_updated_at) entry.stateUpdatedAt = new Date(row.state_updated_at).toISOString()
       tracks[rel] = entry
     }

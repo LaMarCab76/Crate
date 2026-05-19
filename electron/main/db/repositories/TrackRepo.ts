@@ -25,6 +25,8 @@ export class TrackRepo {
   private stmtById: Statement
   private stmtByPath: Statement
   private stmtDeleteByPath: Statement
+  private stmtDeleteById: Statement
+  private stmtCountByFolder: Statement
   private stmtUpdatePlays: Statement
   private stmtSetFavorite: Statement
   private stmtByFolderWithAlbum: Statement
@@ -37,6 +39,8 @@ export class TrackRepo {
     this.stmtById = db.prepare<[number], DbTrack>(`SELECT ${ALL_COLUMNS} FROM tracks WHERE id = ?`)
     this.stmtByPath = db.prepare<[string], DbTrack>(`SELECT ${ALL_COLUMNS} FROM tracks WHERE path = ?`)
     this.stmtDeleteByPath = db.prepare(`DELETE FROM tracks WHERE path = ?`)
+    this.stmtDeleteById = db.prepare(`DELETE FROM tracks WHERE id = ?`)
+    this.stmtCountByFolder = db.prepare<[number], { c: number }>(`SELECT COUNT(*) as c FROM tracks WHERE folder_id = ?`)
     this.stmtUpdatePlays = db.prepare(`
       UPDATE tracks
       SET play_count = play_count + 1, last_played_date = ?, state_updated_at = ?
@@ -119,6 +123,14 @@ export class TrackRepo {
 
   deleteByPath(path: string): void {
     this.stmtDeleteByPath.run(path)
+  }
+
+  deleteById(id: number): void {
+    this.stmtDeleteById.run(id)
+  }
+
+  countByFolder(folderId: number): number {
+    return (this.stmtCountByFolder.get(folderId) as { c: number } | undefined)?.c ?? 0
   }
 
   updatePlays(id: number): void {
@@ -235,4 +247,3 @@ export class TrackRepo {
     return (this.db.prepare(`SELECT COUNT(*) as c FROM tracks`).get() as { c: number }).c
   }
 }
-

@@ -7,6 +7,7 @@ import { registerAudioChannel } from './ipc/audio-channel'
 import { registerProtocolHandlers, registerProtocolSchemes } from './protocol'
 import { getFolderWatcher } from './library/FolderWatcher'
 import { getAudioEngine } from './audio/AudioEngine'
+import { getExclusiveModeManager } from './audio/ExclusiveModeManager'
 import { getLibraryBackup } from './services/LibraryBackup'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
@@ -98,6 +99,10 @@ app.on('will-quit', () => {
   // otherwise the JSON would miss the last few mutations of the session.
   try { getLibraryBackup().flushAll() } catch (err) { console.error('[backup] flush failed:', err) }
   getFolderWatcher().stopAll()
+  // Release CoreAudio hog BEFORE freeing BASS — if we leave the device
+  // hog-locked the OS keeps it claimed for this process and no other app
+  // can play sound until reboot.
+  try { getExclusiveModeManager().dispose() } catch { /* manager may not have initialized */ }
   try { getAudioEngine().dispose() } catch { /* engine may not have initialized */ }
   closeDatabase()
 })

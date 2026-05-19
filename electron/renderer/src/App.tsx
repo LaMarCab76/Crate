@@ -4,7 +4,6 @@ import { Sidebar } from './components/Sidebar'
 import { Toolbar } from './components/Toolbar'
 import { PlayerPane } from './components/PlayerPane'
 import { NowPlayingFull } from './components/NowPlayingFull'
-import { MiniPlayer } from './components/MiniPlayer'
 import { LibraryView } from './views/LibraryView'
 import { AlbumsView } from './views/AlbumsView'
 import { AlbumView } from './views/AlbumView'
@@ -16,8 +15,9 @@ import { SettingsView } from './views/SettingsView'
 import { ImportView } from './views/ImportView'
 import { GenresView } from './views/GenresView'
 import { useTweaks } from './stores/settingsStore'
-import { useFavoriteTracks, useLibraryStore } from './stores/libraryStore'
+import { useAlbumByUiId, useFavoriteTracks, useLibraryStore } from './stores/libraryStore'
 import { usePlaybackStore } from './stores/playbackStore'
+import { extractDominantColor } from './utils/colorExtract'
 
 export type View =
   | { kind: 'library' }
@@ -38,13 +38,20 @@ export default function App() {
   const [history, setHistory] = useState<View[]>([{ kind: 'library' }])
   const [idx, setIdx] = useState(0)
   const [expanded, setExpanded] = useState(false)
-  const [showLyrics, setShowLyrics] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [playerPaneOpen, setPlayerPaneOpen] = useState(true)
 
   const refresh = useLibraryStore(s => s.refresh)
   const loaded = useLibraryStore(s => s.loaded)
   const nowTrack = usePlaybackStore(s => s.currentTrack)
+  const playbackStatus = usePlaybackStore(s => s.status)
+  const nowAlbum = useAlbumByUiId(nowTrack?.albumId)
   const favoriteTracks = useFavoriteTracks()
+  const canShowPlayerPane = nowTrack != null && !expanded
+  const [playingTint, setPlayingTint] = useState<string | null>(null)
+  const playingArtworkPath = nowAlbum?.artworkPath ?? nowTrack?.artworkPath ?? null
+  const isPlaying = playbackStatus === 'playing'
 
   const view = history[idx]
 
@@ -78,6 +85,30 @@ export default function App() {
       .join(' ')
     document.body.className = cls
   }, [tweak])
+
+  // Extract dominant color from the currently playing album's artwork (with
+  // track artwork as fallback). It becomes the global --bg-tint so the whole
+  // chrome follows the music.
+  useEffect(() => {
+    if (!playingArtworkPath) { setPlayingTint(null); return }
+    let cancelled = false
+    const src = `hifi://artwork/${encodeURIComponent(playingArtworkPath)}`
+    void extractDominantColor(src).then(hex => {
+      if (!cancelled) setPlayingTint(hex)
+    })
+    return () => { cancelled = true }
+  }, [playingArtworkPath])
+
+  // Global background tint follows the currently playing album. Clears when
+  // playback isn't actively running so the base dark background shows.
+  useEffect(() => {
+    const root = document.documentElement
+    if (isPlaying && playingTint) {
+      root.style.setProperty('--bg-tint', playingTint)
+    } else {
+      root.style.removeProperty('--bg-tint')
+    }
+  }, [playingTint, isPlaying])
 
   const sidebarKey = (() => {
     switch (view.kind) {
@@ -152,6 +183,7 @@ export default function App() {
           <Sidebar
             setView={navigate}
             selectedKey={sidebarKey}
+            isOpen={sidebarOpen}
             translucent={tweak.translucent}
             onSelectPlaylist={pl => navigate({ kind: 'playlist', playlist: pl })}
             onSelectArtist={ar => navigate({ kind: 'artist', artist: ar })}
@@ -159,7 +191,7 @@ export default function App() {
             favoriteTracksCount={favoriteTracks.length}
           />
 
-          <div className="main-area">
+          <div className={`main-area ${sidebarOpen ? 'with-sidebar' : 'without-sidebar'}`}>
             <Toolbar
               view={view}
               history={history}
@@ -169,27 +201,27 @@ export default function App() {
               onNavigate={navigate}
               searchQuery={searchQuery}
               onSearchQueryChange={setSearchQuery}
+              sidebarOpen={sidebarOpen}
+              onToggleSidebar={() => setSidebarOpen(open => !open)}
+              playerPaneOpen={playerPaneOpen && canShowPlayerPane}
+              canTogglePlayerPane={canShowPlayerPane}
+              onTogglePlayerPane={() => setPlayerPaneOpen(open => !open)}
             />
             <div className="content">{renderContent()}</div>
           </div>
 
         <PlayerPane
           expanded={expanded}
+          isOpen={playerPaneOpen}
           onExpand={() => setExpanded(true)}
-          onMini={() => setTweak('showMini', true)}
+          onCollapse={() => setPlayerPaneOpen(false)}
+          onOpenAlbum={album => navigate({ kind: 'album', album })}
+          onOpenArtist={artist => navigate({ kind: 'artist', artist })}
         />
         </div>
 
         {expanded && nowTrack && (
-          <NowPlayingFull
-            showLyrics={showLyrics}
-            setShowLyrics={setShowLyrics}
-            onCollapse={() => setExpanded(false)}
-          />
-        )}
-
-        {tweak.showMini && nowTrack && (
-          <MiniPlayer onClose={() => setTweak('showMini', false)} />
+          <NowPlayingFull onCollapse={() => setExpanded(false)} />
         )}
       </div>
     </div>

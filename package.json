@@ -38,6 +38,7 @@
     "chokidar": "^5.0.0",
     "koffi": "^3.0.0",
     "music-metadata": "^11.12.3",
+    "node-taglib-sharp": "^6.0.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zustand": "^5.0.13"

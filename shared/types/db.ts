@@ -147,16 +147,6 @@ export interface DbQueueEntry {
   position: number
 }
 
-export interface DbLyrics {
-  id: number
-  track_id: number
-  lrc_content: string
-  language: string | null
-  source: string | null
-  date_added: string
-  date_modified: string
-}
-
 // Input shapes for insert operations (omit auto-generated columns).
 export type DbTrackInsert = Omit<DbTrack, 'id'>
 export type DbFolderInsert = Omit<DbFolder, 'id' | 'track_count'> & { track_count?: number }

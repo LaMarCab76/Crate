@@ -1,11 +1,11 @@
-import { dialog, ipcMain } from 'electron'
-import { basename } from 'node:path'
-import { getRepos } from '../db/repositories'
+import { dialog, ipcMain, shell } from 'electron'
+import { basename, resolve } from 'node:path'
+import { getRepos, type Repos } from '../db/repositories'
 import { getImportService } from '../library/ImportService'
 import { getFolderWatcher } from '../library/FolderWatcher'
 import { parseArtistName } from '../library/ArtistNameParser'
 import { readTrackMetadata } from '../library/MetadataExtractor'
-import { fetchLyrics } from '../services/lyrics'
+import { writeTrackMetadata } from '../library/MetadataWriter'
 import { getLibraryBackup } from '../services/LibraryBackup'
 import { broadcast } from './events'
 import type { DbTrack } from '@shared/types/db'
@@ -14,6 +14,8 @@ import type {
   ListTracksOpts,
   PickFolderResult,
   SearchResultsPayload,
+  TrackMetadataUpdatePayload,
+  TrashTracksResult,
 } from '@shared/types/ipc-contract'
 
 function normText(value: string | null | undefined): string {
@@ -63,6 +65,60 @@ function resolveAlbumFromFolderHints(track: DbTrack, candidates: DbTrack[]): num
 
   if (topId == null) return null
   return topCount > secondCount ? topId : null
+}
+
+async function refreshTrackMetadataInDb(repos: Repos, trackId: number): Promise<DbTrack | null> {
+  const track = repos.tracks.getById(trackId)
+  if (!track) return null
+
+  const md = await readTrackMetadata(track.path)
+  const parsedArtist = parseArtistName(md.artist)
+  const artist = repos.artists.getOrCreate(parsedArtist.primary || md.artist)
+  const genre = md.genre ? repos.genres.getOrCreate(md.genre) : null
+
+  const candidateRefs = repos.tracks.getByFolderWithAlbum(track.folder_id)
+  const metadataHint = {
+    ...track,
+    album: md.album,
+    artist: md.artist,
+    album_artist: md.albumArtist,
+  }
+  const candidateAlbum = resolveAlbumFromFolderHints(metadataHint, candidateRefs)
+  const resolvedAlbum = repos.albums.getOrCreate(md.album, md.albumArtist ?? null, md.year || null)
+  const targetAlbumId = candidateAlbum ?? resolvedAlbum.id
+
+  repos.tracks.updateMetadata({
+    id: track.id,
+    title: md.title,
+    artist: md.artist,
+    album: md.album,
+    albumArtist: md.albumArtist,
+    composer: md.composer,
+    genre: md.genre,
+    year: md.year,
+    trackNumber: md.trackNumber,
+    totalTracks: md.totalTracks,
+    discNumber: md.discNumber,
+    totalDiscs: md.totalDiscs,
+    compilation: md.isCompilation ? 1 : 0,
+    duration: md.duration,
+    format: md.format,
+    codec: md.codec,
+    bitrate: md.bitrate,
+    sampleRate: md.sampleRate,
+    channels: md.channels,
+    bitDepth: md.bitDepth,
+    fileSize: md.fileSize,
+    dateModified: md.dateModified,
+    artworkPath: md.artwork?.filename ?? track.artwork_path,
+    filename: basename(track.path),
+    artistId: artist.id,
+    albumId: targetAlbumId,
+    genreId: genre?.id ?? null,
+  })
+
+  getLibraryBackup().scheduleWriteForTrack(track.id)
+  return repos.tracks.getById(track.id) ?? track
 }
 
 export function registerLibraryChannel(): void {
@@ -138,44 +194,6 @@ export function registerLibraryChannel(): void {
   })
   ipcMain.handle('queue:load', () => repos.queue.load())
 
-  // Lyrics
-  ipcMain.handle('lyrics:get', (_, trackId: number) => repos.lyrics.get(trackId) ?? null)
-  ipcMain.handle('lyrics:set', (_, payload: { trackId: number; lrcContent: string; source: string | null; language: string | null }) =>
-    repos.lyrics.set(payload.trackId, payload.lrcContent, payload.source ?? null, payload.language ?? null),
-  )
-  // High-level fetch: serve from cache, otherwise hit LRCLIB and cache.
-  ipcMain.handle('lyrics:getForTrack', async (_, trackId: number) => {
-    const cached = repos.lyrics.get(trackId)
-    if (cached) {
-      return {
-        trackId,
-        lrcContent: cached.lrc_content,
-        source: cached.source,
-        language: cached.language,
-        synced: cached.lrc_content.includes('['),
-      }
-    }
-    const track = repos.tracks.getById(trackId)
-    if (!track) return null
-    const result = await fetchLyrics({
-      title: track.title,
-      artist: track.artist,
-      album: track.album,
-      durationSec: track.duration,
-    })
-    if (!result) return null
-    const content = result.synced ?? result.plain
-    if (!content) return null
-    repos.lyrics.set(trackId, content, result.source, result.language)
-    return {
-      trackId,
-      lrcContent: content,
-      source: result.source,
-      language: result.language,
-      synced: result.synced != null,
-    }
-  })
-
   // Track plays. Threshold (30s) is decided by the renderer — main just
   // increments and notifies subscribers so the UI refreshes.
   ipcMain.handle('track:countPlay', (_, trackId: number) => {
@@ -190,52 +208,63 @@ export function registerLibraryChannel(): void {
     broadcast('library:changed', { reason: 'track-favorite' })
   })
 
-  ipcMain.handle('track:refreshMetadata', async (_, trackId: number) => {
-    const track = repos.tracks.getById(trackId)
+  ipcMain.handle('track:updateMetadata', async (_, payload: { trackId: number; metadata: TrackMetadataUpdatePayload }) => {
+    const track = repos.tracks.getById(payload.trackId)
     if (!track) return
 
-    const md = await readTrackMetadata(track.path)
-    const parsedArtist = parseArtistName(md.artist)
-    const artist = repos.artists.getOrCreate(parsedArtist.primary || md.artist)
-    const genre = md.genre ? repos.genres.getOrCreate(md.genre) : null
+    writeTrackMetadata(track.path, payload.metadata)
+    await refreshTrackMetadataInDb(repos, track.id)
+    broadcast('library:changed', { reason: 'track-metadata-update' })
+  })
 
-    const candidateRefs = repos.tracks.getByFolderWithAlbum(track.folder_id)
-    const candidateAlbum = resolveAlbumFromFolderHints(track, candidateRefs)
-    const resolvedAlbum = repos.albums.getOrCreate(md.album, md.albumArtist ?? null, md.year || null)
-    const targetAlbumId = candidateAlbum ?? resolvedAlbum.id
-
-    repos.tracks.updateMetadata({
-      id: track.id,
-      title: md.title,
-      artist: md.artist,
-      album: md.album,
-      albumArtist: md.albumArtist,
-      composer: md.composer,
-      genre: md.genre,
-      year: md.year,
-      trackNumber: md.trackNumber,
-      totalTracks: md.totalTracks,
-      discNumber: md.discNumber,
-      totalDiscs: md.totalDiscs,
-      compilation: md.isCompilation ? 1 : 0,
-      duration: md.duration,
-      format: md.format,
-      codec: md.codec,
-      bitrate: md.bitrate,
-      sampleRate: md.sampleRate,
-      channels: md.channels,
-      bitDepth: md.bitDepth,
-      fileSize: md.fileSize,
-      dateModified: md.dateModified,
-      artworkPath: md.artwork?.filename ?? track.artwork_path,
-      filename: basename(track.path),
-      artistId: artist.id,
-      albumId: targetAlbumId,
-      genreId: genre?.id ?? null,
-    })
-
-    getLibraryBackup().scheduleWriteForTrack(track.id)
+  ipcMain.handle('track:refreshMetadata', async (_, trackId: number) => {
+    await refreshTrackMetadataInDb(repos, trackId)
     broadcast('library:changed', { reason: 'track-refresh' })
+  })
+
+  ipcMain.handle('track:trash', async (_, trackIds: number[]): Promise<TrashTracksResult> => {
+    const uniqueIds = [...new Set(trackIds.filter(id => Number.isInteger(id) && id > 0))]
+    const trashedTrackIds: number[] = []
+    const failed: TrashTracksResult['failed'] = []
+    const affectedFolderIds = new Set<number>()
+
+    for (const trackId of uniqueIds) {
+      const track = repos.tracks.getById(trackId)
+      if (!track) {
+        failed.push({
+          id: trackId,
+          title: `Track ${trackId}`,
+          path: '',
+          error: 'Track no longer exists in the library.',
+        })
+        continue
+      }
+
+      try {
+        await shell.trashItem(resolve(track.path))
+        repos.tracks.deleteById(track.id)
+        trashedTrackIds.push(track.id)
+        affectedFolderIds.add(track.folder_id)
+      } catch (err) {
+        failed.push({
+          id: track.id,
+          title: track.title,
+          path: track.path,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+
+    for (const folderId of affectedFolderIds) {
+      repos.folders.updateTrackCount(folderId, repos.tracks.countByFolder(folderId))
+      getLibraryBackup().scheduleWriteForFolder(folderId)
+    }
+
+    if (trashedTrackIds.length > 0) {
+      broadcast('library:changed', { reason: 'track-trash' })
+    }
+
+    return { trashedTrackIds, failed }
   })
 
   ipcMain.handle('artist:setFavorite', (_, payload: { id: number; favorite: boolean }) => {

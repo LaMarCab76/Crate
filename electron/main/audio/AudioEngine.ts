@@ -73,6 +73,14 @@ export class AudioEngine {
   private fftBuffer: Float32Array = new Float32Array(FFT_BINS_RAW)
   private fftOut: number[] = new Array(FFT_BINS_OUT).fill(0)
   private getInfo: ReturnType<typeof makeChannelGetInfo> | null = null
+  // Optional listener invoked after setOutputDevice succeeds. Used by
+  // ExclusiveModeManager to transfer hog ownership across device switches
+  // without coupling the manager into the engine directly.
+  private onDeviceChanged: ((bassDeviceId: number) => void) | null = null
+
+  setOnDeviceChanged(cb: ((bassDeviceId: number) => void) | null): void {
+    this.onDeviceChanged = cb
+  }
 
   ensureInit(): void {
     if (this.initialized) return
@@ -278,7 +286,47 @@ export class AudioEngine {
       }
     }
 
-    return this.getOutputDevice() ?? this.toOutputDevice(deviceId, target, deviceId)
+    const result = this.getOutputDevice() ?? this.toOutputDevice(deviceId, target, deviceId)
+    if (this.onDeviceChanged) this.onDeviceChanged(deviceId)
+    return result
+  }
+
+  // Tear BASS down on the currently active output device so the underlying
+  // OS audio device can be mutated (e.g. taking CoreAudio hog mode). Frees
+  // the current stream and the BASS device but leaves engine state so
+  // reinitDevice() + load() can resume from the same path/position.
+  teardownForReinit(): void {
+    if (!this.initialized) return
+    const bass = loadBass()
+    if (this.currentStream !== 0) {
+      try { bass.ChannelStop(this.currentStream) } catch { /* may already be stopped */ }
+      try { bass.StreamFree(this.currentStream) } catch { /* best-effort */ }
+      this.currentStream = 0
+    }
+    this.currentPath = null
+    this.streamInfo = null
+    this.stopProgressTimer()
+    this.setStatus('stopped')
+    // BASS_Free targets the current device; ensure we're on the right one
+    // before calling. SetDevice can fail if the device wasn't initialized,
+    // which is fine — there's nothing to free in that case.
+    bass.Free()
+  }
+
+  // Re-initialize BASS on the requested device after a teardownForReinit().
+  // The caller is responsible for re-loading whatever stream they had before.
+  reinitDevice(deviceId: number): void {
+    const bass = loadBass()
+    const ok = bass.Init(deviceId, DEFAULT_OUTPUT_FREQ, DEFAULT_OUTPUT_FLAGS, 0n, 0n)
+    if (!ok) {
+      const code = bass.ErrorGetCode()
+      throw new Error(`BASS_Init device ${deviceId} reinit failed: ${bassErrorName(code)} (${code})`)
+    }
+    if (!bass.SetDevice(deviceId)) {
+      const code = bass.ErrorGetCode()
+      throw new Error(`BASS_SetDevice ${deviceId} after reinit failed: ${bassErrorName(code)} (${code})`)
+    }
+    this.initialized = true
   }
 
   moveStreamToOutputDevice(handle: HSTREAM, deviceId: number): boolean {
@@ -321,6 +369,9 @@ export class AudioEngine {
       isDefault: (info.flags & BASS_DEVICE_DEFAULT) !== 0,
       isCurrent: deviceId === currentDevice,
       isInitialized: (info.flags & BASS_DEVICE_INIT) !== 0,
+      // The engine doesn't know about CoreAudio — supportsExclusive is filled
+      // in at the IPC boundary by ExclusiveModeManager.isSupportedDevice().
+      supportsExclusive: false,
     }
   }
 

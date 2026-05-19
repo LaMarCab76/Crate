@@ -1,7 +1,7 @@
-import { Icon } from '@renderer/components/Icon'
-import type { Tweak } from '@renderer/stores/settingsStore'
+import type { PlayerTintSource, Tweak } from '@renderer/stores/settingsStore'
 import { useEqStore } from '@renderer/stores/eqStore'
 import { EQ_BAND_LABELS, EQ_GAIN_MAX, EQ_GAIN_MIN, EQ_GAIN_STEP } from '@shared/constants/equalizer'
+import { COLOR_PRESETS } from '@renderer/utils/colorPresets'
 
 interface Props {
   tweak: Tweak
@@ -72,6 +72,67 @@ export function SettingsView({ tweak, setTweak }: Props) {
               tabIndex={0}
             />
           </div>
+
+        </div>
+      </div>
+
+      <div className="set-section">
+        <h2>Now Playing</h2>
+        <div className="set-card">
+          <div className="set-row">
+            <div>
+              <div className="lbl">Player tint</div>
+              <div className="sub">Color del panel de reproducción. "Artwork" usa el color dominante del track actual.</div>
+            </div>
+            <div className="rule-row" style={{ margin: 0 }}>
+              {(['default', 'preset', 'custom', 'artwork'] as const).map(s => (
+                <div
+                  key={s}
+                  className="select"
+                  style={{ background: tweak.playerTintSource === s ? 'var(--bg-selected)' : 'var(--bg-elev)' }}
+                  onClick={() => setTweak('playerTintSource', s as PlayerTintSource)}
+                  role="button" tabIndex={0}
+                >
+                  {s === 'default' ? 'Default' : s === 'preset' ? 'Preset' : s === 'custom' ? 'Custom' : 'Artwork'}
+                </div>
+              ))}
+            </div>
+          </div>
+          {tweak.playerTintSource === 'preset' && (
+            <div className="set-color-extra">
+              <div className="swatch-row">
+                {COLOR_PRESETS.map(p => (
+                  <div
+                    key={p.id}
+                    className={`swatch ${tweak.playerTintColor.toLowerCase() === p.hex.toLowerCase() ? 'selected' : ''}`}
+                    style={{ background: p.hex }}
+                    title={p.label}
+                    onClick={() => setTweak('playerTintColor', p.hex)}
+                    role="button" tabIndex={0}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+          {tweak.playerTintSource === 'custom' && (
+            <div className="set-color-extra">
+              <input
+                type="color"
+                className="color-input"
+                value={tweak.playerTintColor}
+                onChange={e => setTweak('playerTintColor', e.target.value)}
+                aria-label="Custom player tint color"
+              />
+              <span className="set-color-note">{tweak.playerTintColor}</span>
+            </div>
+          )}
+          {tweak.playerTintSource === 'artwork' && (
+            <div className="set-color-extra">
+              <span className="set-color-note">
+                El panel de reproducción adopta el color dominante del track que se está reproduciendo.
+              </span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -126,7 +187,7 @@ export function SettingsView({ tweak, setTweak }: Props) {
             <div>
               <div className="lbl">Keep portable backup in folder</div>
               <div className="sub">
-                Saves your plays, favorites, ratings, lyrics and EQ settings into a hidden{' '}
+                Saves your plays, favorites, ratings and EQ settings into a hidden{' '}
                 <code style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>.hifidelity-library.json</code>
                 {' '}at the root of each library folder. When you reconnect the folder elsewhere those
                 are merged back automatically.
@@ -146,46 +207,6 @@ export function SettingsView({ tweak, setTweak }: Props) {
       <div className="set-section">
         <h2>Equalizer</h2>
         <EqPanel />
-      </div>
-
-      <div className="set-section">
-        <h2>Output</h2>
-        <div style={{ padding: '0 4px 12px', color: 'var(--text-tertiary)', fontSize: 12 }}>
-          DAC selection + hog mode arrive in a later session. For now BASS uses the system default output.
-        </div>
-        <div className="set-card">
-          <div className="dev-list">
-            <div className="dev-row active">
-              <Icon name="computer" />
-              <div>
-                <div className="name">MacBook Pro Speakers</div>
-                <div className="sub">Built-in · 48 kHz / 24-bit</div>
-              </div>
-              <Icon name="check" />
-            </div>
-            <div className="dev-row">
-              <Icon name="headphones" />
-              <div>
-                <div className="name">Hanón Studio M1</div>
-                <div className="sub">Wired · USB-C</div>
-              </div>
-            </div>
-            <div className="dev-row">
-              <Icon name="airplay" />
-              <div>
-                <div className="name">Living Room</div>
-                <div className="sub">AirPlay 2 · HomePod mini</div>
-              </div>
-            </div>
-            <div className="dev-row">
-              <Icon name="bluetooth" />
-              <div>
-                <div className="name">Carlos's Earbuds</div>
-                <div className="sub">Bluetooth · AAC</div>
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   )
@@ -220,62 +241,64 @@ function EqPanel() {
       </div>
 
       <div className="eq-graph" style={{ opacity: enabled ? 1 : 0.45 }}>
-        {EQ_BAND_LABELS.map((label, i) => {
-          // Map the gain range to 0..1 for the hidden design parity fill.
-          const gain = bands[i] ?? 0
-          const normalized = (gain - EQ_GAIN_MIN) / (EQ_GAIN_MAX - EQ_GAIN_MIN)
-          return (
-            <div key={label} className="eq-band">
-              <input
-                type="range"
-                min={EQ_GAIN_MIN}
-                max={EQ_GAIN_MAX}
-                step={EQ_GAIN_STEP}
-                value={gain}
-                disabled={!enabled}
-                onChange={e => { void setBand(i, parseFloat(e.target.value)) }}
-                title={`${label} Hz: ${gain.toFixed(1)} dB`}
-                style={{
-                  flex: 1,
-                  width: 16,
-                  writingMode: 'vertical-lr',
-                  direction: 'rtl',
-                  // Vertical orientation via CSS appearance hint (browser-specific).
-                  ['appearance' as never]: 'slider-vertical',
-                  ['WebkitAppearance' as never]: 'slider-vertical',
-                }}
-              />
-              <div className="hz">{label}</div>
-              <div className="gain">
-                {gain > 0 ? `+${gain.toFixed(0)}` : gain.toFixed(0)}
+        <div className="eq-bands">
+          {EQ_BAND_LABELS.map((label, i) => {
+            // Map the gain range to 0..1 for the hidden design parity fill.
+            const gain = bands[i] ?? 0
+            const normalized = (gain - EQ_GAIN_MIN) / (EQ_GAIN_MAX - EQ_GAIN_MIN)
+            return (
+              <div key={label} className="eq-band">
+                <input
+                  type="range"
+                  min={EQ_GAIN_MIN}
+                  max={EQ_GAIN_MAX}
+                  step={EQ_GAIN_STEP}
+                  value={gain}
+                  disabled={!enabled}
+                  onChange={e => { void setBand(i, parseFloat(e.target.value)) }}
+                  title={`${label} Hz: ${gain.toFixed(1)} dB`}
+                  style={{
+                    flex: 1,
+                    width: 16,
+                    writingMode: 'vertical-lr',
+                    direction: 'rtl',
+                    // Vertical orientation via CSS appearance hint (browser-specific).
+                    ['appearance' as never]: 'slider-vertical',
+                    ['WebkitAppearance' as never]: 'slider-vertical',
+                  }}
+                />
+                <div className="hz">{label}</div>
+                <div className="gain">
+                  {gain > 0 ? `+${gain.toFixed(0)}` : gain.toFixed(0)}
+                </div>
+                {/* Visual track behind the slider for parity with the design */}
+                <div style={{ position: 'absolute', pointerEvents: 'none', opacity: 0 }}>
+                  <div className="col"><div className="fill" style={{ bottom: 0, height: `${normalized * 100}%` }} /></div>
+                </div>
               </div>
-              {/* Visual track behind the slider for parity with the design */}
-              <div style={{ position: 'absolute', pointerEvents: 'none', opacity: 0 }}>
-                <div className="col"><div className="fill" style={{ bottom: 0, height: `${normalized * 100}%` }} /></div>
-              </div>
-            </div>
-          )
-        })}
-      </div>
-      <div className="eq-preset-row">
-        <label className="eq-preset-control">
-          <span>Preset</span>
-          <span className="eq-preset-select-wrap">
-            <select
-              value={selectedPreset}
-              onChange={e => { void setPreset(e.target.value) }}
-              aria-label="Equalizer preset"
-            >
-              <option value="Custom" disabled>Custom</option>
-              {presetNames.map(p => (
-                <option key={p} value={p}>{p}</option>
-              ))}
-            </select>
-          </span>
-        </label>
-        {preset === 'Custom' && (
-          <span className="eq-custom-note">Custom curve</span>
-        )}
+            )
+          })}
+        </div>
+        <div className="eq-preset-row">
+          <label className="eq-preset-control">
+            <span>Preset</span>
+            <span className="eq-preset-select-wrap">
+              <select
+                value={selectedPreset}
+                onChange={e => { void setPreset(e.target.value) }}
+                aria-label="Equalizer preset"
+              >
+                <option value="Custom" disabled>Custom</option>
+                {presetNames.map(p => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+            </span>
+          </label>
+          {preset === 'Custom' && (
+            <span className="eq-custom-note">Custom curve</span>
+          )}
+        </div>
       </div>
     </>
   )

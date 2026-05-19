@@ -6,7 +6,11 @@ import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import type { Album, Artist, Pattern, Playlist, Track } from '@shared/types/library'
 import type { DbFolder, DbTrack } from '@shared/types/db'
-import type { ImportProgressEvent } from '@shared/types/ipc-contract'
+import type {
+  ImportProgressEvent,
+  TrackMetadataUpdatePayload,
+  TrashTracksResult,
+} from '@shared/types/ipc-contract'
 import {
   dbToUiAlbum,
   dbToUiArtist,
@@ -210,6 +214,10 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         })
 
       const orderedTracks = albumOrderForSongs.flatMap(item => item.tracksInAlbum)
+      const tracksByDbId = new Map<number, Track>()
+      for (const track of tracks) {
+        if (track.dbId != null) tracksByDbId.set(track.dbId, track)
+      }
 
       const albums = [
         ...dbAlbums.map(a => albumsById.get(`a${a.id}`) ?? dbToUiAlbum(a, tracksByAlbumId.get(`a${a.id}`) ?? [])),
@@ -222,7 +230,13 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         return dbToUiArtist(ar, artistAlbums)
       })
 
-      const playlists = dbPlaylists.map(p => dbToUiPlaylist(p, []))
+      const playlistTrackRows = await Promise.all(
+        dbPlaylists.map(p => api.playlistTracks(p.id).catch(() => [] as DbTrack[])),
+      )
+      const playlists = dbPlaylists.map((p, i) => {
+        const playlistTracks = playlistTrackRows[i].map(row => tracksByDbId.get(row.id) ?? dbToUiTrack(row))
+        return dbToUiPlaylist(p, playlistTracks)
+      })
 
       set({
         tracks: orderedTracks,
@@ -298,6 +312,108 @@ export async function toggleTrackFavorite(trackDbId: number, favorite: boolean):
 
 export async function refreshTrackMetadata(trackDbId: number): Promise<void> {
   await window.api.tracks.refreshMetadata(trackDbId)
+}
+
+function uniqueTrackDbIds(trackDbIds: number[]): number[] {
+  return [...new Set(trackDbIds.filter(id => Number.isInteger(id) && id > 0))]
+}
+
+async function stopPlaybackIfCurrentTrack(trackDbIds: number[]): Promise<void> {
+  const ids = new Set(trackDbIds)
+  const currentTrack = usePlaybackStore.getState().currentTrack
+  if (currentTrack?.dbId == null || !ids.has(currentTrack.dbId)) return
+
+  await window.api.audio.stop()
+  await window.api.audio.clearNext()
+  usePlaybackStore.setState({
+    status: 'stopped',
+    currentTrack: null,
+    streamInfo: null,
+    positionSec: 0,
+    durationSec: 0,
+  })
+}
+
+function pruneDeletedTracksFromQueue(trackDbIds: number[]): void {
+  const ids = new Set(trackDbIds)
+  if (ids.size === 0) return
+
+  useQueueStore.setState(state => {
+    const current = state.currentIndex >= 0 ? state.tracks[state.currentIndex] : undefined
+    const tracks = state.tracks.filter(t => t.dbId == null || !ids.has(t.dbId))
+    const currentIndex = current?.dbId != null && ids.has(current.dbId)
+      ? -1
+      : current
+        ? tracks.findIndex(t => t.id === current.id)
+        : state.currentIndex
+
+    return {
+      tracks,
+      currentIndex: Math.max(-1, currentIndex),
+      history: state.history.filter(t => t.dbId == null || !ids.has(t.dbId)),
+    }
+  })
+
+  const currentTrack = usePlaybackStore.getState().currentTrack
+  if (currentTrack?.dbId != null && ids.has(currentTrack.dbId)) {
+    usePlaybackStore.setState({
+      currentTrack: null,
+      streamInfo: null,
+      positionSec: 0,
+      durationSec: 0,
+      status: 'stopped',
+    })
+  }
+}
+
+export async function addTracksToPlaylist(playlistDbId: number, trackDbIds: number[]): Promise<void> {
+  const ids = uniqueTrackDbIds(trackDbIds)
+  if (ids.length === 0) return
+  await window.api.library.addToPlaylist(playlistDbId, ids)
+  await useLibraryStore.getState().refresh()
+}
+
+export async function createPlaylistWithTracks(name: string, trackDbIds: number[]): Promise<void> {
+  const cleanName = name.trim()
+  if (!cleanName) throw new Error('Playlist name is required.')
+
+  const playlist = await window.api.library.createPlaylist(cleanName)
+  const ids = uniqueTrackDbIds(trackDbIds)
+  if (ids.length > 0) {
+    await window.api.library.addToPlaylist(playlist.id, ids)
+  }
+  await useLibraryStore.getState().refresh()
+}
+
+export async function updateTrackMetadata(
+  trackDbId: number,
+  payload: TrackMetadataUpdatePayload,
+): Promise<void> {
+  await updateTracksMetadata([trackDbId], payload)
+}
+
+export async function updateTracksMetadata(
+  trackDbIds: number[],
+  payload: TrackMetadataUpdatePayload,
+): Promise<void> {
+  const ids = uniqueTrackDbIds(trackDbIds)
+  if (ids.length === 0) return
+  await stopPlaybackIfCurrentTrack(ids)
+  for (const trackDbId of ids) {
+    await window.api.tracks.updateMetadata(trackDbId, payload)
+  }
+  await useLibraryStore.getState().refresh()
+}
+
+export async function trashTracks(trackDbIds: number[]): Promise<TrashTracksResult> {
+  const ids = uniqueTrackDbIds(trackDbIds)
+  if (ids.length === 0) return { trashedTrackIds: [], failed: [] }
+
+  await stopPlaybackIfCurrentTrack(ids)
+  const result = await window.api.tracks.trash(ids)
+  pruneDeletedTracksFromQueue(result.trashedTrackIds)
+  await useLibraryStore.getState().refresh()
+  return result
 }
 
 // Subscribe once, on module load, to main-process push events so the store

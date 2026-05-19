@@ -11,6 +11,11 @@ interface ToolbarProps {
   onNavigate: (v: View) => void
   searchQuery: string
   onSearchQueryChange: (query: string) => void
+  sidebarOpen: boolean
+  onToggleSidebar: () => void
+  playerPaneOpen: boolean
+  canTogglePlayerPane: boolean
+  onTogglePlayerPane: () => void
 }
 
 const titleMap: Record<View['kind'], string> = {
@@ -44,6 +49,11 @@ export function Toolbar({
   onNavigate,
   searchQuery,
   onSearchQueryChange,
+  sidebarOpen,
+  onToggleSidebar,
+  playerPaneOpen,
+  canTogglePlayerPane,
+  onTogglePlayerPane,
 }: ToolbarProps) {
   const isSearchView = view.kind === 'search'
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -66,6 +76,15 @@ export function Toolbar({
 
   return (
     <div className="toolbar">
+      <button
+        className={`tb-icon-btn tb-layout-toggle ${sidebarOpen ? 'active' : ''}`}
+        onClick={onToggleSidebar}
+        title={sidebarOpen ? 'Hide Sidebar' : 'Show Sidebar'}
+        aria-label={sidebarOpen ? 'Hide Sidebar' : 'Show Sidebar'}
+        aria-pressed={sidebarOpen}
+      >
+        <Icon name="sidebarLeft" size={15} />
+      </button>
       <button className="tb-nav-btn" disabled={idx <= 0} onClick={onBack} title="Back">
         <Icon name="back" size={15} />
       </button>
@@ -102,6 +121,16 @@ export function Toolbar({
         )}
       </div>
 
+      <button
+        className={`tb-icon-btn tb-layout-toggle ${playerPaneOpen ? 'active' : ''}`}
+        onClick={onTogglePlayerPane}
+        disabled={!canTogglePlayerPane}
+        title={playerPaneOpen ? 'Hide Player Panel' : 'Show Player Panel'}
+        aria-label={playerPaneOpen ? 'Hide Player Panel' : 'Show Player Panel'}
+        aria-pressed={playerPaneOpen}
+      >
+        <Icon name="sidebarRight" size={15} />
+      </button>
       <button className="tb-icon-btn" onClick={() => onNavigate({ kind: 'import' })} title="Add to Library">
         <Icon name="plus" />
       </button>

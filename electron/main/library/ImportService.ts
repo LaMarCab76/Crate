@@ -171,7 +171,8 @@ export class ImportService {
 
       const flush = () => {
         if (batchInserts.length === 0) return
-        this.repos.tracks.insertBatch(batchInserts.splice(0))
+        const batch = batchInserts.splice(0)
+        this.repos.tracks.insertBatch(batch)
       }
 
       const rows = await processMetadataInChunks(

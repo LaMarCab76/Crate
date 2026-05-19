@@ -4,12 +4,12 @@ import type {
   Api,
   EqState,
   EventOff,
+  ExclusiveModeState,
   FftEvent,
   FftMode,
   ImportCompleteEvent,
   ImportProgressEvent,
   ListTracksOpts,
-  LyricsForTrack,
   PickFolderResult,
   PlaybackStatePayload,
   PlaybackStatus,
@@ -17,13 +17,14 @@ import type {
   QueueSnapshotPayload,
   SearchResultsPayload,
   StreamInfoPayload,
+  TrackMetadataUpdatePayload,
+  TrashTracksResult,
 } from '@shared/types/ipc-contract'
 import type {
   DbAlbum,
   DbArtist,
   DbFolder,
   DbGenre,
-  DbLyrics,
   DbPlaylist,
   DbTrack,
 } from '@shared/types/db'
@@ -87,18 +88,6 @@ const api: Api = {
       ipcRenderer.invoke('queue:save', payload) as Promise<void>,
     load: () => ipcRenderer.invoke('queue:load') as Promise<QueueSnapshotPayload>,
   },
-  lyrics: {
-    get: (trackId: number) => ipcRenderer.invoke('lyrics:get', trackId) as Promise<DbLyrics | null>,
-    set: (trackId: number, lrcContent: string, source?: string | null, language?: string | null) =>
-      ipcRenderer.invoke('lyrics:set', {
-        trackId,
-        lrcContent,
-        source: source ?? null,
-        language: language ?? null,
-      }) as Promise<void>,
-    getForTrack: (trackId: number) =>
-      ipcRenderer.invoke('lyrics:getForTrack', trackId) as Promise<LyricsForTrack | null>,
-  },
   audio: {
     load: (path: string, trackId?: number | null) =>
       ipcRenderer.invoke('audio:load', { path, trackId: trackId ?? null }) as Promise<StreamInfoPayload | null>,
@@ -120,11 +109,16 @@ const api: Api = {
     setOutputDevice: (deviceId: number) =>
       ipcRenderer.invoke('audio:devices:set', { deviceId }),
     getOutputDevice: () => ipcRenderer.invoke('audio:devices:current'),
+    getExclusiveMode: () =>
+      ipcRenderer.invoke('audio:exclusive:get') as Promise<ExclusiveModeState>,
+    setExclusiveMode: (enabled: boolean) =>
+      ipcRenderer.invoke('audio:exclusive:set', { enabled }) as Promise<ExclusiveModeState>,
     onProgress: (h) => subscribe<ProgressEvent>('audio:progress', h),
     onTrackEnded: (h) => subscribe<void>('audio:track-ended', () => h()),
     onGaplessFired: (h) => subscribe<{ path: string }>('audio:gapless-fired', h),
     onStateChanged: (h) => subscribe<{ status: PlaybackStatus }>('audio:state-changed', h),
     onFft: (h) => subscribe<FftEvent>('audio:fft', h),
+    onExclusiveModeChanged: (h) => subscribe<ExclusiveModeState>('audio:exclusive-changed', h),
   },
   eq: {
     getState: () => ipcRenderer.invoke('eq:getState') as Promise<EqState>,
@@ -146,8 +140,12 @@ const api: Api = {
       ipcRenderer.invoke('track:countPlay', trackId) as Promise<void>,
     setFavorite: (id: number, favorite: boolean) =>
       ipcRenderer.invoke('track:setFavorite', { id, favorite }) as Promise<void>,
+    updateMetadata: (trackId: number, payload: TrackMetadataUpdatePayload) =>
+      ipcRenderer.invoke('track:updateMetadata', { trackId, metadata: payload }) as Promise<void>,
     refreshMetadata: (trackId: number) =>
       ipcRenderer.invoke('track:refreshMetadata', trackId) as Promise<void>,
+    trash: (trackIds: number[]) =>
+      ipcRenderer.invoke('track:trash', trackIds) as Promise<TrashTracksResult>,
   },
   artists: {
     setFavorite: (id: number, favorite: boolean) =>

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import type { Album, Artist } from '@shared/types/library'
 import type { SearchResultsPayload } from '@shared/types/ipc-contract'
+import type { DbTrack } from '@shared/types/db'
 import { Artwork } from '@renderer/components/Artwork'
+import { useAlbumActions } from '@renderer/components/MediaActions'
 import { TrackTable } from '@renderer/components/TrackTable'
 import { dbToUiAlbum, dbToUiArtist, dbToUiTrack } from '@renderer/stores/adapters'
 
@@ -13,13 +15,16 @@ interface Props {
 
 export function SearchView({ query, onSelectAlbum, onSelectArtist }: Props) {
   const [results, setResults] = useState<SearchResultsPayload>({ tracks: [], albums: [], artists: [] })
+  const [albumTracks, setAlbumTracks] = useState<Record<number, DbTrack[]>>({})
   const [loading, setLoading] = useState(false)
+  const albumActions = useAlbumActions()
 
   useEffect(() => {
     let canceled = false
     const trimmed = query.trim()
     if (trimmed.length === 0) {
       setResults({ tracks: [], albums: [], artists: [] })
+      setAlbumTracks({})
       setLoading(false)
       return
     }
@@ -27,7 +32,13 @@ export function SearchView({ query, onSelectAlbum, onSelectArtist }: Props) {
     const handle = window.setTimeout(async () => {
       try {
         const res = await window.api.library.search(trimmed, 20)
-        if (!canceled) setResults(res)
+        const albumTrackPairs = await Promise.all(
+          res.albums.map(async album => [album.id, await window.api.library.albumTracks(album.id)] as const),
+        )
+        if (!canceled) {
+          setResults(res)
+          setAlbumTracks(Object.fromEntries(albumTrackPairs))
+        }
       } finally {
         if (!canceled) setLoading(false)
       }
@@ -39,7 +50,7 @@ export function SearchView({ query, onSelectAlbum, onSelectArtist }: Props) {
   }, [query])
 
   const tracks = results.tracks.map(dbToUiTrack)
-  const albums = results.albums.map(a => dbToUiAlbum(a))
+  const albums = results.albums.map(a => dbToUiAlbum(a, (albumTracks[a.id] ?? []).map(dbToUiTrack)))
   const artists = results.artists.map(a => dbToUiArtist(a))
 
   return (
@@ -66,7 +77,14 @@ export function SearchView({ query, onSelectAlbum, onSelectArtist }: Props) {
               <h3>Albums</h3>
               <div className="grid" style={{ padding: 0 }}>
                 {albums.map(al => (
-                  <div key={al.id} className="card" onClick={() => onSelectAlbum?.(al)} role="button" tabIndex={0}>
+                  <div
+                    key={al.id}
+                    className="card"
+                    onClick={() => onSelectAlbum?.(al)}
+                    onContextMenu={e => albumActions.openAlbumMenu(e, al)}
+                    role="button"
+                    tabIndex={0}
+                  >
                     <div className="art"><Artwork album={al} /></div>
                     <div className="ti">{al.title}</div>
                     <div className="su">{al.artist}</div>
@@ -102,6 +120,7 @@ export function SearchView({ query, onSelectAlbum, onSelectArtist }: Props) {
           )}
         </>
       )}
+      {albumActions.elements}
     </div>
   )
 }

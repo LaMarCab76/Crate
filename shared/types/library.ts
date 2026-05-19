@@ -12,6 +12,7 @@ export interface Track {
   id: string
   dbId?: number          // numeric primary key in the SQLite tracks table
   path?: string          // filesystem path for the audio engine to load
+  filename?: string
   t: string              // title
   d: number              // duration seconds
   fmt: AudioFormat
@@ -21,11 +22,23 @@ export interface Track {
   albumTitle: string
   artist: string
   artistId: string
+  albumArtist?: string | null
+  composer?: string
   year: number
   genre: string
   no: number             // track number
+  totalTracks?: number | null
+  discNumber?: number | null
+  totalDiscs?: number | null
   added: string
+  dateModified?: string | null
   loved: boolean
+  fileSize?: number | null
+  codec?: string | null
+  bitrate?: number | null
+  sampleRate?: number | null
+  channels?: number | null
+  bitDepth?: number | null
   artworkPath?: string   // filename under userData/artwork/, served via hifi://
 }
 
@@ -50,6 +63,7 @@ export interface Artist {
   seed: number
   palette: [string, string, string]
   pattern: Pattern
+  artworkPath?: string
   bio?: string
   favorite?: boolean
   trackCount: number

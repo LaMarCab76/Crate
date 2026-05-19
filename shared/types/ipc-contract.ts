@@ -1,7 +1,7 @@
 // IPC contract between main and renderer. Mirrors the handlers registered in
 // electron/main/ipc/library-channel.ts and the bridge in electron/preload/index.ts.
 
-import type { DbAlbum, DbArtist, DbFolder, DbGenre, DbLyrics, DbPlaylist, DbTrack } from './db'
+import type { DbAlbum, DbArtist, DbFolder, DbGenre, DbPlaylist, DbTrack } from './db'
 
 export interface ListTracksOpts {
   limit?: number
@@ -44,6 +44,32 @@ export interface QueueSnapshotPayload {
   currentIndex: number
 }
 
+export interface TrackMetadataUpdatePayload {
+  title?: string
+  artist?: string
+  album?: string
+  albumArtist?: string | null
+  composer?: string
+  genre?: string
+  year?: string
+  trackNumber?: number | null
+  totalTracks?: number | null
+  discNumber?: number | null
+  totalDiscs?: number | null
+}
+
+export interface TrashTrackFailure {
+  id: number
+  title: string
+  path: string
+  error: string
+}
+
+export interface TrashTracksResult {
+  trashedTrackIds: number[]
+  failed: TrashTrackFailure[]
+}
+
 export type EventOff = () => void
 
 export interface LibraryApi {
@@ -79,13 +105,6 @@ export interface LibraryApi {
 export interface QueueApi {
   save(payload: QueueSnapshotPayload): Promise<void>
   load(): Promise<QueueSnapshotPayload>
-}
-
-export interface LyricsApi {
-  get(trackId: number): Promise<DbLyrics | null>
-  set(trackId: number, lrcContent: string, source?: string | null, language?: string | null): Promise<void>
-  // Cached fetch with LRCLIB fallback. Use this from UI; `get` is the raw DB read.
-  getForTrack(trackId: number): Promise<LyricsForTrack | null>
 }
 
 export interface MetaApi {
@@ -125,6 +144,18 @@ export interface AudioOutputDevice {
   isDefault: boolean
   isCurrent: boolean
   isInitialized: boolean
+  // True when the device was successfully mapped to a CoreAudio AudioDeviceID
+  // and can therefore participate in hog-mode (macOS-only). The renderer uses
+  // this to grey out the exclusive-mode toggle for unsupported devices.
+  supportsExclusive: boolean
+}
+
+export interface ExclusiveModeState {
+  enabled: boolean
+  deviceId: number | null
+  // When a toggle attempt fails (hog already held, mapping missing, etc.) the
+  // reason is surfaced here so the UI can show it inline without throwing.
+  reason?: string
 }
 
 export interface EqState {
@@ -135,14 +166,6 @@ export interface EqState {
 
 export interface FftEvent {
   bins: number[]               // ~64 log-spaced amplitude bins, 0..1
-}
-
-export interface LyricsForTrack {
-  trackId: number
-  lrcContent: string           // either raw LRC (with [mm:ss.xx]) or plain text
-  source: string | null
-  language: string | null
-  synced: boolean
 }
 
 export interface ArtistListMode {
@@ -165,12 +188,15 @@ export interface AudioApi {
   listOutputDevices(): Promise<AudioOutputDevice[]>
   setOutputDevice(deviceId: number): Promise<AudioOutputDevice>
   getOutputDevice(): Promise<AudioOutputDevice | null>
+  getExclusiveMode(): Promise<ExclusiveModeState>
+  setExclusiveMode(enabled: boolean): Promise<ExclusiveModeState>
 
   onProgress(h: (e: ProgressEvent) => void): EventOff
   onTrackEnded(h: () => void): EventOff
   onGaplessFired(h: (e: { path: string }) => void): EventOff
   onStateChanged(h: (e: { status: PlaybackStatus }) => void): EventOff
   onFft(h: (e: FftEvent) => void): EventOff
+  onExclusiveModeChanged(h: (e: ExclusiveModeState) => void): EventOff
 }
 
 export interface EqApi {
@@ -187,7 +213,9 @@ export interface EqApi {
 export interface TracksApi {
   countPlay(trackId: number): Promise<void>
   setFavorite(id: number, favorite: boolean): Promise<void>
+  updateMetadata(trackId: number, payload: TrackMetadataUpdatePayload): Promise<void>
   refreshMetadata(trackId: number): Promise<void>
+  trash(trackIds: number[]): Promise<TrashTracksResult>
 }
 
 export interface ArtistsApi {
@@ -204,7 +232,6 @@ export interface Api {
   meta: MetaApi
   library: LibraryApi
   queue: QueueApi
-  lyrics: LyricsApi
   audio: AudioApi
   eq: EqApi
   tracks: TracksApi

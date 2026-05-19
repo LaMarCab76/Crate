@@ -8,7 +8,6 @@ import { EntityTracksRepo } from './EntityTracksRepo'
 import { SearchRepo } from './SearchRepo'
 import { PlaylistRepo } from './PlaylistRepo'
 import { QueueRepo } from './QueueRepo'
-import { LyricsRepo } from './LyricsRepo'
 
 let cached: Repos | null = null
 
@@ -22,7 +21,6 @@ export interface Repos {
   search: SearchRepo
   playlists: PlaylistRepo
   queue: QueueRepo
-  lyrics: LyricsRepo
 }
 
 export function getRepos(): Repos {
@@ -38,7 +36,6 @@ export function getRepos(): Repos {
     search: new SearchRepo(db),
     playlists: new PlaylistRepo(db),
     queue: new QueueRepo(db),
-    lyrics: new LyricsRepo(db),
   }
   return cached
 }
@@ -53,5 +50,4 @@ export {
   SearchRepo,
   PlaylistRepo,
   QueueRepo,
-  LyricsRepo,
 }

@@ -8,6 +8,7 @@ interface SidebarProps {
   setView: (v: View) => void
   selectedKey: string | null
   translucent: boolean
+  isOpen: boolean
   onSelectPlaylist: (p: Playlist) => void
   onSelectArtist: (a: Artist) => void
   onSelectFavoriteTracks: () => void
@@ -31,6 +32,7 @@ export function Sidebar({
   setView,
   selectedKey,
   translucent,
+  isOpen,
   onSelectPlaylist,
   onSelectArtist,
   onSelectFavoriteTracks,
@@ -49,7 +51,10 @@ export function Sidebar({
   )
 
   return (
-    <div className={`sidebar ${translucent ? '' : 'solid'}`}>
+    <div
+      className={`sidebar ${translucent ? '' : 'solid'} ${isOpen ? 'sidebar-open' : 'sidebar-collapsed'}`}
+      aria-hidden={!isOpen}
+    >
       {/* Spacer so the macOS traffic lights have room above the sidebar content. */}
       <div className="sb-header" style={{ WebkitAppRegion: 'drag' } as CSSProperties} />
 

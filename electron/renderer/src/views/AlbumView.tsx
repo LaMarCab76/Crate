@@ -1,6 +1,8 @@
+import { useEffect, useRef } from 'react'
 import type { Album } from '@shared/types/library'
 import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
+import { useAlbumActions } from '@renderer/components/MediaActions'
 import { TrackTable } from '@renderer/components/TrackTable'
 import { fmtTime } from '@renderer/utils/format'
 import { refreshTrackMetadata, useAlbumByUiId } from '@renderer/stores/libraryStore'
@@ -16,6 +18,8 @@ export function AlbumView({ album }: Props) {
   const fresh = useAlbumByUiId(album?.id)
   const a = fresh ?? album
   const playNow = useQueueStore(s => s.playNow)
+  const refreshedAlbumId = useRef<string | null>(null)
+  const albumActions = useAlbumActions()
 
   const handlePlayAlbum = async () => {
     if (!a || a.tracks.length === 0) return
@@ -34,23 +38,22 @@ export function AlbumView({ album }: Props) {
   }
   const isUnresolvedAlbum = a?.id.startsWith('a-unresolved-') ?? false
 
-  const handleTrackRefreshMetadata = async (trackDbId?: number) => {
-    if (trackDbId == null) return
-    try {
-      await refreshTrackMetadata(trackDbId)
-    } catch {}
-  }
+  useEffect(() => {
+    if (!a || !isUnresolvedAlbum) return
+    if (refreshedAlbumId.current === a.id) return
 
-  const handleRefreshMetadata = async () => {
-    if (!a) return
-    await Promise.all(a.tracks.map(track => handleTrackRefreshMetadata(track.dbId)))
-  }
+    refreshedAlbumId.current = a.id
+    void (async () => {
+      const ids = a.tracks.map(track => track.dbId).filter((id): id is number => id != null)
+      await Promise.all(ids.map(refreshTrackMetadata))
+    })()
+  }, [isUnresolvedAlbum, a?.id, a?.tracks.length])
 
   if (!a) return null
   const totalDur = a.tracks.reduce((s, t) => s + t.d, 0)
   return (
     <>
-      <div className="album-hero">
+      <div className="album-hero" onContextMenu={e => albumActions.openAlbumMenu(e, a)}>
         <div className="art"><Artwork album={a} radius={8} /></div>
         <div className="meta">
           <div className="kicker">{a.genre}</div>
@@ -73,17 +76,14 @@ export function AlbumView({ album }: Props) {
             </button>
             <button className="btn ghost icon"><Icon name="heart" /></button>
             <button className="btn ghost icon"><Icon name="plus" /></button>
-            <button className="btn ghost icon"><Icon name="ellipsis" /></button>
-            {isUnresolvedAlbum && (
-              <button
-                className="btn ghost icon"
-                type="button"
-                onClick={() => { void handleRefreshMetadata() }}
-                title="Actualizar metadatos"
-              >
-                <Icon name="rotate" size={14} />
-              </button>
-            )}
+            <button
+              className="btn ghost icon"
+              type="button"
+              onClick={e => albumActions.openAlbumMenu(e, a)}
+              title="Más"
+            >
+              <Icon name="ellipsis" />
+            </button>
           </div>
         </div>
       </div>
@@ -93,10 +93,8 @@ export function AlbumView({ album }: Props) {
         showAlbum={false}
         showPlays={false}
         showPath={isUnresolvedAlbum}
-        onRefreshMetadata={track => {
-          void handleTrackRefreshMetadata(track.dbId)
-        }}
       />
+      {albumActions.elements}
     </>
   )
 }

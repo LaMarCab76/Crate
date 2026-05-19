@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { Album, Artist } from '@shared/types/library'
 import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
+import { useAlbumActions } from '@renderer/components/MediaActions'
 import { TrackTable } from '@renderer/components/TrackTable'
 import { fmtTotal } from '@renderer/utils/format'
 import { toggleArtistFavorite, useArtistByUiId } from '@renderer/stores/libraryStore'
@@ -15,16 +16,17 @@ export function ArtistView({ artist, onSelectAlbum }: Props) {
   const [mode, setMode] = useState<'discography' | 'albums'>('discography')
   const fresh = useArtistByUiId(artist?.id)
   const ar = fresh ?? artist
+  const albumActions = useAlbumActions()
   if (!ar) return null
 
   const allTracks = ar.albums.flatMap(a => a.tracks)
   const sortedAlbums = [...ar.albums].sort((a, b) => b.year - a.year)
 
   return (
-    <>
+    <div className="artist-page">
       <div className="artist-hero">
         <div className="bg">
-          <Artwork album={{ seed: ar.seed, palette: ar.palette, pattern: ar.pattern }} radius={0} />
+          <Artwork album={ar} radius={0} />
         </div>
         <div className="meta">
           <div className="kicker">Artist</div>
@@ -64,7 +66,7 @@ export function ArtistView({ artist, onSelectAlbum }: Props) {
         sortedAlbums.map(al => {
           const total = al.tracks.reduce((s, t) => s + t.d, 0)
           return (
-            <div key={al.id} className="artist-album">
+            <div key={al.id} className="artist-album" onContextMenu={e => albumActions.openAlbumMenu(e, al)}>
               <div className="aa-head">
                 <div className="aa-art" onClick={() => onSelectAlbum?.(al)} role="button" tabIndex={0}>
                   <Artwork album={al} radius={6} />
@@ -79,7 +81,13 @@ export function ArtistView({ artist, onSelectAlbum }: Props) {
                 <div className="aa-actions">
                   <button className="btn sm"><Icon name="play" size={11} /> Play</button>
                   <button className="btn ghost icon sm" title="Shuffle"><Icon name="shuffle" size={13} /></button>
-                  <button className="btn ghost icon sm" title="More"><Icon name="ellipsis" size={14} /></button>
+                  <button
+                    className="btn ghost icon sm"
+                    title="More"
+                    onClick={e => albumActions.openAlbumMenu(e, al)}
+                  >
+                    <Icon name="ellipsis" size={14} />
+                  </button>
                 </div>
               </div>
               <TrackTable tracks={al.tracks} showArt={false} showAlbum={false} showPlays={false} />
@@ -87,9 +95,16 @@ export function ArtistView({ artist, onSelectAlbum }: Props) {
           )
         })
       ) : (
-        <div className="grid">
+        <div className="artist-grid grid">
           {sortedAlbums.map(al => (
-            <div key={al.id} className="card" onClick={() => onSelectAlbum?.(al)} role="button" tabIndex={0}>
+            <div
+              key={al.id}
+              className="card"
+              onClick={() => onSelectAlbum?.(al)}
+              onContextMenu={e => albumActions.openAlbumMenu(e, al)}
+              role="button"
+              tabIndex={0}
+            >
               <div className="art">
                 <Artwork album={al} radius={6} />
                 <div className="play-overlay"><div className="pb"><Icon name="play" size={14} /></div></div>
@@ -100,6 +115,7 @@ export function ArtistView({ artist, onSelectAlbum }: Props) {
           ))}
         </div>
       )}
-    </>
+      {albumActions.elements}
+    </div>
   )
 }

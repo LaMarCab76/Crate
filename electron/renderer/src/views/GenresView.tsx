@@ -1,9 +1,11 @@
 import type { Album } from '@shared/types/library'
 import { Artwork } from '@renderer/components/Artwork'
+import { useAlbumActions } from '@renderer/components/MediaActions'
 import { useAlbums } from '@renderer/stores/libraryStore'
 
 export function GenresView({ onSelectAlbum }: { onSelectAlbum?: (al: Album) => void }) {
   const albums = useAlbums()
+  const albumActions = useAlbumActions()
 
   if (albums.length === 0) {
     return (
@@ -36,7 +38,14 @@ export function GenresView({ onSelectAlbum }: { onSelectAlbum?: (al: Album) => v
             </div>
             <div className="grid" style={{ padding: 0 }}>
               {list.map(al => (
-                <div key={al.id} className="card" onClick={() => onSelectAlbum?.(al)} role="button" tabIndex={0}>
+                <div
+                  key={al.id}
+                  className="card"
+                  onClick={() => onSelectAlbum?.(al)}
+                  onContextMenu={e => albumActions.openAlbumMenu(e, al)}
+                  role="button"
+                  tabIndex={0}
+                >
                   <div className="art"><Artwork album={al} /></div>
                   <div className="ti">{al.title}</div>
                   <div className="su">{al.artist}</div>
@@ -46,6 +55,7 @@ export function GenresView({ onSelectAlbum }: { onSelectAlbum?: (al: Album) => v
           </div>
         ))}
       </div>
+      {albumActions.elements}
     </>
   )
 }
