@@ -1,4 +1,4 @@
-import type { Album, Track } from '@shared/types/library'
+import type { Album } from '@shared/types/library'
 import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
 import { TrackTable } from '@renderer/components/TrackTable'
@@ -7,11 +7,9 @@ import { useAlbumByUiId } from '@renderer/stores/libraryStore'
 
 interface Props {
   album: Album
-  playingId?: string
-  onPlay?: (t: Track) => void
 }
 
-export function AlbumView({ album, playingId, onPlay }: Props) {
+export function AlbumView({ album }: Props) {
   // Re-read the album from the store so its tracks list stays fresh after
   // imports and updates (album passed via navigation is a snapshot).
   const fresh = useAlbumByUiId(album?.id)
@@ -42,8 +40,6 @@ export function AlbumView({ album, playingId, onPlay }: Props) {
         showArt={false}
         showAlbum={false}
         showPlays={false}
-        playingId={playingId}
-        onPlay={onPlay}
       />
     </>
   )

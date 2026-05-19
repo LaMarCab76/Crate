@@ -1,4 +1,4 @@
-import type { Playlist, Track } from '@shared/types/library'
+import type { Playlist } from '@shared/types/library'
 import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
 import { TrackTable } from '@renderer/components/TrackTable'
@@ -7,11 +7,9 @@ import { useAlbums } from '@renderer/stores/libraryStore'
 
 interface Props {
   playlist: Playlist
-  playingId?: string
-  onPlay?: (t: Track) => void
 }
 
-export function PlaylistView({ playlist, playingId, onPlay }: Props) {
+export function PlaylistView({ playlist }: Props) {
   const albums = useAlbums()
   if (!playlist) return null
   const total = playlist.tracks.reduce((s, t) => s + t.d, 0)
@@ -42,7 +40,7 @@ export function PlaylistView({ playlist, playingId, onPlay }: Props) {
           </div>
         </div>
       </div>
-      <TrackTable tracks={playlist.tracks} showArt playingId={playingId} onPlay={onPlay} />
+      <TrackTable tracks={playlist.tracks} showArt />
     </>
   )
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Album, Artist, Track } from '@shared/types/library'
+import type { Album, Artist } from '@shared/types/library'
 import type { SearchResultsPayload } from '@shared/types/ipc-contract'
 import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
@@ -9,11 +9,9 @@ import { dbToUiAlbum, dbToUiArtist, dbToUiTrack } from '@renderer/stores/adapter
 interface Props {
   onSelectAlbum?: (al: Album) => void
   onSelectArtist?: (ar: Artist) => void
-  playingId?: string
-  onPlay?: (t: Track) => void
 }
 
-export function SearchView({ onSelectAlbum, onSelectArtist, playingId, onPlay }: Props) {
+export function SearchView({ onSelectAlbum, onSelectArtist }: Props) {
   const [q, setQ] = useState('')
   const [results, setResults] = useState<SearchResultsPayload>({ tracks: [], albums: [], artists: [] })
   const [loading, setLoading] = useState(false)
@@ -70,7 +68,7 @@ export function SearchView({ onSelectAlbum, onSelectArtist, playingId, onPlay }:
           {tracks.length > 0 && (
             <div className="search-section">
               <h3>Songs</h3>
-              <TrackTable tracks={tracks} showArt showPlays={false} playingId={playingId} onPlay={onPlay} />
+              <TrackTable tracks={tracks} showArt showPlays={false} />
             </div>
           )}
           {albums.length > 0 && (

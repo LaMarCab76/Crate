@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Album, Artist, Track } from '@shared/types/library'
+import type { Album, Artist } from '@shared/types/library'
 import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
 import { TrackTable } from '@renderer/components/TrackTable'
@@ -9,11 +9,9 @@ import { useArtistByUiId } from '@renderer/stores/libraryStore'
 interface Props {
   artist: Artist
   onSelectAlbum?: (al: Album) => void
-  playingId?: string
-  onPlay?: (t: Track) => void
 }
 
-export function ArtistView({ artist, onSelectAlbum, playingId, onPlay }: Props) {
+export function ArtistView({ artist, onSelectAlbum }: Props) {
   const [mode, setMode] = useState<'discography' | 'albums'>('discography')
   const fresh = useArtistByUiId(artist?.id)
   const ar = fresh ?? artist
@@ -72,7 +70,7 @@ export function ArtistView({ artist, onSelectAlbum, playingId, onPlay }: Props) 
                   <button className="btn ghost icon sm" title="More"><Icon name="ellipsis" size={14} /></button>
                 </div>
               </div>
-              <TrackTable tracks={al.tracks} showArt={false} showAlbum={false} showPlays={false} playingId={playingId} onPlay={onPlay} />
+              <TrackTable tracks={al.tracks} showArt={false} showAlbum={false} showPlays={false} />
             </div>
           )
         })

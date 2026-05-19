@@ -3,8 +3,10 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { closeDatabase, getDatabase } from './db/database'
 import { registerLibraryChannel } from './ipc/library-channel'
+import { registerAudioChannel } from './ipc/audio-channel'
 import { registerProtocolHandlers, registerProtocolSchemes } from './protocol'
 import { getFolderWatcher } from './library/FolderWatcher'
+import { getAudioEngine } from './audio/AudioEngine'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -55,6 +57,7 @@ app.whenReady().then(() => {
   getDatabase()
   registerProtocolHandlers()
   registerLibraryChannel()
+  registerAudioChannel()
 
   // Start watching every already-registered folder so we pick up disk changes
   // without requiring a rescan.
@@ -73,5 +76,6 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   getFolderWatcher().stopAll()
+  try { getAudioEngine().dispose() } catch { /* engine may not have initialized */ }
   closeDatabase()
 })

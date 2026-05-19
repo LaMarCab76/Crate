@@ -1,9 +1,10 @@
-import type { Track } from '@shared/types/library'
 import { Artwork } from './Artwork'
 import { CodecStrip } from './CodecStrip'
 import { Icon } from './Icon'
 import { fmtTime } from '@renderer/utils/format'
 import { useAlbumByUiId } from '@renderer/stores/libraryStore'
+import { usePlaybackStore } from '@renderer/stores/playbackStore'
+import { useQueueStore } from '@renderer/stores/queueStore'
 
 const LYRICS = [
   'Lyrics will appear here once the track has synced lyrics.',
@@ -29,18 +30,25 @@ function Visualizer({ bars = 48 }: { bars?: number }) {
 }
 
 interface NowPlayingFullProps {
-  track: Track
-  progress: number
-  playing: boolean
   showLyrics: boolean
   setShowLyrics: (v: boolean) => void
-  onPlayPause: () => void
   onCollapse: () => void
 }
 
-export function NowPlayingFull({ track, progress, playing, showLyrics, setShowLyrics, onPlayPause, onCollapse }: NowPlayingFullProps) {
+export function NowPlayingFull({ showLyrics, setShowLyrics, onCollapse }: NowPlayingFullProps) {
+  const track = usePlaybackStore(s => s.currentTrack)
+  const status = usePlaybackStore(s => s.status)
+  const positionSec = usePlaybackStore(s => s.positionSec)
+  const durationSec = usePlaybackStore(s => s.durationSec)
   const album = useAlbumByUiId(track?.albumId)
+  const togglePlay = useQueueStore(s => s.togglePlay)
+  const next = useQueueStore(s => s.next)
+  const previous = useQueueStore(s => s.previous)
+
   if (!track) return null
+
+  const playing = status === 'playing'
+  const progress = durationSec > 0 ? positionSec / durationSec : 0
 
   return (
     <div className="np-full">
@@ -65,18 +73,18 @@ export function NowPlayingFull({ track, progress, playing, showLyrics, setShowLy
           </div>
 
           <div className="np-progress" style={{ maxWidth: '90%' }}>
-            <span className="time">{fmtTime(track.d * progress)}</span>
+            <span className="time">{fmtTime(positionSec)}</span>
             <div className="np-bar-track"><div className="np-bar-fill" style={{ width: `${progress * 100}%` }} /></div>
-            <span className="time">-{fmtTime(track.d * (1 - progress))}</span>
+            <span className="time">-{fmtTime(Math.max(0, durationSec - positionSec))}</span>
           </div>
 
           <div className="np-buttons">
             <button className="sub" title="Shuffle"><Icon name="shuffle" size={18} /></button>
-            <button title="Previous"><Icon name="prev" size={22} /></button>
-            <button className="play" style={{ width: 44, height: 44 }} onClick={onPlayPause} title={playing ? 'Pause' : 'Play'}>
+            <button title="Previous" onClick={() => { void previous() }}><Icon name="prev" size={22} /></button>
+            <button className="play" style={{ width: 44, height: 44 }} onClick={() => { void togglePlay() }} title={playing ? 'Pause' : 'Play'}>
               <Icon name={playing ? 'pause' : 'play'} size={18} />
             </button>
-            <button title="Next"><Icon name="next" size={22} /></button>
+            <button title="Next" onClick={() => { void next() }}><Icon name="next" size={22} /></button>
             <button className="sub active" title="Repeat"><Icon name="repeat" size={18} /></button>
           </div>
         </div>

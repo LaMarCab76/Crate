@@ -90,11 +90,70 @@ export interface MetaApi {
   version: string
 }
 
+export type PlaybackStatus = 'stopped' | 'playing' | 'paused' | 'loading'
+
+export interface StreamInfoPayload {
+  freq: number
+  chans: number
+  ctype: number
+  duration: number
+  durationBytes: number
+  bytesPerSecond: number
+}
+
+export interface ProgressEvent {
+  positionSec: number
+  durationSec: number
+}
+
+export interface PlaybackStatePayload {
+  status: PlaybackStatus
+  positionSec: number
+  streamInfo: StreamInfoPayload | null
+  volume: number
+  currentPath: string | null
+}
+
+export interface EqState {
+  enabled: boolean
+  preset: string
+  bands: number[]
+}
+
+export interface AudioApi {
+  load(path: string): Promise<StreamInfoPayload | null>
+  play(): Promise<void>
+  pause(): Promise<void>
+  stop(): Promise<void>
+  seek(positionSec: number): Promise<void>
+  setVolume(value: number): Promise<void>
+  preloadNext(path: string): Promise<void>
+  clearNext(): Promise<void>
+  swapNow(): Promise<boolean>
+  getStatus(): Promise<PlaybackStatePayload>
+
+  onProgress(h: (e: ProgressEvent) => void): EventOff
+  onTrackEnded(h: () => void): EventOff
+  onGaplessFired(h: (e: { path: string }) => void): EventOff
+  onStateChanged(h: (e: { status: PlaybackStatus }) => void): EventOff
+}
+
+export interface EqApi {
+  getState(): Promise<EqState>
+  setEnabled(enabled: boolean): Promise<void>
+  setBand(index: number, gain: number): Promise<void>
+  setPreset(name: string): Promise<void>
+  presets(): Promise<string[]>
+  onChanged(h: (e: EqState) => void): EventOff
+}
+
 export interface Api {
   meta: MetaApi
   library: LibraryApi
   queue: QueueApi
   lyrics: LyricsApi
+  audio: AudioApi
+  eq: EqApi
 }
 
 declare global {

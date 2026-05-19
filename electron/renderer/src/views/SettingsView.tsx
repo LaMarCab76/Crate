@@ -1,23 +1,13 @@
 import { Icon } from '@renderer/components/Icon'
 import type { Tweak } from '@renderer/stores/settingsStore'
+import { useEqStore } from '@renderer/stores/eqStore'
 
 interface Props {
   tweak: Tweak
   setTweak: <K extends keyof Tweak>(key: K, value: Tweak[K]) => void
 }
 
-const EQ_BANDS = [
-  { hz: '32',  v: 0.45 },
-  { hz: '64',  v: 0.55 },
-  { hz: '125', v: 0.60 },
-  { hz: '250', v: 0.62 },
-  { hz: '500', v: 0.55 },
-  { hz: '1k',  v: 0.50 },
-  { hz: '2k',  v: 0.45 },
-  { hz: '4k',  v: 0.55 },
-  { hz: '8k',  v: 0.68 },
-  { hz: '16k', v: 0.72 },
-]
+const EQ_LABELS = ['32', '64', '125', '250', '500', '1k', '2k', '4k', '8k', '16k']
 
 export function SettingsView({ tweak, setTweak }: Props) {
   return (
@@ -132,32 +122,14 @@ export function SettingsView({ tweak, setTweak }: Props) {
 
       <div className="set-section">
         <h2>Equalizer</h2>
-        <div className="eq-graph">
-          {EQ_BANDS.map(b => (
-            <div key={b.hz} className="eq-band">
-              <div className="col">
-                <div className="fill" style={{ bottom: 0, height: `${b.v * 100}%` }} />
-              </div>
-              <div className="hz">{b.hz}</div>
-            </div>
-          ))}
-        </div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center' }}>
-          <span className="muted tiny">Preset:</span>
-          {['Flat', 'Vocal', 'Jazz', 'Electronic', 'Acoustic'].map(p => (
-            <div
-              key={p}
-              className="select"
-              style={{ background: p === 'Acoustic' ? 'var(--bg-selected)' : 'var(--bg-elev)' }}
-            >
-              {p}
-            </div>
-          ))}
-        </div>
+        <EqPanel />
       </div>
 
       <div className="set-section">
         <h2>Output</h2>
+        <div style={{ padding: '0 4px 12px', color: 'var(--text-tertiary)', fontSize: 12 }}>
+          DAC selection + hog mode arrive in a later session. For now BASS uses the system default output.
+        </div>
         <div className="set-card">
           <div className="dev-list">
             <div className="dev-row active">
@@ -193,5 +165,91 @@ export function SettingsView({ tweak, setTweak }: Props) {
         </div>
       </div>
     </div>
+  )
+}
+
+function EqPanel() {
+  const enabled = useEqStore(s => s.enabled)
+  const preset = useEqStore(s => s.preset)
+  const bands = useEqStore(s => s.bands)
+  const presetNames = useEqStore(s => s.presetNames)
+  const setEnabled = useEqStore(s => s.setEnabled)
+  const setBand = useEqStore(s => s.setBand)
+  const setPreset = useEqStore(s => s.setPreset)
+
+  return (
+    <>
+      <div className="set-card" style={{ marginBottom: 12 }}>
+        <div className="set-row">
+          <div>
+            <div className="lbl">Enable equalizer</div>
+            <div className="sub">10-band peaking EQ applied to the BASS playback chain.</div>
+          </div>
+          <div
+            className={`toggle ${enabled ? 'on' : ''}`}
+            onClick={() => { void setEnabled(!enabled) }}
+            role="switch"
+            aria-checked={enabled}
+            tabIndex={0}
+          />
+        </div>
+      </div>
+
+      <div className="eq-graph" style={{ opacity: enabled ? 1 : 0.45 }}>
+        {bands.map((gain, i) => {
+          // Map -15..+15 dB → 0..1 for the column fill height; center at 0 dB.
+          const normalized = (gain + 15) / 30
+          return (
+            <div key={EQ_LABELS[i]} className="eq-band">
+              <input
+                type="range"
+                min={-15}
+                max={15}
+                step={0.5}
+                value={gain}
+                disabled={!enabled}
+                onChange={e => { void setBand(i, parseFloat(e.target.value)) }}
+                title={`${EQ_LABELS[i]} Hz: ${gain.toFixed(1)} dB`}
+                style={{
+                  flex: 1,
+                  width: 20,
+                  writingMode: 'vertical-lr',
+                  direction: 'rtl',
+                  // Vertical orientation via CSS appearance hint (browser-specific).
+                  ['appearance' as never]: 'slider-vertical',
+                  ['WebkitAppearance' as never]: 'slider-vertical',
+                }}
+              />
+              <div className="hz">{EQ_LABELS[i]}</div>
+              <div style={{ fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)' }}>
+                {gain > 0 ? `+${gain.toFixed(0)}` : gain.toFixed(0)}
+              </div>
+              {/* Visual track behind the slider for parity with the design */}
+              <div style={{ position: 'absolute', pointerEvents: 'none', opacity: 0 }}>
+                <div className="col"><div className="fill" style={{ bottom: 0, height: `${normalized * 100}%` }} /></div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span className="muted tiny">Preset:</span>
+        {presetNames.map(p => (
+          <div
+            key={p}
+            className="select"
+            style={{ background: p === preset ? 'var(--bg-selected)' : 'var(--bg-elev)', cursor: 'pointer' }}
+            onClick={() => { void setPreset(p) }}
+            role="button"
+            tabIndex={0}
+          >
+            {p}
+          </div>
+        ))}
+        {preset === 'Custom' && (
+          <span className="muted tiny" style={{ marginLeft: 'auto' }}>Custom curve</span>
+        )}
+      </div>
+    </>
   )
 }

@@ -4,6 +4,8 @@ import { Icon } from './Icon'
 import { EQBars } from './EQBars'
 import { fmtTime } from '@renderer/utils/format'
 import { useAlbums } from '@renderer/stores/libraryStore'
+import { useQueueStore } from '@renderer/stores/queueStore'
+import { usePlaybackStore } from '@renderer/stores/playbackStore'
 
 interface TrackTableProps {
   tracks: Track[]
@@ -11,8 +13,6 @@ interface TrackTableProps {
   showAlbum?: boolean
   showFmt?: boolean
   showPlays?: boolean
-  playingId?: string
-  onPlay?: (t: Track) => void
 }
 
 export function TrackTable({
@@ -21,10 +21,12 @@ export function TrackTable({
   showAlbum = true,
   showFmt = true,
   showPlays = true,
-  playingId,
-  onPlay,
 }: TrackTableProps) {
   const albums = useAlbums()
+  const playNow = useQueueStore(s => s.playNow)
+  const currentTrack = usePlaybackStore(s => s.currentTrack)
+  const playingId = currentTrack?.id
+
   return (
     <table className="tbl">
       <thead>
@@ -44,7 +46,11 @@ export function TrackTable({
           const isP = t.id === playingId
           const album = showArt ? albums.find(a => a.id === t.albumId) : undefined
           return (
-            <tr key={t.id} className={isP ? 'playing' : ''} onDoubleClick={() => onPlay?.(t)}>
+            <tr
+              key={t.id}
+              className={isP ? 'playing' : ''}
+              onDoubleClick={() => { void playNow(t, tracks) }}
+            >
               <td className="num">
                 {isP ? <EQBars /> : t.no || i + 1}
               </td>

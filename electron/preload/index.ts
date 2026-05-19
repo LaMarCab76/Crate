@@ -2,13 +2,18 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type {
   AddFolderResult,
   Api,
+  EqState,
   EventOff,
   ImportCompleteEvent,
   ImportProgressEvent,
   ListTracksOpts,
   PickFolderResult,
+  PlaybackStatePayload,
+  PlaybackStatus,
+  ProgressEvent,
   QueueSnapshotPayload,
   SearchResultsPayload,
+  StreamInfoPayload,
 } from '@shared/types/ipc-contract'
 import type {
   DbAlbum,
@@ -88,6 +93,36 @@ const api: Api = {
         source: source ?? null,
         language: language ?? null,
       }) as Promise<void>,
+  },
+  audio: {
+    load: (path: string) => ipcRenderer.invoke('audio:load', { path }) as Promise<StreamInfoPayload | null>,
+    play: () => ipcRenderer.invoke('audio:play') as Promise<void>,
+    pause: () => ipcRenderer.invoke('audio:pause') as Promise<void>,
+    stop: () => ipcRenderer.invoke('audio:stop') as Promise<void>,
+    seek: (positionSec: number) =>
+      ipcRenderer.invoke('audio:seek', { positionSec }) as Promise<void>,
+    setVolume: (value: number) =>
+      ipcRenderer.invoke('audio:setVolume', { value }) as Promise<void>,
+    preloadNext: (path: string) =>
+      ipcRenderer.invoke('audio:preloadNext', { path }) as Promise<void>,
+    clearNext: () => ipcRenderer.invoke('audio:clearNext') as Promise<void>,
+    swapNow: () => ipcRenderer.invoke('audio:swapNow') as Promise<boolean>,
+    getStatus: () => ipcRenderer.invoke('audio:getStatus') as Promise<PlaybackStatePayload>,
+    onProgress: (h) => subscribe<ProgressEvent>('audio:progress', h),
+    onTrackEnded: (h) => subscribe<void>('audio:track-ended', () => h()),
+    onGaplessFired: (h) => subscribe<{ path: string }>('audio:gapless-fired', h),
+    onStateChanged: (h) => subscribe<{ status: PlaybackStatus }>('audio:state-changed', h),
+  },
+  eq: {
+    getState: () => ipcRenderer.invoke('eq:getState') as Promise<EqState>,
+    setEnabled: (enabled: boolean) =>
+      ipcRenderer.invoke('eq:setEnabled', { enabled }) as Promise<void>,
+    setBand: (index: number, gain: number) =>
+      ipcRenderer.invoke('eq:setBand', { index, gain }) as Promise<void>,
+    setPreset: (name: string) =>
+      ipcRenderer.invoke('eq:setPreset', { name }) as Promise<void>,
+    presets: () => ipcRenderer.invoke('eq:presets') as Promise<string[]>,
+    onChanged: (h) => subscribe<EqState>('eq:changed', h),
   },
 }
 

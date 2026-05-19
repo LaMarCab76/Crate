@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Album, Artist, Playlist, Track } from '@shared/types/library'
+import type { Album, Artist, Playlist } from '@shared/types/library'
 import { Sidebar } from './components/Sidebar'
 import { Toolbar } from './components/Toolbar'
 import { PlayerPane } from './components/PlayerPane'
@@ -18,6 +18,7 @@ import { GenresView } from './views/GenresView'
 import { ComingSoonView } from './views/ComingSoonView'
 import { useTweaks } from './stores/settingsStore'
 import { useLibraryStore } from './stores/libraryStore'
+import { usePlaybackStore } from './stores/playbackStore'
 
 export type View =
   | { kind: 'library' }
@@ -39,12 +40,10 @@ export default function App() {
   const [idx, setIdx] = useState(0)
   const [expanded, setExpanded] = useState(false)
   const [showLyrics, setShowLyrics] = useState(true)
-  const [playing, setPlaying] = useState(false)
-  const [progress, setProgress] = useState(0)
-  const [nowTrack, setNowTrack] = useState<Track | null>(null)
 
   const refresh = useLibraryStore(s => s.refresh)
   const loaded = useLibraryStore(s => s.loaded)
+  const nowTrack = usePlaybackStore(s => s.currentTrack)
 
   const view = history[idx]
 
@@ -52,16 +51,6 @@ export default function App() {
   useEffect(() => {
     if (!loaded) refresh()
   }, [loaded, refresh])
-
-  // Placeholder progress animation: drives the UI until the real audio engine
-  // takes over in Session 3. Skips when no track is loaded.
-  useEffect(() => {
-    if (!playing || !nowTrack) return
-    const id = window.setInterval(() => {
-      setProgress(p => (p + 1 / (nowTrack.d * 3)) % 1)
-    }, 1000)
-    return () => window.clearInterval(id)
-  }, [playing, nowTrack])
 
   const navigate = (v: View, { replace = false }: { replace?: boolean } = {}) => {
     if (replace) {
@@ -103,23 +92,15 @@ export default function App() {
     }
   })()
 
-  // Double-clicking a track marks it as the now-playing track in the UI.
-  // Real playback wiring lands in Session 3 (audio engine).
-  const onPlay = (t: Track) => {
-    setNowTrack(t)
-    setPlaying(true)
-    setProgress(0)
-  }
-
   function renderContent() {
     switch (view.kind) {
       case 'library':
       case 'recent':
-        return <LibraryView playingId={nowTrack?.id} onPlay={onPlay} />
+        return <LibraryView />
       case 'albums':
         return <AlbumsView onSelect={al => navigate({ kind: 'album', album: al })} />
       case 'album':
-        return <AlbumView album={view.album} playingId={nowTrack?.id} onPlay={onPlay} />
+        return <AlbumView album={view.album} />
       case 'artists':
         return <ArtistsView onSelect={ar => navigate({ kind: 'artist', artist: ar })} />
       case 'artist':
@@ -127,19 +108,15 @@ export default function App() {
           <ArtistView
             artist={view.artist}
             onSelectAlbum={al => navigate({ kind: 'album', album: al })}
-            playingId={nowTrack?.id}
-            onPlay={onPlay}
           />
         )
       case 'playlist':
-        return <PlaylistView playlist={view.playlist} playingId={nowTrack?.id} onPlay={onPlay} />
+        return <PlaylistView playlist={view.playlist} />
       case 'search':
         return (
           <SearchView
             onSelectAlbum={al => navigate({ kind: 'album', album: al })}
             onSelectArtist={ar => navigate({ kind: 'artist', artist: ar })}
-            playingId={nowTrack?.id}
-            onPlay={onPlay}
           />
         )
       case 'settings':
@@ -156,7 +133,7 @@ export default function App() {
           />
         )
       default:
-        return <LibraryView playingId={nowTrack?.id} onPlay={onPlay} />
+        return <LibraryView />
     }
   }
 
@@ -185,12 +162,7 @@ export default function App() {
           </div>
 
           <PlayerPane
-            track={nowTrack}
-            progress={progress}
-            volume={0.65}
-            playing={playing}
             expanded={expanded}
-            onPlayPause={() => setPlaying(p => !p)}
             onExpand={() => setExpanded(true)}
             onMini={() => setTweak('showMini', true)}
           />
@@ -198,23 +170,14 @@ export default function App() {
 
         {expanded && nowTrack && (
           <NowPlayingFull
-            track={nowTrack}
-            progress={progress}
-            playing={playing}
             showLyrics={showLyrics}
             setShowLyrics={setShowLyrics}
-            onPlayPause={() => setPlaying(p => !p)}
             onCollapse={() => setExpanded(false)}
           />
         )}
 
         {tweak.showMini && nowTrack && (
-          <MiniPlayer
-            track={nowTrack}
-            playing={playing}
-            onPlayPause={() => setPlaying(p => !p)}
-            onClose={() => setTweak('showMini', false)}
-          />
+          <MiniPlayer onClose={() => setTweak('showMini', false)} />
         )}
       </div>
     </div>

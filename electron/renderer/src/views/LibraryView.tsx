@@ -1,13 +1,7 @@
-import type { Track } from '@shared/types/library'
 import { Icon } from '@renderer/components/Icon'
 import { TrackTable } from '@renderer/components/TrackTable'
 import { fmtTotal } from '@renderer/utils/format'
 import { useLibraryStore, useTracks } from '@renderer/stores/libraryStore'
-
-interface Props {
-  playingId?: string
-  onPlay?: (t: Track) => void
-}
 
 function EmptyState() {
   const pickAndAdd = useLibraryStore(s => async () => {
@@ -53,7 +47,7 @@ function EmptyState() {
   )
 }
 
-export function LibraryView({ playingId, onPlay }: Props) {
+export function LibraryView() {
   const tracks = useTracks()
 
   if (tracks.length === 0) {
@@ -74,7 +68,7 @@ export function LibraryView({ playingId, onPlay }: Props) {
           <button className="btn"><Icon name="play" size={12} /> Shuffle All</button>
         </div>
       </div>
-      <TrackTable tracks={tracks} showArt playingId={playingId} onPlay={onPlay} />
+      <TrackTable tracks={tracks} showArt />
     </>
   )
 }
