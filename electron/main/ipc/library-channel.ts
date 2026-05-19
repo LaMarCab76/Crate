@@ -1,16 +1,69 @@
 import { dialog, ipcMain } from 'electron'
+import { basename } from 'node:path'
 import { getRepos } from '../db/repositories'
 import { getImportService } from '../library/ImportService'
 import { getFolderWatcher } from '../library/FolderWatcher'
+import { parseArtistName } from '../library/ArtistNameParser'
+import { readTrackMetadata } from '../library/MetadataExtractor'
 import { fetchLyrics } from '../services/lyrics'
 import { getLibraryBackup } from '../services/LibraryBackup'
 import { broadcast } from './events'
+import type { DbTrack } from '@shared/types/db'
 import type {
   AddFolderResult,
   ListTracksOpts,
   PickFolderResult,
   SearchResultsPayload,
 } from '@shared/types/ipc-contract'
+
+function normText(value: string | null | undefined): string {
+  return (value ?? '').trim().toLowerCase()
+}
+
+function resolveAlbumFromFolderHints(track: DbTrack, candidates: DbTrack[]): number | null {
+  if (candidates.length === 0) return null
+
+  const albumName = normText(track.album)
+  const albumArtist = normText(track.album_artist) || normText(track.artist)
+
+  const withMatchingAlbum = candidates.filter(c => normText(c.album) === albumName)
+  const albumIds = new Set(withMatchingAlbum.map(t => t.album_id).filter((id): id is number => id != null))
+  if (albumIds.size === 1) {
+    const [singleId] = albumIds
+    return singleId
+  }
+
+  const withMatchingAlbumAndArtist = withMatchingAlbum.filter(t => (normText(t.artist) === albumArtist))
+  const albumArtistIds = new Set(withMatchingAlbumAndArtist.map(t => t.album_id).filter((id): id is number => id != null))
+  if (albumArtistIds.size === 1) {
+    const [singleId] = albumArtistIds
+    return singleId
+  }
+
+  const counts = new Map<number, number>()
+  for (const candidate of candidates) {
+    if (candidate.album_id == null) continue
+    counts.set(candidate.album_id, (counts.get(candidate.album_id) ?? 0) + 1)
+  }
+  if (counts.size === 0) return null
+
+  let topId: number | null = null
+  let topCount = 0
+  let secondCount = 0
+
+  for (const [albumId, count] of counts.entries()) {
+    if (count > topCount) {
+      secondCount = topCount
+      topCount = count
+      topId = albumId
+    } else if (count > secondCount) {
+      secondCount = count
+    }
+  }
+
+  if (topId == null) return null
+  return topCount > secondCount ? topId : null
+}
 
 export function registerLibraryChannel(): void {
   const repos = getRepos()
@@ -129,6 +182,60 @@ export function registerLibraryChannel(): void {
     repos.tracks.updatePlays(trackId)
     getLibraryBackup().scheduleWriteForTrack(trackId)
     broadcast('library:changed', { reason: 'play-count' })
+  })
+
+  ipcMain.handle('track:setFavorite', (_, payload: { id: number; favorite: boolean }) => {
+    repos.tracks.setFavorite(payload.id, payload.favorite)
+    getLibraryBackup().scheduleWriteForTrack(payload.id)
+    broadcast('library:changed', { reason: 'track-favorite' })
+  })
+
+  ipcMain.handle('track:refreshMetadata', async (_, trackId: number) => {
+    const track = repos.tracks.getById(trackId)
+    if (!track) return
+
+    const md = await readTrackMetadata(track.path)
+    const parsedArtist = parseArtistName(md.artist)
+    const artist = repos.artists.getOrCreate(parsedArtist.primary || md.artist)
+    const genre = md.genre ? repos.genres.getOrCreate(md.genre) : null
+
+    const candidateRefs = repos.tracks.getByFolderWithAlbum(track.folder_id)
+    const candidateAlbum = resolveAlbumFromFolderHints(track, candidateRefs)
+    const resolvedAlbum = repos.albums.getOrCreate(md.album, md.albumArtist ?? null, md.year || null)
+    const targetAlbumId = candidateAlbum ?? resolvedAlbum.id
+
+    repos.tracks.updateMetadata({
+      id: track.id,
+      title: md.title,
+      artist: md.artist,
+      album: md.album,
+      albumArtist: md.albumArtist,
+      composer: md.composer,
+      genre: md.genre,
+      year: md.year,
+      trackNumber: md.trackNumber,
+      totalTracks: md.totalTracks,
+      discNumber: md.discNumber,
+      totalDiscs: md.totalDiscs,
+      compilation: md.isCompilation ? 1 : 0,
+      duration: md.duration,
+      format: md.format,
+      codec: md.codec,
+      bitrate: md.bitrate,
+      sampleRate: md.sampleRate,
+      channels: md.channels,
+      bitDepth: md.bitDepth,
+      fileSize: md.fileSize,
+      dateModified: md.dateModified,
+      artworkPath: md.artwork?.filename ?? track.artwork_path,
+      filename: basename(track.path),
+      artistId: artist.id,
+      albumId: targetAlbumId,
+      genreId: genre?.id ?? null,
+    })
+
+    getLibraryBackup().scheduleWriteForTrack(track.id)
+    broadcast('library:changed', { reason: 'track-refresh' })
   })
 
   ipcMain.handle('artist:setFavorite', (_, payload: { id: number; favorite: boolean }) => {

@@ -124,6 +124,13 @@ export class GaplessController {
     }
   }
 
+  movePreloadedToOutputDevice(deviceId: number): boolean {
+    if (!this.next) return true
+    const moved = this.engine.moveStreamToOutputDevice(this.next.handle, deviceId)
+    if (!moved) this.clearNext()
+    return moved
+  }
+
   hasNext(): boolean { return this.next !== null }
   getNextPath(): string | null { return this.next?.path ?? null }
 }

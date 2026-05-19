@@ -1,10 +1,19 @@
+import { type MouseEvent } from 'react'
 import type { Album } from '@shared/types/library'
 import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
 import { useAlbums } from '@renderer/stores/libraryStore'
+import { useQueueStore } from '@renderer/stores/queueStore'
 
 export function AlbumsView({ onSelect }: { onSelect?: (al: Album) => void }) {
   const albums = useAlbums()
+  const playNow = useQueueStore(s => s.playNow)
+
+  const playAlbum = (album: Album, e?: MouseEvent<HTMLElement>) => {
+    if (e) e.stopPropagation()
+    if (!album.tracks || album.tracks.length === 0) return
+    void playNow(album.tracks[0], album.tracks)
+  }
 
   if (albums.length === 0) {
     return (
@@ -33,7 +42,16 @@ export function AlbumsView({ onSelect }: { onSelect?: (al: Album) => void }) {
             <div className="art">
               <Artwork album={al} radius={6} />
               <div className="play-overlay">
-                <div className="pb"><Icon name="play" size={14} /></div>
+                <button
+                  type="button"
+                  className="pb"
+                  onClick={e => {
+                    playAlbum(al, e)
+                  }}
+                  title="Play album"
+                >
+                  <Icon name="play" size={14} />
+                </button>
               </div>
             </div>
             <div className="ti">{al.title}</div>

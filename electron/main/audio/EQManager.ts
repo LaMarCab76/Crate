@@ -1,4 +1,4 @@
-// 10-band peaking equalizer. We attach one BASS_FX_BFX_PEAKEQ effect per band
+// Multi-band peaking equalizer. We attach one BASS_FX_BFX_PEAKEQ effect per band
 // to the current stream and update its parameters whenever a band's gain
 // changes. The FX handles must be re-attached when the underlying stream
 // changes (gapless swap, track change), so AudioEngine notifies us via the
@@ -12,28 +12,38 @@
 import { BASS_FX_BFX_PEAKEQ } from './bass-constants'
 import {
   BASS_BFX_CHANALL,
-  DEFAULT_EQ_FREQS,
   loadBassFx,
   type PeakEqParams,
 } from './bass-fx-ffi'
 import { loadBass, type HFX, type HSTREAM } from './bass-ffi'
 import type { EqPreviewScope } from '@shared/types/ipc-contract'
+import {
+  EQ_BAND_COUNT,
+  EQ_BAND_FREQUENCIES,
+  EQ_FILTER_BANDWIDTH,
+  clampEqGain,
+  normalizeEqBands,
+} from '@shared/constants/equalizer'
 
 export interface EQState {
   enabled: boolean
   preset: string
-  bands: number[]  // 10 gains in dB, one per DEFAULT_EQ_FREQS entry
+  bands: number[]  // gains in dB, one per EQ_BAND_FREQUENCIES entry
 }
 
-const FLAT_BANDS: number[] = DEFAULT_EQ_FREQS.map(() => 0)
+const FLAT_BANDS: number[] = normalizeEqBands(null)
 
-const PRESETS: Record<string, number[]> = {
+const LEGACY_PRESETS: Record<string, number[]> = {
   Flat:       [  0,  0,  0,  0,  0,  0,  0,  0,  0,  0 ],
   Vocal:      [ -2, -1,  0,  1,  3,  3,  2,  1,  0, -1 ],
   Jazz:       [  2,  1,  0,  0, -1,  0,  1,  2,  3,  3 ],
   Electronic: [  4,  3,  1,  0, -2, -1,  1,  2,  3,  4 ],
   Acoustic:   [  3,  2,  1,  1,  2,  2,  1,  2,  3,  2 ],
 }
+
+const PRESETS: Record<string, number[]> = Object.fromEntries(
+  Object.entries(LEGACY_PRESETS).map(([name, bands]) => [name, normalizeEqBands(bands)]),
+) as Record<string, number[]>
 
 let manager: EQManager | null = null
 
@@ -78,8 +88,8 @@ export class EQManager {
   }
 
   setBand(index: number, gainDb: number): void {
-    if (index < 0 || index >= DEFAULT_EQ_FREQS.length) return
-    const clamped = this.clampGain(gainDb)
+    if (index < 0 || index >= EQ_BAND_COUNT) return
+    const clamped = clampEqGain(gainDb)
     this.state.bands[index] = clamped
     this.state.preset = 'Custom'
     // Only push to FX if no override is active — otherwise the override would
@@ -91,7 +101,7 @@ export class EQManager {
 
   setBands(bands: number[]): void {
     if (!Array.isArray(bands)) return
-    this.state.bands = DEFAULT_EQ_FREQS.map((_, i) => this.clampGain(bands[i]))
+    this.state.bands = normalizeEqBands(bands)
     this.state.preset = 'Custom'
     if (this.state.enabled && !this.activeOverride && this.currentStream !== 0) {
       this.applyAllBandsToFx()
@@ -100,18 +110,18 @@ export class EQManager {
 
   previewBand(index: number, gainDb: number, scope: EqPreviewScope): boolean {
     if (!this.state.enabled || this.currentStream === 0) return false
-    if (index < 0 || index >= DEFAULT_EQ_FREQS.length) return false
+    if (index < 0 || index >= EQ_BAND_COUNT) return false
     if (scope === 'override' && !this.activeOverride) return false
     if (scope === 'global' && this.activeOverride) return false
     if (!this.fxHandles[index]) return false
-    this.applyBandWithGain(index, this.clampGain(gainDb))
+    this.applyBandWithGain(index, clampEqGain(gainDb))
     return true
   }
 
   // Activate or clear a per-track override. Pass `null` to drop back to global.
   applyOverride(bands: number[] | null): void {
-    if (bands && bands.length === DEFAULT_EQ_FREQS.length) {
-      this.activeOverride = bands.map(g => this.clampGain(g))
+    if (Array.isArray(bands)) {
+      this.activeOverride = normalizeEqBands(bands)
     } else {
       this.activeOverride = null
     }
@@ -124,8 +134,8 @@ export class EQManager {
   // for this track" mode). No-op if no override is currently active.
   setOverrideBand(index: number, gainDb: number): boolean {
     if (!this.activeOverride) return false
-    if (index < 0 || index >= DEFAULT_EQ_FREQS.length) return false
-    const clamped = this.clampGain(gainDb)
+    if (index < 0 || index >= EQ_BAND_COUNT) return false
+    const clamped = clampEqGain(gainDb)
     this.activeOverride[index] = clamped
     if (this.state.enabled && this.fxHandles[index]) {
       this.applyBand(index)
@@ -146,7 +156,7 @@ export class EQManager {
     if (!this.state.enabled || this.currentStream === 0) return
 
     const bass = loadBass()
-    for (let i = 0; i < DEFAULT_EQ_FREQS.length; i++) {
+    for (let i = 0; i < EQ_BAND_COUNT; i++) {
       // Each band gets its own PEAKEQ instance. Priority is 0; ordering
       // within BASS doesn't matter for parallel peaking filters.
       const fx = bass.ChannelSetFX(this.currentStream, BASS_FX_BFX_PEAKEQ, 0)
@@ -179,18 +189,13 @@ export class EQManager {
     const fxLib = loadBassFx()
     const params: PeakEqParams = {
       lBand:      index,
-      fBandwidth: 1.0,                 // 1-octave bandwidth (matches Swift defaults)
+      fBandwidth: EQ_FILTER_BANDWIDTH,
       fQ:         0,
-      fCenter:    DEFAULT_EQ_FREQS[index],
-      fGain:      this.clampGain(gainDb),
+      fCenter:    EQ_BAND_FREQUENCIES[index],
+      fGain:      clampEqGain(gainDb),
       lChannel:   BASS_BFX_CHANALL,
     }
     fxLib.FXSetParameters(fx, params)
-  }
-
-  private clampGain(gainDb: number | undefined): number {
-    const value = Number(gainDb)
-    return Math.max(-15, Math.min(15, Number.isFinite(value) ? value : 0))
   }
 }
 
@@ -199,4 +204,4 @@ export function getEQManager(): EQManager {
   return manager
 }
 
-export { DEFAULT_EQ_FREQS, PRESETS }
+export { EQ_BAND_FREQUENCIES, PRESETS }

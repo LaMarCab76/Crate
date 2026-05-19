@@ -3,6 +3,7 @@
 
 import { create } from 'zustand'
 import type { EqPreviewScope, EqState, EqTrackOverride } from '@shared/types/ipc-contract'
+import { EQ_BAND_COUNT, normalizeEqBands } from '@shared/constants/equalizer'
 
 interface EqStoreState extends EqState {
   presetNames: string[]
@@ -17,7 +18,7 @@ interface EqStoreState extends EqState {
 export const useEqStore = create<EqStoreState>(set => ({
   enabled: false,
   preset: 'Flat',
-  bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  bands: new Array(EQ_BAND_COUNT).fill(0),
   overrideBands: null,
   presetNames: ['Flat', 'Vocal', 'Jazz', 'Electronic', 'Acoustic'],
 
@@ -28,6 +29,7 @@ export const useEqStore = create<EqStoreState>(set => ({
   async setBand(index, gain) {
     await window.api.eq.setBand(index, gain)
     set(state => {
+      if (index < 0 || index >= EQ_BAND_COUNT) return state
       const bands = [...state.bands]
       bands[index] = gain
       return { bands, preset: 'Custom' }
@@ -35,7 +37,7 @@ export const useEqStore = create<EqStoreState>(set => ({
   },
   async setBands(bands) {
     await window.api.eq.setBands(bands)
-    set({ bands: [...bands], preset: 'Custom' })
+    set({ bands: normalizeEqBands(bands), preset: 'Custom' })
   },
   async previewBand(index, gain, scope) {
     await window.api.eq.previewBand(index, gain, scope)
@@ -46,7 +48,7 @@ export const useEqStore = create<EqStoreState>(set => ({
   },
   async setTrackOverride(trackId, override) {
     await window.api.eq.setTrackOverride(trackId, override)
-    set({ overrideBands: override?.enabled ? [...override.bands] : null })
+    set({ overrideBands: override?.enabled ? normalizeEqBands(override.bands) : null })
   },
 }))
 
@@ -55,8 +57,8 @@ if (typeof window !== 'undefined' && window.api?.eq) {
     useEqStore.setState({
       enabled: s.enabled,
       preset: s.preset,
-      bands: s.bands,
-      overrideBands: s.overrideBands ?? null,
+      bands: normalizeEqBands(s.bands),
+      overrideBands: s.overrideBands ? normalizeEqBands(s.overrideBands) : null,
     })
   }).catch(() => { /* main not ready yet */ })
   window.api.eq.presets().then(names => {
@@ -66,8 +68,8 @@ if (typeof window !== 'undefined' && window.api?.eq) {
     useEqStore.setState({
       enabled: state.enabled,
       preset: state.preset,
-      bands: state.bands,
-      overrideBands: state.overrideBands ?? null,
+      bands: normalizeEqBands(state.bands),
+      overrideBands: state.overrideBands ? normalizeEqBands(state.overrideBands) : null,
     })
   })
 }

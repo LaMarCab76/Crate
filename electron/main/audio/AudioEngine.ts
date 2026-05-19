@@ -12,12 +12,19 @@
 import { broadcast } from '../ipc/events'
 import {
   BASS_ACTIVE_PAUSED, BASS_ACTIVE_PLAYING, BASS_ACTIVE_STOPPED,
-  BASS_ATTRIB_VOL, BASS_DATA_FFT2048, BASS_POS_BYTE, BASS_SAMPLE_FLOAT,
+  BASS_ATTRIB_VOL, BASS_DATA_FFT2048, BASS_DEVICE_DEFAULT, BASS_DEVICE_ENABLED,
+  BASS_DEVICE_INIT, BASS_DEVICE_LOOPBACK, BASS_POS_BYTE, BASS_SAMPLE_FLOAT,
   BASS_STREAM_PRESCAN, bassErrorName,
 } from './bass-constants'
-import { loadBass, makeChannelGetInfo, type BassChannelInfo, type HSTREAM } from './bass-ffi'
+import {
+  loadBass,
+  makeChannelGetInfo,
+  type BassChannelInfo,
+  type BassDeviceInfo,
+  type HSTREAM,
+} from './bass-ffi'
 import { loadAllPlugins } from './PluginLoader'
-import type { FftMode } from '@shared/types/ipc-contract'
+import type { AudioOutputDevice, FftMode } from '@shared/types/ipc-contract'
 
 // FFT2048 returns 1024 complex bins as magnitudes (0..1).
 const FFT_BINS_RAW = 1024
@@ -34,6 +41,8 @@ const FFT_INTERVAL_MS: Record<Exclude<FftMode, 'off' | 'screen'>, number> = {
   full: 33,
 }
 const DEFAULT_SCREEN_FFT_INTERVAL_MS = 16
+const DEFAULT_OUTPUT_FREQ = 48000
+const DEFAULT_OUTPUT_FLAGS = 0
 
 export type PlaybackStatus = 'stopped' | 'playing' | 'paused' | 'loading'
 
@@ -70,7 +79,7 @@ export class AudioEngine {
     // device=-1 lets BASS pick the default output, freq=44100 is a sane
     // default — BASS will resample our streams as needed. flags=0 keeps the
     // BASSFLOAT/sample-rate-sync features off for now.
-    const ok = bass.Init(-1, 48000, 0, 0n, 0n)
+    const ok = bass.Init(-1, DEFAULT_OUTPUT_FREQ, DEFAULT_OUTPUT_FLAGS, 0n, 0n)
     if (!ok) {
       const code = bass.ErrorGetCode()
       throw new Error(`BASS_Init failed: ${bassErrorName(code)} (${code})`)
@@ -202,6 +211,82 @@ export class AudioEngine {
     this.syncFftTimer()
   }
 
+  listOutputDevices(): AudioOutputDevice[] {
+    this.ensureInit()
+    const bass = loadBass()
+    const currentDevice = bass.GetDevice()
+    const devices: AudioOutputDevice[] = []
+
+    for (let id = 1; id < 256; id += 1) {
+      const info = this.readDeviceInfo(id)
+      if (!info) break
+      if ((info.flags & BASS_DEVICE_ENABLED) === 0) continue
+      if ((info.flags & BASS_DEVICE_LOOPBACK) !== 0) continue
+      devices.push(this.toOutputDevice(id, info, currentDevice))
+    }
+
+    return devices
+  }
+
+  getOutputDevice(): AudioOutputDevice | null {
+    const devices = this.listOutputDevices()
+    return devices.find(d => d.isCurrent) ?? devices.find(d => d.isDefault) ?? devices[0] ?? null
+  }
+
+  setOutputDevice(deviceId: number): AudioOutputDevice {
+    this.ensureInit()
+    const target = this.readDeviceInfo(deviceId)
+    if (!target || (target.flags & BASS_DEVICE_ENABLED) === 0 || (target.flags & BASS_DEVICE_LOOPBACK) !== 0) {
+      throw new Error(`Audio output device ${deviceId} is not available`)
+    }
+
+    const bass = loadBass()
+    const wasPlaying = this.getStatus() === 'playing'
+
+    if ((target.flags & BASS_DEVICE_INIT) === 0) {
+      const ok = bass.Init(deviceId, DEFAULT_OUTPUT_FREQ, DEFAULT_OUTPUT_FLAGS, 0n, 0n)
+      if (!ok) {
+        const code = bass.ErrorGetCode()
+        throw new Error(`BASS_Init device ${deviceId} failed: ${bassErrorName(code)} (${code})`)
+      }
+    }
+
+    if (!bass.SetDevice(deviceId)) {
+      const code = bass.ErrorGetCode()
+      throw new Error(`BASS_SetDevice ${deviceId} failed: ${bassErrorName(code)} (${code})`)
+    }
+
+    if (this.currentStream !== 0) {
+      if (!bass.ChannelSetDevice(this.currentStream, deviceId)) {
+        const code = bass.ErrorGetCode()
+        throw new Error(`BASS_ChannelSetDevice failed: ${bassErrorName(code)} (${code})`)
+      }
+      bass.ChannelSetAttribute(this.currentStream, BASS_ATTRIB_VOL, this.volume)
+
+      if (wasPlaying) {
+        if (!bass.Start()) {
+          const code = bass.ErrorGetCode()
+          console.warn(`[audio] BASS_Start on device ${deviceId} failed: ${bassErrorName(code)} (${code})`)
+        }
+        if (!bass.ChannelPlay(this.currentStream, 0)) {
+          const code = bass.ErrorGetCode()
+          throw new Error(`BASS_ChannelPlay after device switch failed: ${bassErrorName(code)} (${code})`)
+        }
+        this.setStatus('playing')
+        this.startProgressTimer()
+      }
+    }
+
+    return this.getOutputDevice() ?? this.toOutputDevice(deviceId, target, deviceId)
+  }
+
+  moveStreamToOutputDevice(handle: HSTREAM, deviceId: number): boolean {
+    if (handle === 0) return true
+    this.ensureInit()
+    const bass = loadBass()
+    return Boolean(bass.ChannelSetDevice(handle, deviceId))
+  }
+
   getStatus(): PlaybackStatus {
     if (this.currentStream === 0) return 'stopped'
     const bass = loadBass()
@@ -218,6 +303,25 @@ export class AudioEngine {
   getCurrentPath(): string | null { return this.currentPath }
   getStreamInfo(): StreamInfo | null { return this.streamInfo }
   getVolume(): number { return this.volume }
+
+  private readDeviceInfo(deviceId: number): BassDeviceInfo | null {
+    const bass = loadBass()
+    const info = { name: null, driver: null, flags: 0 } as Record<string, unknown>
+    if (!bass.GetDeviceInfo(deviceId, info)) return null
+    return info as unknown as BassDeviceInfo
+  }
+
+  private toOutputDevice(deviceId: number, info: BassDeviceInfo, currentDevice: number): AudioOutputDevice {
+    return {
+      id: deviceId,
+      name: info.name?.trim() || `Output ${deviceId}`,
+      driver: info.driver?.trim() || null,
+      flags: info.flags,
+      isDefault: (info.flags & BASS_DEVICE_DEFAULT) !== 0,
+      isCurrent: deviceId === currentDevice,
+      isInitialized: (info.flags & BASS_DEVICE_INIT) !== 0,
+    }
+  }
 
   // Position (in seconds) computed from the current byte cursor.
   getPosition(): number {

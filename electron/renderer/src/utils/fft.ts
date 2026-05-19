@@ -4,6 +4,7 @@
 // no-consumer states turn analysis off.
 
 import type { FftMode } from '@shared/types/ipc-contract'
+import { EQ_BAND_COUNT } from '@shared/constants/equalizer'
 
 type FftSubscriptionMode = Exclude<FftMode, 'off' | 'screen'>
 type Listener = (bins: number[]) => void
@@ -102,12 +103,11 @@ function syncFftMode(): void {
 }
 
 // Collapse the 64 log-spaced bins emitted by the audio engine into N band
-// averages. Used by the EQ visualizer to render one column per EQ band
-// (default 10: 32 / 64 / 125 / 250 / 500 / 1k / 2k / 4k / 8k / 16k Hz). The
+// averages. Used by the EQ visualizer to render one column per EQ band. The
 // source bins are already log-spaced over the original 1024 raw FFT bins, so
 // slicing them into N contiguous groups gives a roughly log-aligned mapping
 // onto the EQ band centers.
-export function binsToBands(bins: number[], bandCount = 10, out?: Float32Array): Float32Array {
+export function binsToBands(bins: number[], bandCount = EQ_BAND_COUNT, out?: Float32Array): Float32Array {
   const target = out && out.length === bandCount ? out : new Float32Array(bandCount)
   const len = bins.length
   if (len === 0) {

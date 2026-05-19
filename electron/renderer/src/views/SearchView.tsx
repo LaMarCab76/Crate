@@ -2,25 +2,25 @@ import { useEffect, useState } from 'react'
 import type { Album, Artist } from '@shared/types/library'
 import type { SearchResultsPayload } from '@shared/types/ipc-contract'
 import { Artwork } from '@renderer/components/Artwork'
-import { Icon } from '@renderer/components/Icon'
 import { TrackTable } from '@renderer/components/TrackTable'
 import { dbToUiAlbum, dbToUiArtist, dbToUiTrack } from '@renderer/stores/adapters'
 
 interface Props {
+  query: string
   onSelectAlbum?: (al: Album) => void
   onSelectArtist?: (ar: Artist) => void
 }
 
-export function SearchView({ onSelectAlbum, onSelectArtist }: Props) {
-  const [q, setQ] = useState('')
+export function SearchView({ query, onSelectAlbum, onSelectArtist }: Props) {
   const [results, setResults] = useState<SearchResultsPayload>({ tracks: [], albums: [], artists: [] })
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     let canceled = false
-    const trimmed = q.trim()
+    const trimmed = query.trim()
     if (trimmed.length === 0) {
       setResults({ tracks: [], albums: [], artists: [] })
+      setLoading(false)
       return
     }
     setLoading(true)
@@ -36,7 +36,7 @@ export function SearchView({ onSelectAlbum, onSelectArtist }: Props) {
       canceled = true
       window.clearTimeout(handle)
     }
-  }, [q])
+  }, [query])
 
   const tracks = results.tracks.map(dbToUiTrack)
   const albums = results.albums.map(a => dbToUiAlbum(a))
@@ -44,17 +44,7 @@ export function SearchView({ onSelectAlbum, onSelectArtist }: Props) {
 
   return (
     <div className="search-page">
-      <div className="search-bigbar">
-        <Icon name="search" size={18} style={{ color: 'var(--text-secondary)' }} />
-        <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search your library…" />
-        {q && (
-          <button className="tb-icon-btn" onClick={() => setQ('')}>
-            <Icon name="close" size={14} />
-          </button>
-        )}
-      </div>
-
-      {q.trim().length === 0 ? (
+      {query.trim().length === 0 ? (
         <div className="search-section">
           <h3>Recent searches</h3>
           <div style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>
@@ -108,7 +98,7 @@ export function SearchView({ onSelectAlbum, onSelectArtist }: Props) {
             </div>
           )}
           {!loading && tracks.length === 0 && albums.length === 0 && artists.length === 0 && (
-            <div style={{ padding: 24, color: 'var(--text-tertiary)' }}>No results for "{q}".</div>
+            <div style={{ padding: 24, color: 'var(--text-tertiary)' }}>No results for "{query}".</div>
           )}
         </>
       )}

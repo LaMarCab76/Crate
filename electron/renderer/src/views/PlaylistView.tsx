@@ -12,6 +12,31 @@ interface Props {
 export function PlaylistView({ playlist }: Props) {
   const albums = useAlbums()
   if (!playlist) return null
+  if (playlist.tracks.length === 0) {
+    return (
+      <div
+        style={{
+          flex: 1,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexDirection: 'column',
+          padding: 48,
+          gap: 16,
+          color: 'var(--text-secondary)',
+        }}
+      >
+        <Icon name="heartF" size={48} />
+        <h1 style={{ margin: 0, fontSize: 22, color: 'var(--text-primary)' }}>
+          Aún no hay canciones favoritas
+        </h1>
+        <div style={{ maxWidth: 420, textAlign: 'center' }}>
+          Esta playlist inteligente está siempre disponible. Marcá canciones con el corazón para irla llenando.
+        </div>
+      </div>
+    )
+  }
+
   const total = playlist.tracks.reduce((s, t) => s + t.d, 0)
   return (
     <>

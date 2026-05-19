@@ -21,6 +21,7 @@ import type {
   BackupTrack,
 } from '@shared/types/library-backup'
 import { BACKUP_FILENAME, BACKUP_VERSION } from '@shared/types/library-backup'
+import { isSupportedEqBandCount, normalizeEqBands } from '@shared/constants/equalizer'
 
 const DEBOUNCE_MS = 2000
 const APP_NAME = 'HiFidelity2'
@@ -42,8 +43,8 @@ function parseExtMetaEq(jsonStr: string | null): BackupEqOverride | null {
   try {
     const blob = JSON.parse(jsonStr) as { eqOverride?: BackupEqOverride }
     const eq = blob.eqOverride
-    if (eq && Array.isArray(eq.bands) && eq.bands.length === 10) {
-      return { enabled: !!eq.enabled, bands: eq.bands.map(n => Number(n) || 0) }
+    if (eq && Array.isArray(eq.bands) && isSupportedEqBandCount(eq.bands.length)) {
+      return { enabled: !!eq.enabled, bands: normalizeEqBands(eq.bands) }
     }
   } catch {
     /* malformed JSON in the column — treat as absent */
@@ -149,10 +150,10 @@ class LibraryBackupService {
           }
           if (jt.eqOverride === null) {
             delete blob.eqOverride
-          } else {
+          } else if (Array.isArray(jt.eqOverride.bands) && isSupportedEqBandCount(jt.eqOverride.bands.length)) {
             blob.eqOverride = {
               enabled: !!jt.eqOverride.enabled,
-              bands: jt.eqOverride.bands.slice(0, 10),
+              bands: normalizeEqBands(jt.eqOverride.bands),
             }
           }
           nextExtMeta = Object.keys(blob).length === 0 ? null : JSON.stringify(blob)

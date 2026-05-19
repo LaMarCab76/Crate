@@ -1,5 +1,5 @@
 // koffi bindings for libbass_fx.dylib. We expose only what we actually use:
-// the 10-band peaking equalizer. Reverb / volume FX live in the same library
+// the multi-band peaking equalizer. Reverb / volume FX live in the same library
 // and can be added later by adding more struct definitions and func calls.
 
 import { app } from 'electron'
@@ -53,11 +53,5 @@ export function loadBassFx(): BassFxBindings {
   }
   return bindings
 }
-
-// Default 10-band frequency layout (matches AudioEffectsManager.swift in the
-// legacy app). All bands start flat (0 dB gain), bandwidth 1 octave.
-export const DEFAULT_EQ_FREQS: ReadonlyArray<number> = [
-  32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000,
-]
 
 export const BASS_BFX_CHANALL = -1

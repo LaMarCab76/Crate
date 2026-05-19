@@ -15,9 +15,8 @@ import { SearchView } from './views/SearchView'
 import { SettingsView } from './views/SettingsView'
 import { ImportView } from './views/ImportView'
 import { GenresView } from './views/GenresView'
-import { ComingSoonView } from './views/ComingSoonView'
 import { useTweaks } from './stores/settingsStore'
-import { useLibraryStore } from './stores/libraryStore'
+import { useFavoriteTracks, useLibraryStore } from './stores/libraryStore'
 import { usePlaybackStore } from './stores/playbackStore'
 
 export type View =
@@ -26,13 +25,13 @@ export type View =
   | { kind: 'albums' }
   | { kind: 'artists' }
   | { kind: 'genres' }
-  | { kind: 'composers' }
   | { kind: 'search' }
   | { kind: 'settings' }
   | { kind: 'import' }
   | { kind: 'album'; album: Album }
   | { kind: 'artist'; artist: Artist }
   | { kind: 'playlist'; playlist: Playlist }
+  | { kind: 'favoriteTracks' }
 
 export default function App() {
   const [tweak, setTweak] = useTweaks()
@@ -40,10 +39,12 @@ export default function App() {
   const [idx, setIdx] = useState(0)
   const [expanded, setExpanded] = useState(false)
   const [showLyrics, setShowLyrics] = useState(true)
+  const [searchQuery, setSearchQuery] = useState('')
 
   const refresh = useLibraryStore(s => s.refresh)
   const loaded = useLibraryStore(s => s.loaded)
   const nowTrack = usePlaybackStore(s => s.currentTrack)
+  const favoriteTracks = useFavoriteTracks()
 
   const view = history[idx]
 
@@ -84,10 +85,10 @@ export default function App() {
       case 'albums':    return 'albums'
       case 'artists':   return 'artists'
       case 'genres':    return 'genres'
-      case 'composers': return 'composers'
       case 'recent':    return 'recent'
       case 'playlist':  return 'pl-' + view.playlist.id
       case 'artist':    return 'ar-' + view.artist.id
+      case 'favoriteTracks': return 'pfavorites'
       default:          return null
     }
   })()
@@ -110,11 +111,25 @@ export default function App() {
             onSelectAlbum={al => navigate({ kind: 'album', album: al })}
           />
         )
+      case 'favoriteTracks':
+        return (
+          <PlaylistView
+            playlist={{
+              id: 'pfavorites',
+              name: 'Temas favoritos',
+              count: favoriteTracks.length,
+              kind: 'smart',
+              icon: 'heartF',
+              tracks: favoriteTracks,
+            }}
+          />
+        )
       case 'playlist':
         return <PlaylistView playlist={view.playlist} />
       case 'search':
         return (
           <SearchView
+            query={searchQuery}
             onSelectAlbum={al => navigate({ kind: 'album', album: al })}
             onSelectArtist={ar => navigate({ kind: 'artist', artist: ar })}
           />
@@ -125,13 +140,6 @@ export default function App() {
         return <ImportView />
       case 'genres':
         return <GenresView onSelectAlbum={al => navigate({ kind: 'album', album: al })} />
-      case 'composers':
-        return (
-          <ComingSoonView
-            title="Composers"
-            hint="Group tracks by composer metadata. Add composer tags via Track Info or scan from your watched folders."
-          />
-        )
       default:
         return <LibraryView />
     }
@@ -147,6 +155,8 @@ export default function App() {
             translucent={tweak.translucent}
             onSelectPlaylist={pl => navigate({ kind: 'playlist', playlist: pl })}
             onSelectArtist={ar => navigate({ kind: 'artist', artist: ar })}
+            onSelectFavoriteTracks={() => navigate({ kind: 'favoriteTracks' })}
+            favoriteTracksCount={favoriteTracks.length}
           />
 
           <div className="main-area">
@@ -157,15 +167,17 @@ export default function App() {
               onBack={() => idx > 0 && setIdx(idx - 1)}
               onForward={() => idx < history.length - 1 && setIdx(idx + 1)}
               onNavigate={navigate}
+              searchQuery={searchQuery}
+              onSearchQueryChange={setSearchQuery}
             />
             <div className="content">{renderContent()}</div>
           </div>
 
-          <PlayerPane
-            expanded={expanded}
-            onExpand={() => setExpanded(true)}
-            onMini={() => setTweak('showMini', true)}
-          />
+        <PlayerPane
+          expanded={expanded}
+          onExpand={() => setExpanded(true)}
+          onMini={() => setTweak('showMini', true)}
+        />
         </div>
 
         {expanded && nowTrack && (

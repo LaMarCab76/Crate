@@ -1,5 +1,6 @@
 import type { Database as BetterSqliteDatabase, Statement } from 'better-sqlite3'
 import type { DbTrack, DbTrackInsert } from '@shared/types/db'
+import { isSupportedEqBandCount, normalizeEqBands } from '@shared/constants/equalizer'
 
 const ALL_COLUMNS = `
   id, path, filename, title, artist, album, duration, format, folder_id,
@@ -22,7 +23,7 @@ export interface ListOpts {
 
 export interface EqOverride {
   enabled: boolean
-  bands: number[]  // 10 gains in dB
+  bands: number[]  // EQ gains in dB
 }
 
 export class TrackRepo {
@@ -32,8 +33,10 @@ export class TrackRepo {
   private stmtDeleteByPath: Statement
   private stmtUpdatePlays: Statement
   private stmtSetFavorite: Statement
+  private stmtByFolderWithAlbum: Statement
   private stmtGetExtMeta: Statement
   private stmtSetExtMeta: Statement
+  private stmtUpdateMetadata: Statement
   private stmtInsert: Statement
   private listStmtCache = new Map<string, Statement>()
 
@@ -50,12 +53,51 @@ export class TrackRepo {
     this.stmtSetFavorite = db.prepare(
       `UPDATE tracks SET is_favorite = ?, state_updated_at = ? WHERE id = ?`,
     )
+    this.stmtByFolderWithAlbum = db.prepare<
+      [number], DbTrack
+    >(`
+      SELECT ${ALL_COLUMNS} FROM tracks
+      WHERE folder_id = ? AND album_id IS NOT NULL
+      ORDER BY date_added DESC
+    `)
     this.stmtGetExtMeta = db.prepare<[number], { extended_metadata: string | null }>(
       `SELECT extended_metadata FROM tracks WHERE id = ?`,
     )
     this.stmtSetExtMeta = db.prepare(
       `UPDATE tracks SET extended_metadata = ?, state_updated_at = ? WHERE id = ?`,
     )
+    this.stmtUpdateMetadata = db.prepare(`
+      UPDATE tracks
+      SET
+        title = @title,
+        artist = @artist,
+        album = @album,
+        album_artist = @albumArtist,
+        composer = @composer,
+        genre = @genre,
+        year = @year,
+        track_number = @trackNumber,
+        total_tracks = @totalTracks,
+        disc_number = @discNumber,
+        total_discs = @totalDiscs,
+        compilation = @compilation,
+        duration = @duration,
+        format = @format,
+        codec = @codec,
+        bitrate = @bitrate,
+        sample_rate = @sampleRate,
+        channels = @channels,
+        bit_depth = @bitDepth,
+        file_size = @fileSize,
+        date_modified = @dateModified,
+        artwork_path = @artworkPath,
+        filename = @filename,
+        artist_id = @artistId,
+        album_id = @albumId,
+        genre_id = @genreId,
+        state_updated_at = @stateUpdatedAt
+      WHERE id = @id
+    `)
     this.stmtInsert = db.prepare(`
       INSERT INTO tracks (
         path, filename, title, artist, album, duration, format, folder_id,
@@ -99,6 +141,71 @@ export class TrackRepo {
 
   setFavorite(id: number, favorite: boolean): void {
     this.stmtSetFavorite.run(favorite ? 1 : 0, Date.now(), id)
+  }
+
+  getByFolderWithAlbum(folderId: number): DbTrack[] {
+    return this.stmtByFolderWithAlbum.all(folderId) as DbTrack[]
+  }
+
+  updateMetadata(args: {
+    id: number
+    title: string
+    artist: string
+    album: string
+    albumArtist: string | null
+    composer: string
+    genre: string
+    year: string
+    trackNumber: number | null
+    totalTracks: number | null
+    discNumber: number | null
+    totalDiscs: number | null
+    compilation: number
+    duration: number
+    format: string
+    codec: string | null
+    bitrate: number | null
+    sampleRate: number | null
+    channels: number | null
+    bitDepth: number | null
+    fileSize: number | null
+    dateModified: string | null
+    artworkPath: string | null
+    filename: string
+    artistId: number | null
+    albumId: number | null
+    genreId: number | null
+  }): void {
+    this.stmtUpdateMetadata.run({
+      id: args.id,
+      title: args.title,
+      artist: args.artist,
+      album: args.album,
+      albumArtist: args.albumArtist,
+      composer: args.composer,
+      genre: args.genre,
+      year: args.year,
+      trackNumber: args.trackNumber,
+      totalTracks: args.totalTracks,
+      discNumber: args.discNumber,
+      totalDiscs: args.totalDiscs,
+      compilation: args.compilation,
+      duration: args.duration,
+      format: args.format,
+      codec: args.codec,
+      bitrate: args.bitrate,
+      sampleRate: args.sampleRate,
+      channels: args.channels,
+      bitDepth: args.bitDepth,
+      fileSize: args.fileSize,
+      dateModified: args.dateModified,
+      artworkPath: args.artworkPath,
+      filename: args.filename,
+      artistId: args.artistId,
+      albumId: args.albumId,
+      genreId: args.genreId,
+      stateUpdatedAt: Date.now(),
+    })
   }
 
   insert(track: DbTrackInsert): number {
@@ -148,8 +255,8 @@ export class TrackRepo {
     try {
       const parsed = JSON.parse(row.extended_metadata) as { eqOverride?: EqOverride }
       const eq = parsed.eqOverride
-      if (!eq || !Array.isArray(eq.bands) || eq.bands.length !== 10) return null
-      return { enabled: !!eq.enabled, bands: eq.bands.map(n => Number(n) || 0) }
+      if (!eq || !Array.isArray(eq.bands) || !isSupportedEqBandCount(eq.bands.length)) return null
+      return { enabled: !!eq.enabled, bands: normalizeEqBands(eq.bands) }
     } catch {
       return null
     }
@@ -164,7 +271,7 @@ export class TrackRepo {
     if (override === null) {
       delete blob.eqOverride
     } else {
-      blob.eqOverride = { enabled: !!override.enabled, bands: override.bands.slice(0, 10) }
+      blob.eqOverride = { enabled: !!override.enabled, bands: normalizeEqBands(override.bands) }
     }
     const next = Object.keys(blob).length === 0 ? null : JSON.stringify(blob)
     this.stmtSetExtMeta.run(next, Date.now(), id)

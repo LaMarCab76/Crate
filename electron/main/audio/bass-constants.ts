@@ -21,6 +21,12 @@ export const BASS_ACTIVE_STALLED = 2
 export const BASS_ACTIVE_PAUSED  = 3
 export const BASS_ACTIVE_PAUSED_DEVICE = 4
 
+// Output device flags (BASS_DEVICEINFO.flags)
+export const BASS_DEVICE_ENABLED = 1
+export const BASS_DEVICE_DEFAULT = 2
+export const BASS_DEVICE_INIT    = 4
+export const BASS_DEVICE_LOOPBACK = 8
+
 // Sync types
 export const BASS_SYNC_POS         = 0
 export const BASS_SYNC_END         = 2
@@ -122,7 +128,7 @@ export const BASS_DATA_FFT2048  = 0x80000003
 
 // ---------------- BASS_FX ----------------
 
-// EQ filter types — we only use PEAKEQ (10-band parametric peak).
+// EQ filter types — we only use PEAKEQ (multi-band parametric peak).
 export const BASS_FX_BFX_PEAKEQ = 0x10000
 
 // ---------------- Helper ----------------

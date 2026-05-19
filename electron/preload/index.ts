@@ -120,6 +120,10 @@ const api: Api = {
     setActiveTrack: (trackId: number | null) =>
       ipcRenderer.invoke('audio:setActiveTrack', { trackId }) as Promise<void>,
     getStatus: () => ipcRenderer.invoke('audio:getStatus') as Promise<PlaybackStatePayload>,
+    listOutputDevices: () => ipcRenderer.invoke('audio:devices:list'),
+    setOutputDevice: (deviceId: number) =>
+      ipcRenderer.invoke('audio:devices:set', { deviceId }),
+    getOutputDevice: () => ipcRenderer.invoke('audio:devices:current'),
     onProgress: (h) => subscribe<ProgressEvent>('audio:progress', h),
     onTrackEnded: (h) => subscribe<void>('audio:track-ended', () => h()),
     onGaplessFired: (h) => subscribe<{ path: string }>('audio:gapless-fired', h),
@@ -148,6 +152,10 @@ const api: Api = {
   tracks: {
     countPlay: (trackId: number) =>
       ipcRenderer.invoke('track:countPlay', trackId) as Promise<void>,
+    setFavorite: (id: number, favorite: boolean) =>
+      ipcRenderer.invoke('track:setFavorite', { id, favorite }) as Promise<void>,
+    refreshMetadata: (trackId: number) =>
+      ipcRenderer.invoke('track:refreshMetadata', trackId) as Promise<void>,
   },
   artists: {
     setFavorite: (id: number, favorite: boolean) =>

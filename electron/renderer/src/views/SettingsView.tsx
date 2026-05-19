@@ -1,13 +1,12 @@
 import { Icon } from '@renderer/components/Icon'
 import type { Tweak } from '@renderer/stores/settingsStore'
 import { useEqStore } from '@renderer/stores/eqStore'
+import { EQ_BAND_LABELS, EQ_GAIN_MAX, EQ_GAIN_MIN, EQ_GAIN_STEP } from '@shared/constants/equalizer'
 
 interface Props {
   tweak: Tweak
   setTweak: <K extends keyof Tweak>(key: K, value: Tweak[K]) => void
 }
-
-const EQ_LABELS = ['32', '64', '125', '250', '500', '1k', '2k', '4k', '8k', '16k']
 
 export function SettingsView({ tweak, setTweak }: Props) {
   return (
@@ -200,6 +199,7 @@ function EqPanel() {
   const setEnabled = useEqStore(s => s.setEnabled)
   const setBand = useEqStore(s => s.setBand)
   const setPreset = useEqStore(s => s.setPreset)
+  const selectedPreset = presetNames.includes(preset) ? preset : 'Custom'
 
   return (
     <>
@@ -207,7 +207,7 @@ function EqPanel() {
         <div className="set-row">
           <div>
             <div className="lbl">Enable equalizer</div>
-            <div className="sub">10-band peaking EQ applied to the BASS playback chain.</div>
+            <div className="sub">15-band peaking EQ applied to the BASS playback chain.</div>
           </div>
           <div
             className={`toggle ${enabled ? 'on' : ''}`}
@@ -220,23 +220,24 @@ function EqPanel() {
       </div>
 
       <div className="eq-graph" style={{ opacity: enabled ? 1 : 0.45 }}>
-        {bands.map((gain, i) => {
-          // Map -15..+15 dB → 0..1 for the column fill height; center at 0 dB.
-          const normalized = (gain + 15) / 30
+        {EQ_BAND_LABELS.map((label, i) => {
+          // Map the gain range to 0..1 for the hidden design parity fill.
+          const gain = bands[i] ?? 0
+          const normalized = (gain - EQ_GAIN_MIN) / (EQ_GAIN_MAX - EQ_GAIN_MIN)
           return (
-            <div key={EQ_LABELS[i]} className="eq-band">
+            <div key={label} className="eq-band">
               <input
                 type="range"
-                min={-15}
-                max={15}
-                step={0.5}
+                min={EQ_GAIN_MIN}
+                max={EQ_GAIN_MAX}
+                step={EQ_GAIN_STEP}
                 value={gain}
                 disabled={!enabled}
                 onChange={e => { void setBand(i, parseFloat(e.target.value)) }}
-                title={`${EQ_LABELS[i]} Hz: ${gain.toFixed(1)} dB`}
+                title={`${label} Hz: ${gain.toFixed(1)} dB`}
                 style={{
                   flex: 1,
-                  width: 20,
+                  width: 16,
                   writingMode: 'vertical-lr',
                   direction: 'rtl',
                   // Vertical orientation via CSS appearance hint (browser-specific).
@@ -244,8 +245,8 @@ function EqPanel() {
                   ['WebkitAppearance' as never]: 'slider-vertical',
                 }}
               />
-              <div className="hz">{EQ_LABELS[i]}</div>
-              <div style={{ fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)' }}>
+              <div className="hz">{label}</div>
+              <div className="gain">
                 {gain > 0 ? `+${gain.toFixed(0)}` : gain.toFixed(0)}
               </div>
               {/* Visual track behind the slider for parity with the design */}
@@ -256,22 +257,24 @@ function EqPanel() {
           )
         })}
       </div>
-      <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span className="muted tiny">Preset:</span>
-        {presetNames.map(p => (
-          <div
-            key={p}
-            className="select"
-            style={{ background: p === preset ? 'var(--bg-selected)' : 'var(--bg-elev)', cursor: 'pointer' }}
-            onClick={() => { void setPreset(p) }}
-            role="button"
-            tabIndex={0}
-          >
-            {p}
-          </div>
-        ))}
+      <div className="eq-preset-row">
+        <label className="eq-preset-control">
+          <span>Preset</span>
+          <span className="eq-preset-select-wrap">
+            <select
+              value={selectedPreset}
+              onChange={e => { void setPreset(e.target.value) }}
+              aria-label="Equalizer preset"
+            >
+              <option value="Custom" disabled>Custom</option>
+              {presetNames.map(p => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+          </span>
+        </label>
         {preset === 'Custom' && (
-          <span className="muted tiny" style={{ marginLeft: 'auto' }}>Custom curve</span>
+          <span className="eq-custom-note">Custom curve</span>
         )}
       </div>
     </>

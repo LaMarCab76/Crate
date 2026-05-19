@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { Icon } from './Icon'
 import type { View } from '@renderer/App'
 
@@ -8,6 +9,8 @@ interface ToolbarProps {
   onBack: () => void
   onForward: () => void
   onNavigate: (v: View) => void
+  searchQuery: string
+  onSearchQueryChange: (query: string) => void
 }
 
 const titleMap: Record<View['kind'], string> = {
@@ -15,11 +18,11 @@ const titleMap: Record<View['kind'], string> = {
   albums: 'Albums',
   artists: 'Artists',
   genres: 'Genres',
-  composers: 'Composers',
   recent: 'Recently Added',
   album: 'Album',
   artist: 'Artist',
   playlist: 'Playlist',
+  favoriteTracks: 'Favorite Tracks',
   search: 'Search',
   settings: 'Preferences',
   import: 'Library Sources',
@@ -32,7 +35,35 @@ function titleForView(view: View): string {
   return titleMap[view.kind] ?? 'HiFidelity'
 }
 
-export function Toolbar({ view, history, idx, onBack, onForward, onNavigate }: ToolbarProps) {
+export function Toolbar({
+  view,
+  history,
+  idx,
+  onBack,
+  onForward,
+  onNavigate,
+  searchQuery,
+  onSearchQueryChange,
+}: ToolbarProps) {
+  const isSearchView = view.kind === 'search'
+  const searchInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!isSearchView) return
+    const frame = window.requestAnimationFrame(() => {
+      searchInputRef.current?.focus()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [isSearchView])
+
+  const focusSearch = () => {
+    if (!isSearchView) {
+      onNavigate({ kind: 'search' })
+      return
+    }
+    searchInputRef.current?.focus()
+  }
+
   return (
     <div className="toolbar">
       <button className="tb-nav-btn" disabled={idx <= 0} onClick={onBack} title="Back">
@@ -43,10 +74,32 @@ export function Toolbar({ view, history, idx, onBack, onForward, onNavigate }: T
       </button>
       <div className="tb-title">{titleForView(view)}</div>
 
-      <div className="tb-search" onClick={() => onNavigate({ kind: 'search' })}>
+      <div className={`tb-search${isSearchView ? ' is-active' : ''}`} onClick={focusSearch}>
         <Icon name="search" size={13} style={{ color: 'var(--text-tertiary)' }} />
-        <input placeholder="Search library…" readOnly />
-        <span className="mono tiny" style={{ color: 'var(--text-quaternary)' }}>⌘F</span>
+        <input
+          ref={searchInputRef}
+          aria-label="Search library"
+          placeholder="Search library…"
+          readOnly={!isSearchView}
+          value={isSearchView ? searchQuery : ''}
+          onChange={e => onSearchQueryChange(e.target.value)}
+        />
+        {isSearchView && searchQuery ? (
+          <button
+            className="tb-search-clear"
+            type="button"
+            onClick={e => {
+              e.stopPropagation()
+              onSearchQueryChange('')
+              searchInputRef.current?.focus()
+            }}
+            title="Clear search"
+          >
+            <Icon name="close" size={13} />
+          </button>
+        ) : (
+          <span className="mono tiny" style={{ color: 'var(--text-quaternary)' }}>⌘F</span>
+        )}
       </div>
 
       <button className="tb-icon-btn" onClick={() => onNavigate({ kind: 'import' })} title="Add to Library">

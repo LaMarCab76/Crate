@@ -118,16 +118,26 @@ export interface PlaybackStatePayload {
   currentPath: string | null
 }
 
+export interface AudioOutputDevice {
+  id: number
+  name: string
+  driver: string | null
+  flags: number
+  isDefault: boolean
+  isCurrent: boolean
+  isInitialized: boolean
+}
+
 export interface EqState {
   enabled: boolean
   preset: string
-  bands: number[]              // global 10-band gains in dB
+  bands: number[]              // global EQ gains in dB
   overrideBands: number[] | null  // null when no per-track override is active
 }
 
 export interface EqTrackOverride {
   enabled: boolean
-  bands: number[]              // 10 gains in dB
+  bands: number[]              // EQ gains in dB
 }
 
 export interface FftEvent {
@@ -160,6 +170,9 @@ export interface AudioApi {
   swapNow(): Promise<boolean>
   setActiveTrack(trackId: number | null): Promise<void>
   getStatus(): Promise<PlaybackStatePayload>
+  listOutputDevices(): Promise<AudioOutputDevice[]>
+  setOutputDevice(deviceId: number): Promise<AudioOutputDevice>
+  getOutputDevice(): Promise<AudioOutputDevice | null>
 
   onProgress(h: (e: ProgressEvent) => void): EventOff
   onTrackEnded(h: () => void): EventOff
@@ -183,6 +196,8 @@ export interface EqApi {
 
 export interface TracksApi {
   countPlay(trackId: number): Promise<void>
+  setFavorite(id: number, favorite: boolean): Promise<void>
+  refreshMetadata(trackId: number): Promise<void>
 }
 
 export interface ArtistsApi {

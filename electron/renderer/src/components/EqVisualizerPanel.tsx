@@ -2,12 +2,14 @@ import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, ty
 import { useEqStore } from '@renderer/stores/eqStore'
 import { binsToBands, getLatestFft, subscribeFftDemand } from '@renderer/utils/fft'
 import type { Track } from '@shared/types/library'
+import {
+  EQ_BAND_COUNT,
+  EQ_BAND_LABELS,
+  EQ_GAIN_MAX,
+  EQ_GAIN_MIN,
+  EQ_GAIN_STEP,
+} from '@shared/constants/equalizer'
 
-const EQ_LABELS = ['32', '64', '125', '250', '500', '1k', '2k', '4k', '8k', '16k'] as const
-const BAND_COUNT = 10
-const GAIN_MIN = -15
-const GAIN_MAX = 15
-const GAIN_STEP = 0.5
 // Symmetric EMA weight on the previous value — higher = smoother bars.
 const EMA_ALPHA = 0.78
 const SCALE_EPSILON = 0.004
@@ -16,7 +18,7 @@ interface Props {
   track: Track
 }
 
-// 10 unified columns: bar height tracks the live FFT for each EQ band; the
+// Unified columns: bar height tracks the live FFT for each EQ band; the
 // fill color tints toward the accent on boost / fades on cut; a thin
 // horizontal thumb shows the band's gain. Dragging any column changes its
 // gain, double-click resets to 0 dB.
@@ -36,9 +38,9 @@ export function EqVisualizerPanel({ track }: Props) {
   const displayBands = draftBands ?? bands
 
   const fillRefs = useRef<(HTMLDivElement | null)[]>([])
-  const smoothedRef = useRef<Float32Array>(new Float32Array(BAND_COUNT))
-  const bandScratchRef = useRef<Float32Array>(new Float32Array(BAND_COUNT))
-  const lastScaleRef = useRef<Float32Array>(new Float32Array(BAND_COUNT))
+  const smoothedRef = useRef<Float32Array>(new Float32Array(EQ_BAND_COUNT))
+  const bandScratchRef = useRef<Float32Array>(new Float32Array(EQ_BAND_COUNT))
+  const lastScaleRef = useRef<Float32Array>(new Float32Array(EQ_BAND_COUNT))
   const displayBandsRef = useRef<number[]>(displayBands)
   const draftBandsRef = useRef<number[] | null>(null)
   const overrideActiveRef = useRef(overrideActive)
@@ -62,10 +64,10 @@ export function EqVisualizerPanel({ track }: Props) {
 
     let frame = 0
     const tick = () => {
-      const targets = binsToBands(getLatestFft(), BAND_COUNT, bandScratchRef.current)
+      const targets = binsToBands(getLatestFft(), EQ_BAND_COUNT, bandScratchRef.current)
       const smoothed = smoothedRef.current
       const lastScale = lastScaleRef.current
-      for (let i = 0; i < BAND_COUNT; i++) {
+      for (let i = 0; i < EQ_BAND_COUNT; i++) {
         smoothed[i] = smoothed[i] * EMA_ALPHA + targets[i] * (1 - EMA_ALPHA)
         const el = fillRefs.current[i]
         if (el) {
@@ -90,8 +92,8 @@ export function EqVisualizerPanel({ track }: Props) {
   const draggingRef = useRef<number | null>(null)
   const dragStartRef = useRef<{ y: number; gain: number; height: number } | null>(null)
 
-  const clampGain = (g: number) => Math.max(GAIN_MIN, Math.min(GAIN_MAX, g))
-  const snapGain = (g: number) => Math.round(g / GAIN_STEP) * GAIN_STEP
+  const clampGain = (g: number) => Math.max(EQ_GAIN_MIN, Math.min(EQ_GAIN_MAX, g))
+  const snapGain = (g: number) => Math.round(g / EQ_GAIN_STEP) * EQ_GAIN_STEP
 
   const setDraggingIndex = (index: number | null) => {
     draggingRef.current = index
@@ -148,7 +150,7 @@ export function EqVisualizerPanel({ track }: Props) {
     if (draggingRef.current !== i || !dragStartRef.current) return
     const { y, gain, height } = dragStartRef.current
     if (height <= 0) return
-    const pxPerDb = height / (GAIN_MAX - GAIN_MIN)
+    const pxPerDb = height / (EQ_GAIN_MAX - EQ_GAIN_MIN)
     const deltaDb = (y - e.clientY) / pxPerDb
     const next = snapGain(clampGain(gain + deltaDb))
     updateDraftBand(i, next)
@@ -172,13 +174,13 @@ export function EqVisualizerPanel({ track }: Props) {
 
   const handleKeyDown = (i: number) => (e: KeyboardEvent<HTMLDivElement>) => {
     if (!enabled) return
-    const step = e.shiftKey ? 2 : GAIN_STEP
+    const step = e.shiftKey ? 2 : EQ_GAIN_STEP
     if (e.key === 'ArrowUp') {
       e.preventDefault()
-      void commitBandChange(i, displayBandsRef.current[i] + step)
+      void commitBandChange(i, (displayBandsRef.current[i] ?? 0) + step)
     } else if (e.key === 'ArrowDown') {
       e.preventDefault()
-      void commitBandChange(i, displayBandsRef.current[i] - step)
+      void commitBandChange(i, (displayBandsRef.current[i] ?? 0) - step)
     } else if (e.key === 'Home' || e.key === '0') {
       e.preventDefault()
       void commitBandChange(i, 0)
@@ -209,7 +211,7 @@ export function EqVisualizerPanel({ track }: Props) {
   }
 
   const handleReset = () => {
-    const flat = new Array(BAND_COUNT).fill(0)
+    const flat = new Array(EQ_BAND_COUNT).fill(0)
     syncDraftBands(null)
     if (overrideActive && track.dbId != null) {
       void setTrackOverride(track.dbId, { enabled: true, bands: flat })
@@ -245,9 +247,9 @@ export function EqVisualizerPanel({ track }: Props) {
       </div>
       <div className="eq-viz-body">
         <div className="eq-bands">
-          {EQ_LABELS.map((label, i) => {
+          {EQ_BAND_LABELS.map((label, i) => {
             const gain = displayBands[i] ?? 0
-            const norm = gain / GAIN_MAX
+            const norm = gain / EQ_GAIN_MAX
             const bandStyle = { '--gain-norm': norm.toFixed(3) } as CSSProperties
             return (
               <div
@@ -256,8 +258,8 @@ export function EqVisualizerPanel({ track }: Props) {
                 style={bandStyle}
                 role="slider"
                 aria-label={`${label} Hz`}
-                aria-valuemin={GAIN_MIN}
-                aria-valuemax={GAIN_MAX}
+                aria-valuemin={EQ_GAIN_MIN}
+                aria-valuemax={EQ_GAIN_MAX}
                 aria-valuenow={gain}
                 aria-disabled={!enabled}
                 tabIndex={enabled ? 0 : -1}

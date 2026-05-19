@@ -114,6 +114,17 @@ export function registerAudioChannel(): void {
     currentPath: engine.getCurrentPath(),
   }))
 
+  ipcMain.handle('audio:devices:list', () => engine.listOutputDevices())
+  ipcMain.handle('audio:devices:current', () => engine.getOutputDevice())
+  ipcMain.handle('audio:devices:set', (_, payload: { deviceId: number }) => {
+    const selected = engine.setOutputDevice(payload.deviceId)
+    const movedPreload = getGapless().movePreloadedToOutputDevice(selected.id)
+    if (!movedPreload) {
+      console.warn(`[audio] cleared preloaded stream after output device switch to ${selected.name}`)
+    }
+    return selected
+  })
+
   // ---------------- EQ ----------------
   ipcMain.handle('eq:getState', () => ({
     enabled: eq.getState().enabled,

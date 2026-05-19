@@ -31,6 +31,12 @@ export interface BassChannelInfo {
   filename: string | null
 }
 
+export interface BassDeviceInfo {
+  name: string | null
+  driver: string | null
+  flags: number
+}
+
 // SYNCPROC signature: void (HSYNC handle, DWORD channel, DWORD data, void *user)
 export const SYNCPROC = koffi.proto('void SYNCPROC(uint32_t, uint32_t, uint32_t, void*)')
 
@@ -46,6 +52,13 @@ const BASS_CHANNELINFO = koffi.struct('BASS_CHANNELINFO', {
   filename: 'const char*',
 })
 
+// BASS_DEVICEINFO struct layout (see bass.h).
+const BASS_DEVICEINFO = koffi.struct('BASS_DEVICEINFO', {
+  name:   'const char*',
+  driver: 'const char*',
+  flags:  'uint32_t',
+})
+
 function nativeLibPath(name: string): string {
   // In dev `app.getAppPath()` is the repo root; in production
   // `process.resourcesPath` points at Resources/ inside the bundle.
@@ -57,6 +70,10 @@ interface BassBindings {
   lib: ReturnType<typeof koffi.load>
   Init: (device: number, freq: number, flags: number, win: bigint, dsguid: bigint) => number
   Free: () => number
+  GetDeviceInfo: (device: number, info: object) => number
+  SetDevice: (device: number) => number
+  GetDevice: () => number
+  Start: () => number
   ErrorGetCode: () => number
   PluginLoad: (file: string, flags: number) => number
   SetConfig: (option: number, value: number) => number
@@ -78,6 +95,7 @@ interface BassBindings {
   ChannelRemoveFX: (handle: number, fx: number) => number
   ChannelGetInfo: (handle: number, info: object) => number
   ChannelGetData: (handle: number, buffer: Float32Array, length: number) => number
+  ChannelSetDevice: (handle: number, device: number) => number
 }
 
 let bindings: BassBindings | null = null
@@ -91,6 +109,10 @@ export function loadBass(): BassBindings {
     lib,
     Init:               lib.func('int32_t BASS_Init(int32_t, uint32_t, uint32_t, uint64_t, uint64_t)'),
     Free:               lib.func('int32_t BASS_Free(void)'),
+    GetDeviceInfo:      lib.func('int32_t BASS_GetDeviceInfo(uint32_t, _Out_ BASS_DEVICEINFO *)'),
+    SetDevice:          lib.func('int32_t BASS_SetDevice(uint32_t)'),
+    GetDevice:          lib.func('uint32_t BASS_GetDevice(void)'),
+    Start:              lib.func('int32_t BASS_Start(void)'),
     ErrorGetCode:       lib.func('int32_t BASS_ErrorGetCode(void)'),
     PluginLoad:         lib.func('uint32_t BASS_PluginLoad(const char *, uint32_t)'),
     SetConfig:          lib.func('int32_t BASS_SetConfig(uint32_t, uint32_t)'),
@@ -112,10 +134,12 @@ export function loadBass(): BassBindings {
     ChannelRemoveFX:    lib.func('int32_t BASS_ChannelRemoveFX(uint32_t, uint32_t)'),
     ChannelGetInfo:     lib.func('int32_t BASS_ChannelGetInfo(uint32_t, _Out_ BASS_CHANNELINFO *)'),
     ChannelGetData:     lib.func('uint32_t BASS_ChannelGetData(uint32_t, _Out_ float *, uint32_t)'),
+    ChannelSetDevice:   lib.func('int32_t BASS_ChannelSetDevice(uint32_t, uint32_t)'),
   } as unknown as BassBindings
 
   // Force koffi to register the struct under the name used in func signatures above.
   void BASS_CHANNELINFO
+  void BASS_DEVICEINFO
 
   return bindings
 }

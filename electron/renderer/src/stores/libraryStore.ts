@@ -4,8 +4,8 @@
 
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
-import type { Album, Artist, Playlist, Track } from '@shared/types/library'
-import type { DbFolder } from '@shared/types/db'
+import type { Album, Artist, Pattern, Playlist, Track } from '@shared/types/library'
+import type { DbFolder, DbTrack } from '@shared/types/db'
 import type { ImportProgressEvent } from '@shared/types/ipc-contract'
 import {
   dbToUiAlbum,
@@ -14,8 +14,76 @@ import {
   dbToUiTrack,
   type UiGenre,
 } from './adapters'
+import { usePlaybackStore } from './playbackStore'
+import { useQueueStore } from './queueStore'
 
 const TRACK_NO_WITHOUT = Number.MAX_SAFE_INTEGER
+const UNRESOLVED_ALBUM_PREFIX = 'a-unresolved'
+const UNRESOLVED_ALBUM_LABEL = 'Sin álbum detectado'
+const SYNTH_PATTERNS: Pattern[] = ['circles', 'sun', 'rays', 'grid', 'wave', 'stripes', 'rings', 'half', 'diag', 'lines']
+
+function normalizeForAlbumId(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    || 'unknown'
+}
+
+function toSyntheticAlbumId(row: DbTrack): string {
+  const key = `${row.folder_id ?? 'folder'}::${normalizeForAlbumId(row.album || 'sin-album')}`
+  return `${UNRESOLVED_ALBUM_PREFIX}-${key}`
+}
+
+function hashSeed(value: string): number {
+  let hash = 0
+  for (let i = 0; i < value.length; i++) {
+    hash = ((hash << 5) - hash) + value.charCodeAt(i)
+    hash |= 0
+  }
+  return Math.abs(hash)
+}
+
+function palette(seed: number): [string, string, string] {
+  const hue = seed % 360
+  const c0 = `hsl(${hue}, 30%, 12%)`
+  const c1 = `hsl(${(hue + 25) % 360}, 35%, 28%)`
+  const c2 = `hsl(${(hue + 50) % 360}, 45%, 65%)`
+  return [c0, c1, c2]
+}
+
+function patternFor(seed: number): Pattern {
+  return SYNTH_PATTERNS[seed % SYNTH_PATTERNS.length]
+}
+
+function inferUnresolvedAlbumArtist(tracks: Track[]): string {
+  const artists = new Set(tracks.map(t => t.artist).filter(Boolean))
+  if (artists.size <= 1) return tracks[0]?.artist || ''
+  return 'Various Artists'
+}
+
+function buildUnresolvedAlbum(albumId: string, tracks: Track[]): Album {
+  const sorted = [...tracks].sort(compareTrackNumberAsc)
+  const seed = hashSeed(albumId)
+  const title = sorted[0]?.albumTitle || UNRESOLVED_ALBUM_LABEL
+  const genre = sorted[0]?.genre || ''
+  const year = sorted[0]?.year || 0
+  return {
+    id: albumId,
+    title,
+    artist: inferUnresolvedAlbumArtist(sorted),
+    year,
+    seed,
+    palette: palette(seed),
+    pattern: patternFor(seed),
+    genre,
+    tracks: sorted,
+    artworkPath: sorted[0]?.artworkPath,
+  }
+}
 
 function compareTrackNumberAsc(a: Track, b: Track): number {
   const aNo = a.no > 0 ? a.no : TRACK_NO_WITHOUT
@@ -82,30 +150,50 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         ])
 
       const tracks = dbTracks.map(dbToUiTrack)
-      const tracksByAlbumId = new Map<number, Track[]>()
+      const tracksByAlbumId = new Map<string, Track[]>()
       const tracksByArtistId = new Map<number, Track[]>()
       for (let i = 0; i < dbTracks.length; i++) {
         const aid = dbTracks[i].album_id
-        if (aid == null) continue
-        const sortedByAlbum = tracksByAlbumId.get(aid) ?? []
-        sortedByAlbum.push(tracks[i])
-        tracksByAlbumId.set(aid, sortedByAlbum)
+        const track = (() => {
+          if (aid == null) {
+            const albumId = toSyntheticAlbumId(dbTracks[i])
+            return {
+              ...tracks[i],
+              albumId,
+              albumTitle: tracks[i].albumTitle || UNRESOLVED_ALBUM_LABEL,
+            }
+          }
+          return tracks[i]
+        })()
+        tracks[i] = track
+
+        const byAlbum = tracksByAlbumId.get(track.albumId) ?? []
+        byAlbum.push(track)
+        tracksByAlbumId.set(track.albumId, byAlbum)
 
         const artistId = dbTracks[i].artist_id
         if (artistId == null) continue
         const artistTracks = tracksByArtistId.get(artistId) ?? []
-        artistTracks.push(tracks[i])
+        artistTracks.push(track)
         tracksByArtistId.set(artistId, artistTracks)
       }
 
-      const albumsById = new Map<number, Album>()
+      const albumsById = new Map<string, Album>()
       for (const album of dbAlbums) {
-        const albumTracks = tracksByAlbumId.get(album.id) ?? []
+        const albumKey = `a${album.id}`
+        const albumTracks = tracksByAlbumId.get(albumKey) ?? []
         const sortedTracks = [...albumTracks].sort(compareTrackNumberAsc)
-        albumsById.set(album.id, dbToUiAlbum(album, sortedTracks))
+        albumsById.set(albumKey, dbToUiAlbum(album, sortedTracks))
 
-        tracksByAlbumId.set(album.id, sortedTracks)
+        tracksByAlbumId.set(albumKey, sortedTracks)
       }
+
+      const syntheticAlbums: Album[] = [...tracksByAlbumId.entries()]
+        .filter(([albumId]) => albumId.startsWith(`${UNRESOLVED_ALBUM_PREFIX}-`))
+        .map(([albumId, tracksInAlbum]) => {
+          const sorted = [...tracksInAlbum].sort(compareTrackNumberAsc)
+          return buildUnresolvedAlbum(albumId, sorted)
+        })
 
       const albumOrderForSongs = [...tracksByAlbumId.entries()]
         .map(([, tracksInAlbum]) => ({
@@ -123,7 +211,10 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
 
       const orderedTracks = albumOrderForSongs.flatMap(item => item.tracksInAlbum)
 
-      const albums = dbAlbums.map(a => albumsById.get(a.id) ?? dbToUiAlbum(a, tracksByAlbumId.get(a.id) ?? []))
+      const albums = [
+        ...dbAlbums.map(a => albumsById.get(`a${a.id}`) ?? dbToUiAlbum(a, tracksByAlbumId.get(`a${a.id}`) ?? [])),
+        ...syntheticAlbums,
+      ]
       const artists = dbArtists.map(ar => {
         const artistTracks = tracksByArtistId.get(ar.id) ?? []
         const albumIdsForArtist = new Set(artistTracks.map(t => t.albumId))
@@ -177,6 +268,38 @@ export async function toggleArtistFavorite(artistDbId: number, favorite: boolean
   }))
 }
 
+export async function toggleTrackFavorite(trackDbId: number, favorite: boolean): Promise<void> {
+  const applyLocalFavorite = (nextFavorite: boolean) => {
+    const withFavorite = (track: Track) =>
+      track.dbId === trackDbId ? { ...track, loved: nextFavorite } : track
+
+    useLibraryStore.setState(state => ({ tracks: state.tracks.map(withFavorite) }))
+
+    usePlaybackStore.setState(state => {
+      const currentTrack = state.currentTrack
+      if (currentTrack?.dbId !== trackDbId) return {}
+      return { currentTrack: { ...currentTrack, loved: nextFavorite } }
+    })
+
+    useQueueStore.setState(state => ({
+      tracks: state.tracks.map(withFavorite),
+      history: state.history.map(withFavorite),
+    }))
+  }
+
+  applyLocalFavorite(favorite)
+  try {
+    await window.api.tracks.setFavorite(trackDbId, favorite)
+  } catch (error) {
+    applyLocalFavorite(!favorite)
+    throw error
+  }
+}
+
+export async function refreshTrackMetadata(trackDbId: number): Promise<void> {
+  await window.api.tracks.refreshMetadata(trackDbId)
+}
+
 // Subscribe once, on module load, to main-process push events so the store
 // stays fresh without each component wiring its own listener.
 if (typeof window !== 'undefined' && window.api?.library) {
@@ -212,6 +335,10 @@ export function useFavoriteArtists(): Artist[] {
   // useShallow keeps the React tree stable when the filtered list happens to
   // be the same set even though the array reference changed.
   return useLibraryStore(useShallow(s => s.artists.filter(ar => ar.favorite)))
+}
+
+export function useFavoriteTracks(): Track[] {
+  return useLibraryStore(useShallow(s => s.tracks.filter(t => t.loved)))
 }
 
 export function useGenres(): UiGenre[] {

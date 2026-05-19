@@ -10,6 +10,8 @@ interface SidebarProps {
   translucent: boolean
   onSelectPlaylist: (p: Playlist) => void
   onSelectArtist: (a: Artist) => void
+  onSelectFavoriteTracks: () => void
+  favoriteTracksCount: number
 }
 
 function SectionLabel({ label, onAdd, title }: { label: string; onAdd?: () => void; title?: string }) {
@@ -25,7 +27,15 @@ function SectionLabel({ label, onAdd, title }: { label: string; onAdd?: () => vo
   )
 }
 
-export function Sidebar({ setView, selectedKey, translucent, onSelectPlaylist, onSelectArtist }: SidebarProps) {
+export function Sidebar({
+  setView,
+  selectedKey,
+  translucent,
+  onSelectPlaylist,
+  onSelectArtist,
+  onSelectFavoriteTracks,
+  favoriteTracksCount,
+}: SidebarProps) {
   const artists = useFavoriteArtists()
   const playlists = usePlaylists()
   const trackCount = useTrackCount()
@@ -68,46 +78,57 @@ export function Sidebar({ setView, selectedKey, translucent, onSelectPlaylist, o
         <Item id="albums"    icon="album"    label="Albums"          onClick={() => setView({ kind: 'albums' })} />
         <Item id="artists"   icon="artist"   label="Artists"         onClick={() => setView({ kind: 'artists' })} />
         <Item id="genres"    icon="genre"    label="Genres"          onClick={() => setView({ kind: 'genres' })} />
-        <Item id="composers" icon="composer" label="Composers"       onClick={() => setView({ kind: 'composers' })} />
         <Item id="recent"    icon="recent"   label="Recently Added"  onClick={() => setView({ kind: 'recent' })} />
 
-        {playlists.length > 0 && (
-          <>
-            <SectionLabel label="Playlists" onAdd={() => {}} title="New playlist" />
-            {playlists.map(p => (
-              <div
-                key={p.id}
-                className={`sb-item ${selectedKey === 'pl-' + p.id ? 'active' : ''}`}
-                onClick={() => onSelectPlaylist(p)}
-                role="button"
-                tabIndex={0}
-              >
-                <span className="ic">
-                  <Icon name={p.kind === 'smart' ? 'sparkle' : p.icon || 'note'} size={14} />
-                </span>
-                <span>{p.name}</span>
-                <span className="badge">{p.count}</span>
-              </div>
-            ))}
-          </>
-        )}
+        <SectionLabel label="Playlists" onAdd={() => {}} title="New playlist" />
 
-        {artists.length > 0 && (
-          <>
-            <SectionLabel label="Favorite Artists" onAdd={() => setView({ kind: 'artists' })} title="Manage favorites" />
-            {artists.slice(0, 5).map(ar => (
-              <div
-                key={ar.id}
-                className={`sb-item ${selectedKey === 'ar-' + ar.id ? 'active' : ''}`}
-                onClick={() => onSelectArtist(ar)}
-                role="button"
-                tabIndex={0}
-              >
-                <div className="swatch" style={{ background: `linear-gradient(135deg, ${ar.palette[1]}, ${ar.palette[0]})` }} />
-                <span>{ar.name}</span>
-              </div>
-            ))}
-          </>
+        <div
+          className={`sb-item ${selectedKey === 'pfavorites' ? 'active' : ''}`}
+          onClick={() => onSelectFavoriteTracks()}
+          role="button"
+          tabIndex={0}
+        >
+          <span className="ic">
+            <Icon name="heartF" size={14} />
+          </span>
+          <span>Temas favoritos</span>
+          <span className="badge">{favoriteTracksCount}</span>
+        </div>
+
+        {playlists.map(p => (
+          <div
+            key={p.id}
+            className={`sb-item ${selectedKey === 'pl-' + p.id ? 'active' : ''}`}
+            onClick={() => onSelectPlaylist(p)}
+            role="button"
+            tabIndex={0}
+          >
+            <span className="ic">
+              <Icon name={p.kind === 'smart' ? 'sparkle' : p.icon || 'note'} size={14} />
+            </span>
+            <span>{p.name}</span>
+            <span className="badge">{p.count}</span>
+          </div>
+        ))}
+
+        <SectionLabel label="Favorite Artists" onAdd={() => setView({ kind: 'artists' })} title="Manage favorites" />
+        {artists.length === 0 ? (
+          <div className="sb-item">
+            <span style={{ color: 'var(--text-tertiary)' }}>No tienes artistas favoritos</span>
+          </div>
+        ) : (
+          artists.slice(0, 5).map(ar => (
+            <div
+              key={ar.id}
+              className={`sb-item ${selectedKey === 'ar-' + ar.id ? 'active' : ''}`}
+              onClick={() => onSelectArtist(ar)}
+              role="button"
+              tabIndex={0}
+            >
+              <div className="swatch" style={{ background: `linear-gradient(135deg, ${ar.palette[1]}, ${ar.palette[0]})` }} />
+              <span>{ar.name}</span>
+            </div>
+          ))
         )}
       </div>
     </div>

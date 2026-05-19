@@ -19,7 +19,7 @@ export const BACKUP_FILENAME = '.hifidelity-library.json'
 
 export interface BackupEqOverride {
   enabled: boolean
-  bands: number[]   // 10 dB gains, 32Hz..16kHz
+  bands: number[]   // EQ gains in dB; older backups are normalized on import
 }
 
 export interface BackupLyrics {
