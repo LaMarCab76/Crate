@@ -15,6 +15,22 @@ interface PlayerPaneProps {
   onMini: () => void
 }
 
+const INITIAL_TOP_HEIGHT = 450
+const FALLBACK_MIN_TOP_HEIGHT = 300
+const MIN_QUEUE_HEIGHT = 0
+
+function px(value: string): number {
+  const parsed = Number.parseFloat(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function outerHeight(el: HTMLElement): number {
+  const styles = window.getComputedStyle(el)
+  return Math.max(el.scrollHeight, el.getBoundingClientRect().height)
+    + px(styles.marginTop)
+    + px(styles.marginBottom)
+}
+
 export function PlayerPane({ expanded, onExpand, onMini }: PlayerPaneProps) {
   const track = usePlaybackStore(s => s.currentTrack)
   const status = usePlaybackStore(s => s.status)
@@ -31,11 +47,8 @@ export function PlayerPane({ expanded, onExpand, onMini }: PlayerPaneProps) {
   const album = useAlbumByUiId(track?.albumId)
 
   const containerRef = useRef<HTMLDivElement>(null)
-  const [playerH, setPlayerH] = useState(450)
+  const [playerH, setPlayerH] = useState(INITIAL_TOP_HEIGHT)
   const [dragging, setDragging] = useState(false)
-
-  const MIN_TOP_HEIGHT = 300
-  const MIN_QUEUE_HEIGHT = 120
 
   const getPanelMetrics = () => {
     const container = containerRef.current
@@ -43,11 +56,33 @@ export function PlayerPane({ expanded, onExpand, onMini }: PlayerPaneProps) {
 
     const header = container.querySelector('.pp-header')
     const splitter = container.querySelector('.pp-splitter')
+    const top = container.querySelector<HTMLElement>('.pp-top')
     const containerH = container.clientHeight
     const headerH = header?.clientHeight ?? 0
     const splitterH = splitter?.clientHeight ?? 14
 
-    return { containerH, headerH, splitterH }
+    return { containerH, headerH, splitterH, top }
+  }
+
+  const getNaturalTopHeight = (top: HTMLElement | null) => {
+    if (!top) return FALLBACK_MIN_TOP_HEIGHT
+
+    const styles = window.getComputedStyle(top)
+    const paddingTop = px(styles.paddingTop)
+    const paddingRight = px(styles.paddingRight)
+    const paddingBottom = px(styles.paddingBottom)
+    const paddingLeft = px(styles.paddingLeft)
+    const gap = px(styles.rowGap || styles.gap)
+    const contentWidth = Math.max(0, top.clientWidth - paddingLeft - paddingRight)
+
+    const children = Array.from(top.children).filter((child): child is HTMLElement => child instanceof HTMLElement)
+    const childrenHeight = children.reduce((total, child) => {
+      const height = child.classList.contains('art') ? contentWidth : outerHeight(child)
+      return total + height
+    }, 0)
+    const gapsHeight = gap * Math.max(0, children.length - 1)
+
+    return Math.ceil(paddingTop + paddingBottom + childrenHeight + gapsHeight)
   }
 
   const getHeightLimits = () => {
@@ -56,7 +91,8 @@ export function PlayerPane({ expanded, onExpand, onMini }: PlayerPaneProps) {
 
     const availableForTop = Math.max(0, metrics.containerH - metrics.headerH - metrics.splitterH)
     const maxTopHeight = Math.max(0, availableForTop - MIN_QUEUE_HEIGHT)
-    const minTopHeight = Math.min(MIN_TOP_HEIGHT, maxTopHeight)
+    const naturalTopHeight = getNaturalTopHeight(metrics.top)
+    const minTopHeight = Math.min(naturalTopHeight, maxTopHeight)
 
     return { minTopHeight, maxTopHeight }
   }
