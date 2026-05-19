@@ -1,33 +1,12 @@
 import { Artwork } from './Artwork'
 import { CodecStrip } from './CodecStrip'
+import { EqVisualizerPanel } from './EqVisualizerPanel'
 import { Icon } from './Icon'
+import { LyricsPanel } from './LyricsPanel'
 import { fmtTime } from '@renderer/utils/format'
 import { useAlbumByUiId } from '@renderer/stores/libraryStore'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
 import { useQueueStore } from '@renderer/stores/queueStore'
-
-const LYRICS = [
-  'Lyrics will appear here once the track has synced lyrics.',
-  '',
-  '(Lyrics fetching arrives in a later session.)',
-]
-
-function Visualizer({ bars = 48 }: { bars?: number }) {
-  return (
-    <div className="viz">
-      {Array.from({ length: bars }).map((_, i) => (
-        <i
-          key={i}
-          style={{
-            height: '100%',
-            animationDelay: `${(i * 0.04) % 1.4}s`,
-            animationDuration: `${0.8 + (i % 5) * 0.18}s`,
-          }}
-        />
-      ))}
-    </div>
-  )
-}
 
 interface NowPlayingFullProps {
   showLyrics: boolean
@@ -57,13 +36,14 @@ export function NowPlayingFull({ showLyrics, setShowLyrics, onCollapse }: NowPla
         <div style={{ flex: 1, textAlign: 'center', fontSize: 12.5, color: 'var(--text-secondary)', fontWeight: 500 }}>
           Playing from album · {album?.title ?? '—'}
         </div>
-        <button className="tb-icon-btn" title="Mini player"><Icon name="album" size={16} /></button>
-        <button className="tb-icon-btn" onClick={onCollapse} title="Close"><Icon name="contract" size={14} /></button>
+        <button className="np-full-close" onClick={onCollapse} title="Close fullscreen">
+          <Icon name="close" size={14} />
+        </button>
       </div>
 
       <div className="np-full-body">
         <div className="np-full-left">
-          <div className="np-full-art"><Artwork album={album} radius={10} /></div>
+          <div className="np-full-art"><Artwork album={album} radius={10} objectFit="contain" /></div>
           <div className="np-full-title">
             <h2>{track.t}</h2>
             <p>{track.artist} — {track.albumTitle}</p>
@@ -92,19 +72,15 @@ export function NowPlayingFull({ showLyrics, setShowLyrics, onCollapse }: NowPla
         <div className="np-full-right">
           <div className="np-full-tabs">
             <button className={`btn ${showLyrics ? 'primary' : 'ghost'} sm`} onClick={() => setShowLyrics(true)}>Lyrics</button>
-            <button className={`btn ${showLyrics ? 'ghost' : 'primary'} sm`} onClick={() => setShowLyrics(false)}>Visualizer</button>
+            <button className={`btn ${showLyrics ? 'ghost' : 'primary'} sm`} onClick={() => setShowLyrics(false)}>EQ</button>
             <div style={{ flex: 1 }} />
             <button className="btn ghost sm"><Icon name="tag" size={12} /> Metadata</button>
           </div>
 
           {showLyrics ? (
-            <div className="lyrics">
-              {LYRICS.map((l, i) => (
-                l === '' ? <div key={i} style={{ height: 16 }} /> : <div key={i} className="line">{l}</div>
-              ))}
-            </div>
+            <LyricsPanel track={track} />
           ) : (
-            <Visualizer bars={64} />
+            <EqVisualizerPanel track={track} />
           )}
         </div>
       </div>

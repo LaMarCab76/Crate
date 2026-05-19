@@ -87,7 +87,7 @@ export function PlayerPane({ expanded, onExpand, onMini }: PlayerPaneProps) {
 
       <div className="pp-top" style={{ height: playerH, flexBasis: playerH }}>
         <div className="art" onClick={onExpand} role="button" tabIndex={0}>
-          <Artwork album={album} radius={8} />
+          <Artwork album={album} radius={8} objectFit="contain" />
         </div>
 
         <div className="info">

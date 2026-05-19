@@ -20,10 +20,11 @@ export interface ArtworkProps {
   album: ArtworkSource | Album | undefined | null
   size?: number
   radius?: number
+  objectFit?: 'cover' | 'contain'
   style?: CSSProperties
 }
 
-export function Artwork({ album, radius = 6, style }: ArtworkProps) {
+export function Artwork({ album, radius = 6, objectFit = 'cover', style }: ArtworkProps) {
   if (!album) return null
 
   // If we have a real cover cached on disk, render the bitmap. The hifi://
@@ -37,7 +38,7 @@ export function Artwork({ album, radius = 6, style }: ArtworkProps) {
         src={`hifi://artwork/${encodeURIComponent(artworkPath)}`}
         alt=""
         draggable={false}
-        style={{ display: 'block', width: '100%', height: '100%', objectFit: 'cover', borderRadius: radius, ...style }}
+        style={{ display: 'block', width: '100%', height: '100%', objectFit, borderRadius: radius, ...style }}
       />
     )
   }
