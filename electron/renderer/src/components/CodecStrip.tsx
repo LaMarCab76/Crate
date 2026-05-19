@@ -46,22 +46,27 @@ function codecInfo(track: Track | null | undefined): CodecInfo {
   return { codec: fmt, bitDepth: 16, sampleRate: 44.1, bitrate: null, tier: 'low' }
 }
 
-export function CodecStrip({ track }: { track: Track | null | undefined }) {
+export function CodecStrip({ track, compact = false }: { track: Track | null | undefined; compact?: boolean }) {
   const c = codecInfo(track)
+  const resText = c.bitDepth && c.sampleRate
+    ? (compact ? `${c.bitDepth}/${c.sampleRate}` : `${c.bitDepth}-bit / ${c.sampleRate} kHz`)
+    : null
+  const brText = c.bitrate != null
+    ? (compact ? `${Math.round(c.bitrate)}k` : `${c.bitrate.toLocaleString()} kbps`)
+    : null
   return (
-    <div className={`codec-strip tier-${c.tier}`}>
-      <span className="led" />
-      {c.bitDepth && c.sampleRate && (
+    <div className={`codec-strip tier-${c.tier}${compact ? ' compact' : ''}`}>
+      {resText && (
         <>
-          <span className="res">{c.bitDepth}-bit / {c.sampleRate} kHz</span>
+          <span className="res">{resText}</span>
           <span className="sep">·</span>
         </>
       )}
       <span className="codec">{c.codec}</span>
-      {c.bitrate && (
+      {brText && (
         <>
           <span className="sep">·</span>
-          <span>{c.bitrate.toLocaleString()} kbps</span>
+          <span>{brText}</span>
         </>
       )}
     </div>

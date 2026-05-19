@@ -351,15 +351,8 @@ html, body {
   color: var(--tier);
 }
 .codec-strip .res, .codec-strip .codec { color: var(--tier); font-weight: 600; }
-.codec-strip > span:not(.res):not(.codec):not(.sep):not(.led) { color: var(--tier-soft); }
+.codec-strip > span:not(.res):not(.codec):not(.sep) { color: var(--tier-soft); }
 .codec-strip .sep { color: var(--tier-soft); }
-.codec-strip .led {
-  width: 6px; height: 6px; border-radius: 50%;
-  background: var(--tier);
-  box-shadow: 0 0 5px var(--tier-soft);
-  flex-shrink: 0;
-}
-
 .codec-strip.tier-low    { --tier: #8e8e93; --tier-soft: rgba(142,142,147,0.55); }
 .codec-strip.tier-mid    { --tier: #d6b94a; --tier-soft: rgba(214,185,74,0.55); }
 .codec-strip.tier-high   { --tier: #6cc080; --tier-soft: rgba(108,192,128,0.55); }
@@ -372,10 +365,6 @@ html, body {
    so the dual nature reads at a glance. */
 .codec-strip.tier-studio .res { color: #6f9ec2; }
 .codec-strip.tier-studio .codec { color: #c8a45e; }
-.codec-strip.tier-studio .led {
-  background: linear-gradient(135deg, #6f9ec2 0%, #6f9ec2 50%, #c8a45e 50%, #c8a45e 100%);
-  box-shadow: 0 0 5px rgba(143,184,214,0.45);
-}
 
 /* Light theme — bump saturation/darken a touch so it doesn't look washed out */
 .theme-light .codec-strip.tier-low    { --tier: #6e6e73; --tier-soft: rgba(110,110,115,0.55); }
@@ -590,7 +579,7 @@ html, body {
 .tbl thead th.art { width: 44px; }
 .tbl thead th.dur { width: 64px; text-align: right; }
 .tbl thead th.plays { width: 60px; text-align: right; }
-.tbl thead th.fmt { width: 70px; }
+.tbl thead th.fmt { width: 180px; }
 .tbl thead th.heart { width: 32px; }
 
 .tbl tbody tr {
@@ -870,6 +859,19 @@ html, body {
   padding: 0 14px;
   -webkit-app-region: drag;
 }
+/* Buttons inside a drag-region get swallowed by the Electron drag handler;
+   opt them out so clicks actually fire. */
+.np-full-head .tb-icon-btn { -webkit-app-region: no-drag; }
+.np-full-close {
+  width: 32px; height: 32px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; background: transparent;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: default;
+  -webkit-app-region: no-drag;
+}
+.np-full-close:hover { background: var(--bg-hover); color: var(--text-primary); }
 .np-full-body {
   flex: 1; display: grid;
   grid-template-columns: 1fr 1fr; gap: 60px;
@@ -928,6 +930,81 @@ html, body {
   0%, 100% { transform: scaleY(0.2); }
   50% { transform: scaleY(1); }
 }
+
+/* Unified EQ + spectrum visualizer used in the fullscreen player.
+   Live FFT bars in the back, 10 EQ band sliders on top. */
+.eq-viz {
+  flex: 1; min-height: 220px;
+  background: var(--bg-panel);
+  border-radius: 12px;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.eq-viz-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 0.5px solid var(--border-subtle, rgba(255,255,255,0.06));
+  flex-shrink: 0;
+}
+.eq-viz-head .switch-label {
+  font-size: 11.5px; color: var(--text-secondary); user-select: none;
+}
+.eq-viz-body {
+  position: relative; flex: 1;
+  padding: 18px 12px 8px;
+  min-height: 0;
+}
+.eq-viz-bg {
+  position: absolute; inset: 18px 12px 36px;
+  display: flex; align-items: flex-end; gap: 2px;
+  opacity: 0.36;
+  pointer-events: none;
+}
+.eq-viz-bg > i {
+  flex: 1; display: block;
+  height: 4%;
+  background: linear-gradient(to top, var(--text-tertiary), var(--text-primary));
+  border-radius: 1px;
+  transition: height 60ms linear;
+}
+.eq-viz-bands {
+  position: relative;
+  height: 100%;
+  display: flex; align-items: stretch; gap: 0;
+}
+.eq-viz-band {
+  flex: 1;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  min-width: 0;
+}
+.eq-viz-band input[type="range"] {
+  flex: 1; width: 22px;
+  appearance: slider-vertical;
+  -webkit-appearance: slider-vertical;
+  cursor: ns-resize;
+}
+.eq-viz-band .hz {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--text-tertiary);
+}
+.eq-viz-band .gain {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.eq-viz.override-active .eq-viz-band .gain {
+  color: var(--text-primary);
+}
+
+/* Compact codec strip — used in the tracks table format column to mirror
+   the fullscreen player's codec readout in a single line. */
+.codec-strip.compact {
+  margin: 0; gap: 4px;
+  font-size: 10px;
+}
+.codec-strip.compact .sep { opacity: 0.5; }
 
 /* Mini player */
 .mini-player {
