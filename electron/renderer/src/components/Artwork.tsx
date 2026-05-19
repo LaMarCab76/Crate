@@ -33,12 +33,29 @@ export function Artwork({ album, radius = 6, objectFit = 'cover', style }: Artwo
   // renders something even before any artwork is extracted.
   const artworkPath = album.artworkPath
   if (artworkPath) {
+    const src = `hifi://artwork/${encodeURIComponent(artworkPath)}`
+    if (objectFit === 'contain') {
+      return (
+        <div style={{ position: 'relative', width: '100%', height: '100%', borderRadius: radius, overflow: 'hidden' }}>
+          <img src={src} alt="" draggable={false} style={{
+            position: 'absolute', inset: 0, display: 'block', width: '100%', height: '100%',
+            objectFit: 'cover',
+            filter: 'blur(20px) brightness(0.5) saturate(1.3)',
+            transform: 'scale(1.2)',
+          }} />
+          <img src={src} alt="" draggable={false} style={{
+            position: 'absolute', inset: 0, display: 'block', width: '100%', height: '100%',
+            objectFit: 'contain',
+          }} />
+        </div>
+      )
+    }
     return (
       <img
-        src={`hifi://artwork/${encodeURIComponent(artworkPath)}`}
+        src={src}
         alt=""
         draggable={false}
-        style={{ display: 'block', width: '100%', height: '100%', objectFit, borderRadius: radius, ...style }}
+        style={{ display: 'block', width: '100%', height: '100%', objectFit: 'cover', borderRadius: radius, ...style }}
       />
     )
   }
