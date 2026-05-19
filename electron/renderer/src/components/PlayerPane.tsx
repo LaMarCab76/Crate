@@ -5,28 +5,39 @@ import { CodecStrip } from './CodecStrip'
 import { Icon } from './Icon'
 import { EQBars } from './EQBars'
 import { fmtTime } from '@renderer/utils/format'
-import { mockLibrary } from '@renderer/data/mockLibrary'
+import { useAlbumByUiId } from '@renderer/stores/libraryStore'
 
 interface PlayerPaneProps {
-  track: Track
+  track: Track | null
   progress: number
   volume: number
   playing: boolean
   expanded: boolean
+  queue?: Track[]
+  history?: Track[]
   onPlayPause: () => void
   onExpand: () => void
   onMini: () => void
 }
 
-export function PlayerPane({ track, progress, volume, playing, expanded, onPlayPause, onExpand, onMini }: PlayerPaneProps) {
-  if (!track || expanded) return null
-
-  const album = mockLibrary.albums.find(a => a.id === track.albumId)
-  const np = mockLibrary.nowPlaying
-
+export function PlayerPane({
+  track,
+  progress,
+  volume,
+  playing,
+  expanded,
+  queue = [],
+  history = [],
+  onPlayPause,
+  onExpand,
+  onMini,
+}: PlayerPaneProps) {
+  const album = useAlbumByUiId(track?.albumId)
   const containerRef = useRef<HTMLDivElement>(null)
   const [playerH, setPlayerH] = useState(450)
   const [dragging, setDragging] = useState(false)
+
+  if (!track || expanded) return null
 
   const onSplitterDown = (e: PointerEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -121,7 +132,7 @@ export function PlayerPane({ track, progress, volume, playing, expanded, onPlayP
         </div>
 
         <div className="queue-list">
-          <div className="queue-section-label">Playing from · {album?.title}</div>
+          <div className="queue-section-label">Playing from · {album?.title ?? '—'}</div>
           <div className="queue-item now">
             <div className="art"><Artwork album={album} /></div>
             <div>
@@ -130,30 +141,34 @@ export function PlayerPane({ track, progress, volume, playing, expanded, onPlayP
             </div>
             <EQBars style={{ color: 'var(--text-primary)' }} />
           </div>
-          {np.queue.map(t => (
-            <div key={t.id} className="queue-item">
-              <div className="art"><Artwork album={mockLibrary.albums.find(a => a.id === t.albumId)} /></div>
-              <div>
-                <div className="t">{t.t}</div>
-                <div className="a">{t.artist}</div>
-              </div>
-              <span className="dur">{fmtTime(t.d)}</span>
+          {queue.length === 0 && history.length === 0 && (
+            <div className="queue-section-label" style={{ color: 'var(--text-tertiary)' }}>
+              Queue is empty
             </div>
+          )}
+          {queue.map(t => (
+            <QueueItem key={t.id} track={t} />
           ))}
-
-          <div className="queue-section-label">History</div>
-          {np.history.map(t => (
-            <div key={t.id} className="queue-item" style={{ opacity: 0.55 }}>
-              <div className="art"><Artwork album={mockLibrary.albums.find(a => a.id === t.albumId)} /></div>
-              <div>
-                <div className="t">{t.t}</div>
-                <div className="a">{t.artist}</div>
-              </div>
-              <span className="dur">{fmtTime(t.d)}</span>
-            </div>
+          {history.length > 0 && <div className="queue-section-label">History</div>}
+          {history.map(t => (
+            <QueueItem key={`h-${t.id}`} track={t} dim />
           ))}
         </div>
       </div>
+    </div>
+  )
+}
+
+function QueueItem({ track, dim }: { track: Track; dim?: boolean }) {
+  const album = useAlbumByUiId(track.albumId)
+  return (
+    <div className="queue-item" style={dim ? { opacity: 0.55 } : undefined}>
+      <div className="art"><Artwork album={album} /></div>
+      <div>
+        <div className="t">{track.t}</div>
+        <div className="a">{track.artist}</div>
+      </div>
+      <span className="dur">{fmtTime(track.d)}</span>
     </div>
   )
 }

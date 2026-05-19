@@ -10,6 +10,8 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
+    "postinstall": "electron-rebuild -f -w better-sqlite3",
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
     "typecheck:node": "tsc --noEmit -p electron/tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p electron/tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
@@ -19,6 +21,8 @@
     "dist:linux": "electron-vite build && electron-builder --linux"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.7.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
@@ -30,8 +34,9 @@
     "vite": "^5.4.10"
   },
   "dependencies": {
+    "better-sqlite3": "^12.10.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "zustand": "^5.0.1"
+    "zustand": "^5.0.13"
   }
 }

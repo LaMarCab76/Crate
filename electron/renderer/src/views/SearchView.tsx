@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Album, Artist, Track } from '@shared/types/library'
+import type { SearchResultsPayload } from '@shared/types/ipc-contract'
 import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
 import { TrackTable } from '@renderer/components/TrackTable'
-import { mockLibrary } from '@renderer/data/mockLibrary'
+import { dbToUiAlbum, dbToUiArtist, dbToUiTrack } from '@renderer/stores/adapters'
 
 interface Props {
   onSelectAlbum?: (al: Album) => void
@@ -13,11 +14,35 @@ interface Props {
 }
 
 export function SearchView({ onSelectAlbum, onSelectArtist, playingId, onPlay }: Props) {
-  const [q, setQ] = useState('halcyon')
-  const ql = q.toLowerCase()
-  const trackRes = mockLibrary.tracks.filter(t => (t.t + t.artist + t.albumTitle).toLowerCase().includes(ql)).slice(0, 6)
-  const albRes = mockLibrary.albums.filter(a => (a.title + a.artist).toLowerCase().includes(ql)).slice(0, 6)
-  const artRes = mockLibrary.artists.filter(a => a.name.toLowerCase().includes(ql)).slice(0, 6)
+  const [q, setQ] = useState('')
+  const [results, setResults] = useState<SearchResultsPayload>({ tracks: [], albums: [], artists: [] })
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    let canceled = false
+    const trimmed = q.trim()
+    if (trimmed.length === 0) {
+      setResults({ tracks: [], albums: [], artists: [] })
+      return
+    }
+    setLoading(true)
+    const handle = window.setTimeout(async () => {
+      try {
+        const res = await window.api.library.search(trimmed, 20)
+        if (!canceled) setResults(res)
+      } finally {
+        if (!canceled) setLoading(false)
+      }
+    }, 120)
+    return () => {
+      canceled = true
+      window.clearTimeout(handle)
+    }
+  }, [q])
+
+  const tracks = results.tracks.map(dbToUiTrack)
+  const albums = results.albums.map(a => dbToUiAlbum(a))
+  const artists = results.artists.map(a => dbToUiArtist(a))
 
   return (
     <div className="search-page">
@@ -31,19 +56,28 @@ export function SearchView({ onSelectAlbum, onSelectArtist, playingId, onPlay }:
         )}
       </div>
 
-      {q ? (
+      {q.trim().length === 0 ? (
+        <div className="search-section">
+          <h3>Recent searches</h3>
+          <div style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>
+            (Recent searches will appear here once you start searching.)
+          </div>
+        </div>
+      ) : loading && tracks.length === 0 && albums.length === 0 && artists.length === 0 ? (
+        <div style={{ padding: 24, color: 'var(--text-tertiary)' }}>Searching…</div>
+      ) : (
         <>
-          {trackRes.length > 0 && (
+          {tracks.length > 0 && (
             <div className="search-section">
               <h3>Songs</h3>
-              <TrackTable tracks={trackRes} showArt showPlays={false} playingId={playingId} onPlay={onPlay} />
+              <TrackTable tracks={tracks} showArt showPlays={false} playingId={playingId} onPlay={onPlay} />
             </div>
           )}
-          {albRes.length > 0 && (
+          {albums.length > 0 && (
             <div className="search-section">
               <h3>Albums</h3>
               <div className="grid" style={{ padding: 0 }}>
-                {albRes.map(al => (
+                {albums.map(al => (
                   <div key={al.id} className="card" onClick={() => onSelectAlbum?.(al)} role="button" tabIndex={0}>
                     <div className="art"><Artwork album={al} /></div>
                     <div className="ti">{al.title}</div>
@@ -53,11 +87,11 @@ export function SearchView({ onSelectAlbum, onSelectArtist, playingId, onPlay }:
               </div>
             </div>
           )}
-          {artRes.length > 0 && (
+          {artists.length > 0 && (
             <div className="search-section">
               <h3>Artists</h3>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 24 }}>
-                {artRes.map(ar => (
+                {artists.map(ar => (
                   <div
                     key={ar.id}
                     className="card"
@@ -75,18 +109,10 @@ export function SearchView({ onSelectAlbum, onSelectArtist, playingId, onPlay }:
               </div>
             </div>
           )}
+          {!loading && tracks.length === 0 && albums.length === 0 && artists.length === 0 && (
+            <div style={{ padding: 24, color: 'var(--text-tertiary)' }}>No results for "{q}".</div>
+          )}
         </>
-      ) : (
-        <div className="search-section">
-          <h3>Recent searches</h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {['Halcyon', 'Folio', 'Atrium Six', 'High-Res', 'Petrichor'].map(s => (
-              <div key={s} className="sb-item" style={{ margin: 0 }} onClick={() => setQ(s.toLowerCase())} role="button" tabIndex={0}>
-                <Icon name="recent" size={14} /> {s}
-              </div>
-            ))}
-          </div>
-        </div>
       )}
     </div>
   )

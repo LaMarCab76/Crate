@@ -2,15 +2,64 @@ import type { Track } from '@shared/types/library'
 import { Icon } from '@renderer/components/Icon'
 import { TrackTable } from '@renderer/components/TrackTable'
 import { fmtTotal } from '@renderer/utils/format'
-import { mockLibrary } from '@renderer/data/mockLibrary'
+import { useLibraryStore, useTracks } from '@renderer/stores/libraryStore'
 
 interface Props {
   playingId?: string
   onPlay?: (t: Track) => void
 }
 
+function EmptyState() {
+  const pickAndAdd = useLibraryStore(s => async () => {
+    const picked = await s.pickFolder()
+    if (picked) await s.addFolder(picked)
+  })
+
+  return (
+    <div
+      style={{
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 48,
+        textAlign: 'center',
+        gap: 16,
+      }}
+    >
+      <div style={{ color: 'var(--text-tertiary)' }}>
+        <Icon name="folder" size={56} stroke={1.1} />
+      </div>
+      <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>
+        Your library is empty
+      </h1>
+      <p
+        style={{
+          margin: 0,
+          maxWidth: 380,
+          color: 'var(--text-secondary)',
+          fontSize: 13,
+          lineHeight: 1.5,
+        }}
+      >
+        Add a folder of audio files and HiFidelity will scan it for tracks. FLAC, ALAC,
+        AAC, MP3, WAV, AIFF, OGG, OPUS, APE, DSD all supported.
+      </p>
+      <button className="btn primary" onClick={pickAndAdd}>
+        <Icon name="plus" size={12} /> Add Folder…
+      </button>
+    </div>
+  )
+}
+
 export function LibraryView({ playingId, onPlay }: Props) {
-  const tracks = mockLibrary.tracks
+  const tracks = useTracks()
+
+  if (tracks.length === 0) {
+    return <EmptyState />
+  }
+
   const totalDur = tracks.reduce((s, t) => s + t.d, 0)
   return (
     <>

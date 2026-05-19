@@ -1,7 +1,7 @@
 import type { Track } from '@shared/types/library'
 import { Artwork } from './Artwork'
 import { Icon } from './Icon'
-import { mockLibrary } from '@renderer/data/mockLibrary'
+import { useAlbumByUiId } from '@renderer/stores/libraryStore'
 
 interface MiniPlayerProps {
   track: Track
@@ -11,8 +11,8 @@ interface MiniPlayerProps {
 }
 
 export function MiniPlayer({ track, playing, onPlayPause, onClose }: MiniPlayerProps) {
+  const album = useAlbumByUiId(track?.albumId)
   if (!track) return null
-  const album = mockLibrary.albums.find(a => a.id === track.albumId)
   return (
     <div className="mini-player">
       <div className="art"><Artwork album={album} radius={6} /></div>

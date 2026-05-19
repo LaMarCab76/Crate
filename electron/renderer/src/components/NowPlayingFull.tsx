@@ -3,23 +3,12 @@ import { Artwork } from './Artwork'
 import { CodecStrip } from './CodecStrip'
 import { Icon } from './Icon'
 import { fmtTime } from '@renderer/utils/format'
-import { mockLibrary } from '@renderer/data/mockLibrary'
+import { useAlbumByUiId } from '@renderer/stores/libraryStore'
 
 const LYRICS = [
-  'I drove out to where the radio ends,',
-  "and the highway sleeps in the rear-view bend.",
-  'Telephone wires hum the rest of the song,',
-  'and the world is wide, and the day is long.',
+  'Lyrics will appear here once the track has synced lyrics.',
   '',
-  'Halcyon days, halcyon days,',
-  "carry the year in their honey-blonde haze.",
-  'Light through the dust on the kitchen table,',
-  'someone humming on a transistor radio.',
-  '',
-  "Don't look up, don't look down,",
-  "summer's a feather you can't lay down.",
-  'Cassette in the deck, the heater on low,',
-  'we are exactly where we mean to go.',
+  '(Lyrics fetching arrives in a later session.)',
 ]
 
 function Visualizer({ bars = 48 }: { bars?: number }) {
@@ -50,17 +39,15 @@ interface NowPlayingFullProps {
 }
 
 export function NowPlayingFull({ track, progress, playing, showLyrics, setShowLyrics, onPlayPause, onCollapse }: NowPlayingFullProps) {
+  const album = useAlbumByUiId(track?.albumId)
   if (!track) return null
-  const album = mockLibrary.albums.find(a => a.id === track.albumId)
-  const lyricsLines = LYRICS.filter(l => l.length > 0)
-  const curIdx = Math.min(lyricsLines.length - 1, Math.floor(progress * lyricsLines.length * 0.95))
 
   return (
     <div className="np-full">
       <div className="np-full-head">
-        <div className="tl"><i /><i /><i /></div>
+        <div style={{ width: 70 }} />
         <div style={{ flex: 1, textAlign: 'center', fontSize: 12.5, color: 'var(--text-secondary)', fontWeight: 500 }}>
-          Playing from album · {album?.title}
+          Playing from album · {album?.title ?? '—'}
         </div>
         <button className="tb-icon-btn" title="Mini player"><Icon name="album" size={16} /></button>
         <button className="tb-icon-btn" onClick={onCollapse} title="Close"><Icon name="contract" size={14} /></button>
@@ -104,12 +91,9 @@ export function NowPlayingFull({ track, progress, playing, showLyrics, setShowLy
 
           {showLyrics ? (
             <div className="lyrics">
-              {LYRICS.map((l, i) => {
-                if (l === '') return <div key={i} style={{ height: 16 }} />
-                const visIdx = LYRICS.slice(0, i).filter(x => x.length > 0).length
-                const cls = visIdx === curIdx ? 'now' : visIdx < curIdx ? 'past' : ''
-                return <div key={i} className={`line ${cls}`}>{l}</div>
-              })}
+              {LYRICS.map((l, i) => (
+                l === '' ? <div key={i} style={{ height: 16 }} /> : <div key={i} className="line">{l}</div>
+              ))}
             </div>
           ) : (
             <Visualizer bars={64} />

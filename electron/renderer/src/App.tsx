@@ -17,7 +17,7 @@ import { ImportView } from './views/ImportView'
 import { GenresView } from './views/GenresView'
 import { ComingSoonView } from './views/ComingSoonView'
 import { useTweaks } from './stores/settingsStore'
-import { mockLibrary } from './data/mockLibrary'
+import { useLibraryStore } from './stores/libraryStore'
 
 export type View =
   | { kind: 'library' }
@@ -39,15 +39,24 @@ export default function App() {
   const [idx, setIdx] = useState(0)
   const [expanded, setExpanded] = useState(false)
   const [showLyrics, setShowLyrics] = useState(true)
-  const [playing, setPlaying] = useState(true)
-  const [progress, setProgress] = useState(mockLibrary.nowPlaying.progress)
-  const [nowTrack, setNowTrack] = useState<Track>(mockLibrary.nowPlaying.track)
+  const [playing, setPlaying] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const [nowTrack, setNowTrack] = useState<Track | null>(null)
+
+  const refresh = useLibraryStore(s => s.refresh)
+  const loaded = useLibraryStore(s => s.loaded)
 
   const view = history[idx]
 
-  // Animate progress for life-like preview
+  // Kick off the first library load when the renderer is ready.
   useEffect(() => {
-    if (!playing) return
+    if (!loaded) refresh()
+  }, [loaded, refresh])
+
+  // Placeholder progress animation: drives the UI until the real audio engine
+  // takes over in Session 3. Skips when no track is loaded.
+  useEffect(() => {
+    if (!playing || !nowTrack) return
     const id = window.setInterval(() => {
       setProgress(p => (p + 1 / (nowTrack.d * 3)) % 1)
     }, 1000)
@@ -66,7 +75,7 @@ export default function App() {
     setIdx(trimmed.length)
   }
 
-  // Body class management (theme + density + layout)
+  // Body class management (theme + density + layout).
   useEffect(() => {
     const cls = [
       tweak.dark ? '' : 'theme-light',
@@ -94,6 +103,8 @@ export default function App() {
     }
   })()
 
+  // Double-clicking a track marks it as the now-playing track in the UI.
+  // Real playback wiring lands in Session 3 (audio engine).
   const onPlay = (t: Track) => {
     setNowTrack(t)
     setPlaying(true)
@@ -104,11 +115,11 @@ export default function App() {
     switch (view.kind) {
       case 'library':
       case 'recent':
-        return <LibraryView playingId={nowTrack.id} onPlay={onPlay} />
+        return <LibraryView playingId={nowTrack?.id} onPlay={onPlay} />
       case 'albums':
         return <AlbumsView onSelect={al => navigate({ kind: 'album', album: al })} />
       case 'album':
-        return <AlbumView album={view.album} playingId={nowTrack.id} onPlay={onPlay} />
+        return <AlbumView album={view.album} playingId={nowTrack?.id} onPlay={onPlay} />
       case 'artists':
         return <ArtistsView onSelect={ar => navigate({ kind: 'artist', artist: ar })} />
       case 'artist':
@@ -116,18 +127,18 @@ export default function App() {
           <ArtistView
             artist={view.artist}
             onSelectAlbum={al => navigate({ kind: 'album', album: al })}
-            playingId={nowTrack.id}
+            playingId={nowTrack?.id}
             onPlay={onPlay}
           />
         )
       case 'playlist':
-        return <PlaylistView playlist={view.playlist} playingId={nowTrack.id} onPlay={onPlay} />
+        return <PlaylistView playlist={view.playlist} playingId={nowTrack?.id} onPlay={onPlay} />
       case 'search':
         return (
           <SearchView
             onSelectAlbum={al => navigate({ kind: 'album', album: al })}
             onSelectArtist={ar => navigate({ kind: 'artist', artist: ar })}
-            playingId={nowTrack.id}
+            playingId={nowTrack?.id}
             onPlay={onPlay}
           />
         )
@@ -145,7 +156,7 @@ export default function App() {
           />
         )
       default:
-        return <LibraryView playingId={nowTrack.id} onPlay={onPlay} />
+        return <LibraryView playingId={nowTrack?.id} onPlay={onPlay} />
     }
   }
 
@@ -185,7 +196,7 @@ export default function App() {
           />
         </div>
 
-        {expanded && (
+        {expanded && nowTrack && (
           <NowPlayingFull
             track={nowTrack}
             progress={progress}
@@ -197,7 +208,7 @@ export default function App() {
           />
         )}
 
-        {tweak.showMini && (
+        {tweak.showMini && nowTrack && (
           <MiniPlayer
             track={nowTrack}
             playing={playing}

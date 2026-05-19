@@ -3,7 +3,7 @@ import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
 import { TrackTable } from '@renderer/components/TrackTable'
 import { fmtTotal } from '@renderer/utils/format'
-import { mockLibrary } from '@renderer/data/mockLibrary'
+import { useAlbums } from '@renderer/stores/libraryStore'
 
 interface Props {
   playlist: Playlist
@@ -12,6 +12,7 @@ interface Props {
 }
 
 export function PlaylistView({ playlist, playingId, onPlay }: Props) {
+  const albums = useAlbums()
   if (!playlist) return null
   const total = playlist.tracks.reduce((s, t) => s + t.d, 0)
   return (
@@ -22,7 +23,7 @@ export function PlaylistView({ playlist, playingId, onPlay }: Props) {
           style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr', gap: 0 }}
         >
           {playlist.tracks.slice(0, 4).map((t, i) => {
-            const al = mockLibrary.albums.find(a => a.id === t.albumId)
+            const al = albums.find(a => a.id === t.albumId)
             return <div key={i} style={{ overflow: 'hidden' }}><Artwork album={al} radius={0} /></div>
           })}
         </div>

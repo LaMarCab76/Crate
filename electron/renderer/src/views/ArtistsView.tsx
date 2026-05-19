@@ -1,10 +1,19 @@
 import type { Artist } from '@shared/types/library'
 import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
-import { mockLibrary } from '@renderer/data/mockLibrary'
+import { useArtists } from '@renderer/stores/libraryStore'
 
 export function ArtistsView({ onSelect }: { onSelect?: (ar: Artist) => void }) {
-  const artists = mockLibrary.artists
+  const artists = useArtists()
+
+  if (artists.length === 0) {
+    return (
+      <div style={{ padding: 48, color: 'var(--text-secondary)' }}>
+        No artists yet. Add a folder from Library Sources to import your music.
+      </div>
+    )
+  }
+
   return (
     <>
       <div className="lib-head">

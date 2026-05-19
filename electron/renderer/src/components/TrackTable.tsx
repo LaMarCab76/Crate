@@ -3,7 +3,7 @@ import { Artwork } from './Artwork'
 import { Icon } from './Icon'
 import { EQBars } from './EQBars'
 import { fmtTime } from '@renderer/utils/format'
-import { mockLibrary } from '@renderer/data/mockLibrary'
+import { useAlbums } from '@renderer/stores/libraryStore'
 
 interface TrackTableProps {
   tracks: Track[]
@@ -24,6 +24,7 @@ export function TrackTable({
   playingId,
   onPlay,
 }: TrackTableProps) {
+  const albums = useAlbums()
   return (
     <table className="tbl">
       <thead>
@@ -41,6 +42,7 @@ export function TrackTable({
       <tbody>
         {tracks.map((t, i) => {
           const isP = t.id === playingId
+          const album = showArt ? albums.find(a => a.id === t.albumId) : undefined
           return (
             <tr key={t.id} className={isP ? 'playing' : ''} onDoubleClick={() => onPlay?.(t)}>
               <td className="num">
@@ -49,7 +51,7 @@ export function TrackTable({
               {showArt && (
                 <td className="art">
                   <div className="mini-art">
-                    <Artwork album={mockLibrary.albums.find(a => a.id === t.albumId)} radius={3} />
+                    <Artwork album={album} radius={3} />
                   </div>
                 </td>
               )}

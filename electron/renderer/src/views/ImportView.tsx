@@ -1,12 +1,14 @@
 import { Icon } from '@renderer/components/Icon'
-
-const SAMPLE_FOLDERS = [
-  { p: '~/Music/HiFidelity Library', n: 412, s: '38.4 GB', a: 'Active' },
-  { p: '~/Downloads/Vinyl Rips',     n: 64,  s: '6.1 GB',  a: 'Active' },
-  { p: '/Volumes/Studio/Masters',    n: 188, s: '142 GB',  a: 'Disconnected' },
-]
+import { useFolders, useLibraryStore } from '@renderer/stores/libraryStore'
 
 export function ImportView() {
+  const folders = useFolders()
+  const pickAndAdd = useLibraryStore(s => async () => {
+    const picked = await s.pickFolder()
+    if (picked) await s.addFolder(picked)
+  })
+  const removeFolder = useLibraryStore(s => s.removeFolder)
+
   return (
     <div>
       <div className="lib-head">
@@ -15,11 +17,13 @@ export function ImportView() {
           <div className="sub">Folders HiFidelity watches for new files.</div>
         </div>
         <div className="actions">
-          <button className="btn"><Icon name="plus" size={12} /> Add Folder…</button>
+          <button className="btn" onClick={pickAndAdd}>
+            <Icon name="plus" size={12} /> Add Folder…
+          </button>
         </div>
       </div>
 
-      <div className="import-drop">
+      <div className="import-drop" onClick={pickAndAdd} role="button" tabIndex={0}>
         <div className="ic"><Icon name="drop" size={32} stroke={1.3} /></div>
         <h3>Drop audio files here</h3>
         <p>FLAC, ALAC, AAC, MP3, AIFF, WAV · or use Add Folder above</p>
@@ -29,16 +33,22 @@ export function ImportView() {
         <div className="set-section">
           <h2>Watched Folders</h2>
           <div className="set-card">
-            {SAMPLE_FOLDERS.map((f, i) => (
-              <div key={i} className="folder-row">
-                <Icon name="folder" />
-                <div className="path">{f.p}</div>
-                <div className="stat">{f.n} tracks · {f.s}</div>
-                <div className="stat" style={{ color: f.a === 'Active' ? '#34c759' : 'var(--text-tertiary)' }}>
-                  {f.a}
-                </div>
+            {folders.length === 0 ? (
+              <div style={{ padding: 16, color: 'var(--text-secondary)', fontSize: 13 }}>
+                No folders added yet. Click "Add Folder…" above to import your music.
               </div>
-            ))}
+            ) : (
+              folders.map(f => (
+                <div key={f.id} className="folder-row">
+                  <Icon name="folder" />
+                  <div className="path">{f.path}</div>
+                  <div className="stat">{f.track_count} tracks</div>
+                  <button className="btn ghost sm" onClick={() => removeFolder(f.id)}>
+                    Remove
+                  </button>
+                </div>
+              ))
+            )}
           </div>
         </div>
 

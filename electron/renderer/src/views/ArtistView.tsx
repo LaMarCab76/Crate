@@ -4,6 +4,7 @@ import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
 import { TrackTable } from '@renderer/components/TrackTable'
 import { fmtTotal } from '@renderer/utils/format'
+import { useArtistByUiId } from '@renderer/stores/libraryStore'
 
 interface Props {
   artist: Artist
@@ -14,22 +15,24 @@ interface Props {
 
 export function ArtistView({ artist, onSelectAlbum, playingId, onPlay }: Props) {
   const [mode, setMode] = useState<'discography' | 'albums'>('discography')
-  if (!artist) return null
+  const fresh = useArtistByUiId(artist?.id)
+  const ar = fresh ?? artist
+  if (!ar) return null
 
-  const allTracks = artist.albums.flatMap(a => a.tracks)
-  const sortedAlbums = [...artist.albums].sort((a, b) => b.year - a.year)
+  const allTracks = ar.albums.flatMap(a => a.tracks)
+  const sortedAlbums = [...ar.albums].sort((a, b) => b.year - a.year)
 
   return (
     <>
       <div className="artist-hero">
         <div className="bg">
-          <Artwork album={{ seed: artist.seed, palette: artist.palette, pattern: artist.pattern }} radius={0} />
+          <Artwork album={{ seed: ar.seed, palette: ar.palette, pattern: ar.pattern }} radius={0} />
         </div>
         <div className="meta">
           <div className="kicker">Artist</div>
-          <h1>{artist.name}</h1>
+          <h1>{ar.name}</h1>
           <div className="stat">
-            {artist.albums.length} album{artist.albums.length > 1 ? 's' : ''} · {allTracks.length} tracks ·{' '}
+            {ar.albums.length} album{ar.albums.length > 1 ? 's' : ''} · {allTracks.length} tracks ·{' '}
             {allTracks.reduce((s, t) => s + t.plays, 0)} plays
           </div>
           <div style={{ display: 'flex', gap: 8, marginTop: 14, alignItems: 'center' }}>

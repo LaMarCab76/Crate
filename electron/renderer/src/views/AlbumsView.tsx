@@ -1,10 +1,19 @@
 import type { Album } from '@shared/types/library'
 import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
-import { mockLibrary } from '@renderer/data/mockLibrary'
+import { useAlbums } from '@renderer/stores/libraryStore'
 
 export function AlbumsView({ onSelect }: { onSelect?: (al: Album) => void }) {
-  const albums = mockLibrary.albums
+  const albums = useAlbums()
+
+  if (albums.length === 0) {
+    return (
+      <div style={{ padding: 48, color: 'var(--text-secondary)' }}>
+        No albums yet. Add a folder from Library Sources to import your music.
+      </div>
+    )
+  }
+
   return (
     <>
       <div className="lib-head">

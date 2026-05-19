@@ -1,12 +1,22 @@
 import type { Album } from '@shared/types/library'
 import { Artwork } from '@renderer/components/Artwork'
-import { mockLibrary } from '@renderer/data/mockLibrary'
+import { useAlbums } from '@renderer/stores/libraryStore'
 
 export function GenresView({ onSelectAlbum }: { onSelectAlbum?: (al: Album) => void }) {
-  const albums = mockLibrary.albums
+  const albums = useAlbums()
+
+  if (albums.length === 0) {
+    return (
+      <div style={{ padding: 48, color: 'var(--text-secondary)' }}>
+        No music yet. Add a folder from Library Sources to import your music.
+      </div>
+    )
+  }
+
   const byGenre: Record<string, Album[]> = {}
   albums.forEach(a => {
-    (byGenre[a.genre] = byGenre[a.genre] || []).push(a)
+    const g = a.genre || 'Unknown'
+    ;(byGenre[g] = byGenre[g] || []).push(a)
   })
 
   return (

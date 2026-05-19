@@ -3,6 +3,7 @@ import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
 import { TrackTable } from '@renderer/components/TrackTable'
 import { fmtTotal } from '@renderer/utils/format'
+import { useAlbumByUiId } from '@renderer/stores/libraryStore'
 
 interface Props {
   album: Album
@@ -11,17 +12,21 @@ interface Props {
 }
 
 export function AlbumView({ album, playingId, onPlay }: Props) {
-  if (!album) return null
-  const totalDur = album.tracks.reduce((s, t) => s + t.d, 0)
+  // Re-read the album from the store so its tracks list stays fresh after
+  // imports and updates (album passed via navigation is a snapshot).
+  const fresh = useAlbumByUiId(album?.id)
+  const a = fresh ?? album
+  if (!a) return null
+  const totalDur = a.tracks.reduce((s, t) => s + t.d, 0)
   return (
     <>
       <div className="album-hero">
-        <div className="art"><Artwork album={album} radius={8} /></div>
+        <div className="art"><Artwork album={a} radius={8} /></div>
         <div className="meta">
-          <div className="kicker">{album.genre} · {album.year}</div>
-          <h1>{album.title}</h1>
+          <div className="kicker">{a.genre} · {a.year}</div>
+          <h1>{a.title}</h1>
           <div className="credits">
-            <a>{album.artist}</a> · {album.tracks.length} tracks · {fmtTotal(totalDur)}
+            <a>{a.artist}</a> · {a.tracks.length} tracks · {fmtTotal(totalDur)}
           </div>
           <div className="ctas">
             <button className="btn primary"><Icon name="play" size={12} /> Play</button>
@@ -33,7 +38,7 @@ export function AlbumView({ album, playingId, onPlay }: Props) {
         </div>
       </div>
       <TrackTable
-        tracks={album.tracks}
+        tracks={a.tracks}
         showArt={false}
         showAlbum={false}
         showPlays={false}

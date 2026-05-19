@@ -1,6 +1,8 @@
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { closeDatabase, getDatabase } from './db/database'
+import { registerLibraryChannel } from './ipc/library-channel'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -43,6 +45,11 @@ function createMainWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
+  // Initialize the SQLite database before the renderer can call any IPC handler.
+  // Migrations are applied during the first getDatabase() call.
+  getDatabase()
+  registerLibraryChannel()
+
   createMainWindow()
 
   app.on('activate', () => {
@@ -52,4 +59,8 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('will-quit', () => {
+  closeDatabase()
 })
