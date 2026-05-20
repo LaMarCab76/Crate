@@ -1,6 +1,6 @@
-appId: com.lautarocaballero.hifidelity
-productName: HiFidelity
-copyright: Copyright © 2025 Lautaro Caballero
+appId: com.lautarocaballero.crate
+productName: Crate
+copyright: Copyright © 2026 Lautaro Caballero
 
 directories:
   buildResources: electron-build

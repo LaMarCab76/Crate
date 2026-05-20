@@ -217,7 +217,7 @@ export class ImportService {
       this.repos.folders.updateTrackCount(folderId, imported + (files.length - fresh.length))
 
       // After the scan is done, fold in any per-track state that lives in the
-      // folder's portable `.hifidelity-library.json`, then refresh the file
+      // folder's portable `.crate-library.json`, then refresh the file
       // so it reflects the new ground truth.
       const backup = getLibraryBackup()
       const restore = backup.readForFolder(folderPath)

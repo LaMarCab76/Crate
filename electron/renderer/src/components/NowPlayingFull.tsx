@@ -34,7 +34,7 @@ export function NowPlayingFull({ onCollapse }: NowPlayingFullProps) {
       return
     }
     let cancelled = false
-    const src = `hifi://artwork/${encodeURIComponent(artworkPath)}`
+    const src = `crate://artwork/${encodeURIComponent(artworkPath)}`
     void extractDominantColor(src).then(hex => {
       if (!cancelled) setArtworkTint(hex)
     })

@@ -1,5 +1,5 @@
 // Portable library metadata file dropped at the root of every imported folder
-// as `.hifidelity-library.json`. Carries user-modifiable state (favorites,
+// as `.crate-library.json`. Carries user-modifiable state (favorites,
 // play counts, ratings) so it can travel with the audio files between
 // machines.
 //
@@ -15,7 +15,7 @@
 // re-import.
 
 export const BACKUP_VERSION = 1
-export const BACKUP_FILENAME = '.hifidelity-library.json'
+export const BACKUP_FILENAME = '.crate-library.json'
 
 export interface BackupTrack {
   playCount?: number

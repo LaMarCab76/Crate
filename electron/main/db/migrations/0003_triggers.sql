@@ -1,5 +1,4 @@
 -- Statistics-update triggers + orphan-cleanup triggers.
--- Mirrors old_swift/HiFidelity/Core/DatabaseManager/Schema/DatabaseInit.swift:790-1031.
 
 -- =============================================================================
 -- Statistics: album track_count + total_duration on INSERT/DELETE/UPDATE

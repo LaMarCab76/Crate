@@ -1,5 +1,4 @@
--- Initial HiFidelity schema, mirroring the GRDB schema from the legacy Swift app.
--- Reference: old_swift/HiFidelity/Core/DatabaseManager/Schema/DatabaseInit.swift
+-- Initial Crate schema, mirroring the GRDB schema from the legacy Swift app.
 -- Squashes v1..v6 of the GRDB migrator into a single SQL file (clean slate).
 
 -- =============================================================================

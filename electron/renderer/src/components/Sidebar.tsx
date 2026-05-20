@@ -74,7 +74,7 @@ export function Sidebar({
             >
               <span style={{ color: '#111', fontWeight: 800, fontSize: 13, fontFamily: 'var(--font-mono)' }}>♪</span>
             </div>
-            HiFidelity
+            Crate
           </div>
         </div>
 

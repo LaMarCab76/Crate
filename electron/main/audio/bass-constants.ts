@@ -1,5 +1,5 @@
-// BASS constants used in the FFI layer. Mirrors the #defines in
-// old_swift/HiFidelity/Core/Audio/bass-include/bass.h and bass_fx.h.
+// BASS constants used in the FFI layer. Mirrors the #defines in the BASS/BASS_FX
+// C headers (bass.h and bass_fx.h from un4seen.com).
 
 // ---------------- Streams / channels ----------------
 

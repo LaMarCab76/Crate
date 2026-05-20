@@ -1,5 +1,5 @@
 // Portable library metadata. Each imported folder gets a hidden
-// `.hifidelity-library.json` at its root that mirrors the user-modifiable
+// `.crate-library.json` at its root that mirrors the user-modifiable
 // pieces of state from the SQLite DB (plays, favorites, ratings, EQ
 // overrides). When the folder is reconnected on another machine the file is
 // read first and its values are merged into the freshly-scanned DB rows.
@@ -22,7 +22,7 @@ import type {
 import { BACKUP_FILENAME, BACKUP_VERSION } from '@shared/types/library-backup'
 
 const DEBOUNCE_MS = 2000
-const APP_NAME = 'HiFidelity2'
+const APP_NAME = 'Crate'
 
 function toPosixRelative(folderPath: string, absPath: string): string {
   return relative(folderPath, absPath).split(sep).join('/')

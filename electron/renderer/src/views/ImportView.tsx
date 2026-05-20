@@ -43,7 +43,7 @@ export function ImportView() {
       <div className="lib-head">
         <div>
           <h1>Library Sources</h1>
-          <div className="sub">Folders HiFidelity watches for new files.</div>
+          <div className="sub">Folders Crate watches for new files.</div>
         </div>
         <div className="actions">
           <button className="btn" onClick={pickAndAdd}>

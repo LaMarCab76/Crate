@@ -93,6 +93,7 @@ export function AlbumView({ album }: Props) {
         showAlbum={false}
         showPlays={false}
         showPath={isUnresolvedAlbum}
+        showTrackNo
       />
       {albumActions.elements}
     </>

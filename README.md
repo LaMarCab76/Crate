@@ -1,6 +1,6 @@
-# HiFidelity
+# Crate
 
-Audiophile music library and player. The app is being rebuilt as an **Electron + Vite + React + TypeScript** desktop app, replacing the prior SwiftUI / macOS-only implementation that lives in `old_swift/` for reference.
+Audiophile music library and player, built as an **Electron + Vite + React + TypeScript** desktop app (replacing a prior SwiftUI / macOS-only implementation).
 
 ## Status
 
@@ -13,7 +13,7 @@ This is an alpha. The current shell renders the full UI from the design with moc
 | 2 | Data layer — `better-sqlite3`, FTS5, schema port | pending |
 | 3 | Audio engine — BASS via koffi FFI, gapless, DACManager, EQ | pending |
 | 4 | Metadata + library import — `music-metadata`, chokidar watchers | pending |
-| 5 | Lyrics (LRClib), R128 scanner, media keys, mini player popout | pending |
+| 5 | Lyrics (LRClib — see `docs/lyrics-feature.md`), R128 scanner, media keys, mini player popout | pending |
 | 6 | Packaging — DMG, NSIS, AppImage, auto-update | pending |
 
 ## Quick start
@@ -40,12 +40,11 @@ electron/
       styles/        # globals.css
 shared/         # Types shared between main and renderer (audio, library, IPC)
 native/         # BASS dylibs/dlls/sos (populated in Phase 3)
-old_swift/      # Reference: the previous SwiftUI / GRDB / CoreAudio / BASS implementation
 ```
 
 ## Design
 
-The UI is a port of the **HiFidelity** Claude Design handoff (`HiFidelity.html`):
+The UI is a port of the original Claude Design handoff:
 
 - Three-pane layout: translucent sidebar + main + right player pane with a draggable splitter
 - Dark + light themes, three densities (compact / regular / comfy), three layouts (classic / editorial / dense)
@@ -57,7 +56,7 @@ The UI is a port of the **HiFidelity** Claude Design handoff (`HiFidelity.html`)
 
 ## Why Electron (this time)
 
-The Swift app at `old_swift/` is feature-rich (gapless, hi-res, hog mode, R128, FTS5 search) but iteration is slow and it's locked to macOS. Electron unlocks:
+The prior Swift app was feature-rich (gapless, hi-res, hog mode, R128, FTS5 search) but iteration was slow and it was locked to macOS. Electron unlocks:
 
 - Faster UI iteration (Vite HMR, no Xcode)
 - Cross-platform potential (macOS + Windows + Linux)

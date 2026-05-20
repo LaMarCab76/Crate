@@ -46,7 +46,7 @@ const TWEAK_DEFAULTS: Tweak = {
   showPlayerVisualizer: true,
 }
 
-const STORAGE_KEY = 'hifidelity.tweaks.v1'
+const STORAGE_KEY = 'crate.tweaks.v1'
 
 function load(): Tweak {
   if (typeof window === 'undefined') return TWEAK_DEFAULTS

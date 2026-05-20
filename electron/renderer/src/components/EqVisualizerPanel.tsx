@@ -21,6 +21,9 @@ const SEGMENT_COUNT = 12
 // Suppress writes when the smoothed lit value barely moves (≈ 0.25% of one
 // segment), so an idle FFT doesn't churn DOM style writes.
 const LIT_EPSILON = 0.03
+// Boost applied inside the sqrt display curve so that typical FFT values
+// (0.05–0.20) map to a visible bar height rather than near-zero.
+const FFT_DISPLAY_GAIN = 2.2
 
 interface Props {
   track: Track
@@ -40,10 +43,8 @@ export function EqVisualizerPanel({ track, interactive = true }: Props) {
   const previewBand = useEqStore(s => s.previewBand)
   const setEnabled = useEqStore(s => s.setEnabled)
   const playbackStatus = usePlaybackStore(s => s.status)
-  const [windowActive, setWindowActive] = useState(() =>
-    typeof document === 'undefined'
-      ? true
-      : document.visibilityState !== 'hidden' && document.hasFocus(),
+  const [windowVisible, setWindowVisible] = useState(() =>
+    typeof document === 'undefined' ? true : document.visibilityState !== 'hidden',
   )
 
   const [draftBands, setDraftBandsState] = useState<number[] | null>(null)
@@ -69,21 +70,17 @@ export function EqVisualizerPanel({ track, interactive = true }: Props) {
   useEffect(() => {
     if (typeof document === 'undefined') return
 
-    const syncActive = () => {
-      setWindowActive(document.visibilityState !== 'hidden' && document.hasFocus())
+    const syncVisible = () => {
+      setWindowVisible(document.visibilityState !== 'hidden')
     }
-    window.addEventListener('focus', syncActive)
-    window.addEventListener('blur', syncActive)
-    document.addEventListener('visibilitychange', syncActive)
+    document.addEventListener('visibilitychange', syncVisible)
     return () => {
-      window.removeEventListener('focus', syncActive)
-      window.removeEventListener('blur', syncActive)
-      document.removeEventListener('visibilitychange', syncActive)
+      document.removeEventListener('visibilitychange', syncVisible)
     }
   }, [])
 
   useEffect(() => {
-    const shouldAnimate = playbackStatus === 'playing' && windowActive
+    const shouldAnimate = playbackStatus === 'playing' && windowVisible
     if (!shouldAnimate) {
       smoothedRef.current.fill(0)
       lastLitRef.current.fill(0)
@@ -106,7 +103,7 @@ export function EqVisualizerPanel({ track, interactive = true }: Props) {
         smoothed[i] = smoothed[i] * EMA_ALPHA + targets[i] * (1 - EMA_ALPHA)
         const el = trackRefs.current[i]
         if (!el) continue
-        const lit = Math.max(0, Math.min(SEGMENT_COUNT, smoothed[i] * SEGMENT_COUNT))
+        const lit = Math.max(0, Math.min(SEGMENT_COUNT, Math.sqrt(smoothed[i] * FFT_DISPLAY_GAIN) * SEGMENT_COUNT))
         if (Math.abs(lit - lastLit[i]) >= LIT_EPSILON) {
           lastLit[i] = lit
           el.style.setProperty('--lit', lit.toFixed(2))
@@ -120,7 +117,7 @@ export function EqVisualizerPanel({ track, interactive = true }: Props) {
       stopDemand()
       cancelAnimationFrame(frame)
     }
-  }, [playbackStatus, windowActive])
+  }, [playbackStatus, windowVisible])
 
   const [dragging, setDragging] = useState<number | null>(null)
   const draggingRef = useRef<number | null>(null)

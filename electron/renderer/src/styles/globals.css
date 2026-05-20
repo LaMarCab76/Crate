@@ -1,4 +1,4 @@
-/* HiFidelity — base styles */
+/* Crate — base styles */
 :root {
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, "Cascadia Mono", Consolas, monospace;
@@ -28,6 +28,7 @@
 
   --accent: rgba(255, 255, 255, 0.95);
   --accent-soft: rgba(255, 255, 255, 0.13);
+  --color-playing: #4F9EFF;
 
   --bg-tint: transparent;
   --np-tint: transparent;
@@ -70,15 +71,16 @@
 
   --accent: rgba(0, 0, 0, 0.88);
   --accent-soft: rgba(0, 0, 0, 0.08);
+  --color-playing: #1D6FEB;
 
   --shadow-window: 0 30px 80px rgba(0,0,0,0.18), 0 0 0 0.5px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.06);
   --shadow-pop: 0 12px 32px rgba(0,0,0,0.18), 0 0 0 0.5px rgba(0,0,0,0.1);
 }
 
 /* Density */
-.density-compact { --row-h: 28px; --tb-h: 44px; --np-h: 72px; }
-.density-regular { --row-h: 36px; --tb-h: 52px; --np-h: 84px; }
-.density-comfy   { --row-h: 44px; --tb-h: 60px; --np-h: 96px; }
+.density-compact { --row-h: 36px; --tb-h: 44px; --np-h: 72px; }
+.density-regular { --row-h: 56px; --tb-h: 52px; --np-h: 84px; }
+.density-comfy   { --row-h: 72px; --tb-h: 60px; --np-h: 96px; }
 
 * { box-sizing: border-box; }
 html, body {
@@ -799,7 +801,9 @@ html, body {
 
 .pp-player-bottom {
   display: flex; flex-direction: column; gap: 10px;
-  padding: 4px var(--pp-inline) 12px;
+  padding: 4px var(--pp-inline) 0;
+  flex: 1;
+  min-height: 0;
 }
 
 .pp-player-viz {
@@ -844,6 +848,33 @@ html, body {
 
 .pp-player-viz.collapsed {
   padding-bottom: 0;
+}
+
+.pp-player-upnext {
+  margin-top: 6px;
+  border-top: 0.5px solid var(--divider);
+  padding-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-left: calc(var(--pp-inline) * -1);
+  margin-right: calc(var(--pp-inline) * -1);
+}
+
+.pp-player-upnext:not(.collapsed) {
+  flex: 1;
+  min-height: 0;
+}
+
+.pp-player-upnext.collapsed {
+  padding-bottom: 12px;
+}
+
+.pp-upnext-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 8px 8px;
 }
 
 .pp-volume .ic { color: var(--text-secondary); }
@@ -1089,7 +1120,7 @@ html, body {
   white-space: nowrap;
 }
 .tbl thead th.num { width: 32px; text-align: right; padding-right: 12px; }
-.tbl thead th.art { width: 44px; }
+.tbl thead th.art { width: 72px; }
 .tbl thead th.title { text-align: left; }
 .tbl thead th.dur { width: 64px; text-align: right; }
 .tbl thead th.plays { width: 60px; text-align: right; }
@@ -1111,7 +1142,7 @@ html, body {
                     color-mix(in oklab, var(--bg-tint) 18%, transparent)),
     var(--bg-hover);
 }
-.tbl tbody tr.playing { color: var(--text-primary); }
+.tbl tbody tr.playing { color: var(--color-playing); }
 .tbl tbody tr.playing .title { font-weight: 600; }
 .tbl tbody td {
   padding: 0 10px;
@@ -1152,10 +1183,10 @@ html, body {
   opacity: 1;
   pointer-events: auto;
 }
-.tbl td.art { width: 44px; padding-right: 0; }
+.tbl td.art { width: 72px; padding-right: 0; }
 .tbl td.art .mini-art {
-  width: min(32px, calc(var(--row-h) - 4px));
-  height: min(32px, calc(var(--row-h) - 4px));
+  width: min(64px, calc(var(--row-h) - 4px));
+  height: min(64px, calc(var(--row-h) - 4px));
   border-radius: 3px;
   overflow: hidden;
 }
@@ -1207,7 +1238,7 @@ html, body {
   text-overflow: ellipsis;
 }
 .tbl td.actions { width: 44px; text-align: right; }
-.tbl tbody tr.playing td.num .eq-bars { color: var(--text-primary); }
+.tbl tbody tr.playing td.num .eq-bars { color: var(--color-playing); }
 
 /* Mini equalizer indicator */
 .eq-bars { display: inline-flex; align-items: flex-end; gap: 1.5px; height: 12px; width: 12px; }
@@ -1911,6 +1942,25 @@ button:disabled { cursor: not-allowed; }
   transition: opacity 60ms linear;
   will-change: opacity;
   pointer-events: none;
+}
+
+/* Thin cap line at the top of each bar — reuses --lit so no extra JS
+   property is needed. 12 = SEGMENT_COUNT. lit=0 → top:100% (clipped by
+   overflow:hidden, invisible at idle); lit=12 → top:0 (full bar). */
+.eq-viz .eq-band-track::after {
+  content: '';
+  position: absolute;
+  left: 2px; right: 2px;
+  height: 2px;
+  border-radius: 1px;
+  background: color-mix(in oklab,
+    var(--text-primary),
+    var(--accent) calc(max(var(--gain-norm, 0), 0) * 60%)
+  );
+  top: calc((1 - var(--lit, 0) / 12) * 100%);
+  opacity: 0.9;
+  pointer-events: none;
+  z-index: 1;
 }
 
 .eq-viz .eq-band-thumb {

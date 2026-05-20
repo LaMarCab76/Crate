@@ -17,6 +17,7 @@ interface TrackTableProps {
   showFmt?: boolean
   showPlays?: boolean
   showPath?: boolean
+  showTrackNo?: boolean
   onRefreshMetadata?: (track: Track) => void
 }
 
@@ -27,6 +28,7 @@ export function TrackTable({
   showFmt = true,
   showPlays = true,
   showPath = false,
+  showTrackNo = false,
   onRefreshMetadata,
 }: TrackTableProps) {
   const albums = useAlbums()
@@ -41,7 +43,7 @@ export function TrackTable({
       <table className="tbl">
         <thead>
           <tr>
-            <th className="num">#</th>
+            <th className="num">{showTrackNo ? '#' : null}</th>
             {showArt && <th className="art" />}
             <th className="title">Title</th>
             {showAlbum && <th>Album</th>}
@@ -67,7 +69,7 @@ export function TrackTable({
               >
                 <td className={`num ${t.dbId != null ? 'has-like' : ''}`}>
                   <span className="track-index">
-                    {isP ? <EQBars /> : t.no || i + 1}
+                    {isP ? <EQBars /> : showTrackNo ? (t.no || i + 1) : null}
                   </span>
                   {t.dbId != null && (
                     <button

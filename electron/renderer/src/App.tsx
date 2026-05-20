@@ -92,7 +92,7 @@ export default function App() {
   useEffect(() => {
     if (!playingArtworkPath) { setPlayingTint(null); return }
     let cancelled = false
-    const src = `hifi://artwork/${encodeURIComponent(playingArtworkPath)}`
+    const src = `crate://artwork/${encodeURIComponent(playingArtworkPath)}`
     void extractDominantColor(src).then(hex => {
       if (!cancelled) setPlayingTint(hex)
     })

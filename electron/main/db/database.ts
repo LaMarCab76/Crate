@@ -9,7 +9,7 @@ let dbInstance: BetterSqliteDatabase | null = null
 function databasePath(): string {
   const userData = app.getPath('userData')
   mkdirSync(userData, { recursive: true })
-  return join(userData, 'hifidelity.db')
+  return join(userData, 'crate.db')
 }
 
 export function getDatabase(): BetterSqliteDatabase {
@@ -27,7 +27,7 @@ export function getDatabase(): BetterSqliteDatabase {
   const flatOptions = compileOptions.map(r => r.compile_options)
   if (!flatOptions.some(o => o.includes('ENABLE_FTS5'))) {
     throw new Error(
-      'SQLite was compiled without FTS5 support; HiFidelity requires FTS5 for search. ' +
+      'SQLite was compiled without FTS5 support; Crate requires FTS5 for search. ' +
         'Reinstall better-sqlite3 or check the bundled SQLite version.',
     )
   }

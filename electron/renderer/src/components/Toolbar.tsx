@@ -37,7 +37,7 @@ function titleForView(view: View): string {
   if (view.kind === 'album') return view.album.title
   if (view.kind === 'artist') return view.artist.name
   if (view.kind === 'playlist') return view.playlist.name
-  return titleMap[view.kind] ?? 'HiFidelity'
+  return titleMap[view.kind] ?? 'Crate'
 }
 
 export function Toolbar({

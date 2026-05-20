@@ -188,7 +188,7 @@ export function SettingsView({ tweak, setTweak }: Props) {
               <div className="lbl">Keep portable backup in folder</div>
               <div className="sub">
                 Saves your plays, favorites, ratings and EQ settings into a hidden{' '}
-                <code style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>.hifidelity-library.json</code>
+                <code style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>.crate-library.json</code>
                 {' '}at the root of each library folder. When you reconnect the folder elsewhere those
                 are merged back automatically.
               </div>

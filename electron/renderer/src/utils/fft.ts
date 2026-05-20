@@ -17,7 +17,6 @@ let latest: number[] = new Array(64).fill(0)
 const flatline: number[] = new Array(64).fill(0)
 const subscriptions = new Set<Subscription>()
 let appliedMode: FftMode = 'off'
-let windowFocused = typeof document === 'undefined' ? true : document.hasFocus()
 
 if (typeof window !== 'undefined' && window.api?.audio) {
   window.api.audio.onFft(({ bins }) => {
@@ -25,19 +24,8 @@ if (typeof window !== 'undefined' && window.api?.audio) {
     publish(bins)
   })
 
-  window.addEventListener('focus', () => {
-    windowFocused = true
-    syncFftMode()
-  })
-  window.addEventListener('blur', () => {
-    windowFocused = false
-    publishFlatline()
-    syncFftMode()
-  })
-
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
-      windowFocused = document.hasFocus()
       if (document.visibilityState === 'hidden') publishFlatline()
       syncFftMode()
     })
@@ -85,8 +73,7 @@ function syncFftMode(): void {
 
   let nextMode: FftMode = 'off'
   const visible = typeof document === 'undefined' || document.visibilityState !== 'hidden'
-  const foreground = visible && windowFocused
-  if (foreground && subscriptions.size > 0) {
+  if (visible && subscriptions.size > 0) {
     for (const sub of subscriptions) {
       if (sub.mode === 'full') {
         nextMode = 'screen'

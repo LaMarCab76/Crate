@@ -39,7 +39,7 @@ export interface Track {
   sampleRate?: number | null
   channels?: number | null
   bitDepth?: number | null
-  artworkPath?: string   // filename under userData/artwork/, served via hifi://
+  artworkPath?: string   // filename under userData/artwork/, served via crate://
 }
 
 export interface Album {
@@ -52,7 +52,7 @@ export interface Album {
   pattern: Pattern
   genre: string
   tracks: Track[]
-  artworkPath?: string  // filename under userData/artwork/, served via hifi://
+  artworkPath?: string  // filename under userData/artwork/, served via crate://
 }
 
 export interface Artist {

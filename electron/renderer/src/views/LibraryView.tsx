@@ -39,7 +39,7 @@ function EmptyState() {
           lineHeight: 1.5,
         }}
       >
-        Add a folder of audio files and HiFidelity will scan it for tracks. FLAC, ALAC,
+        Add a folder of audio files and Crate will scan it for tracks. FLAC, ALAC,
         AAC, MP3, WAV, AIFF, OGG, OPUS, APE, DSD all supported.
       </p>
       <button className="btn primary" onClick={pickAndAdd}>

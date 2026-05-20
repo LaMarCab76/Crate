@@ -19,7 +19,7 @@ body:
       label: Steps to Reproduce
       description: How can we reproduce this issue?
       placeholder: |
-        1. Open HiFidelity
+        1. Open Crate
         2. Go to Settings → Library
         3. Click "Add Folder"
         4. Select folder with 20,000+ songs
@@ -50,8 +50,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: HiFidelity Version
-      description: Find this in HiFidelity → About
+      label: Crate Version
+      description: Find this in Crate → About
       placeholder: "e.g., 1.0.0"
     validations:
       required: true
@@ -60,7 +60,7 @@ body:
     id: macos
     attributes:
       label: macOS Version
-      description: HiFidelity requires macOS 14.0+
+      description: Crate requires macOS 14.0+
       options:
         - macOS 15 (Sequoia)
         - macOS 14 (Sonoma)
@@ -88,11 +88,11 @@ body:
       description: |
         **App Logs:**
         - While running: Settings → About → Open App Data → Logs folder
-        - If crashed: `~/Library/Containers/vr.HiFidelity/Data/Library/Application Support/vr.HiFidelity/Logs/`
+        - If crashed: `~/Library/Application Support/Crate/Logs/`
 
         **Crash Reports (if app crashed):**
-        - Console.app → Crash Reports → Search for "HiFidelity"
-        - Or: `~/Library/Logs/DiagnosticReports/HiFidelity-*.crash`
+        - Console.app → Crash Reports → Search for "Crate"
+        - Or: `~/Library/Logs/DiagnosticReports/Crate-*.crash`
 
         Drag and drop log files here or paste relevant excerpts.
       render: shell

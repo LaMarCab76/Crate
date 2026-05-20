@@ -9,7 +9,7 @@ import { join } from 'node:path'
 const require = createRequire(import.meta.url)
 const koffi = require('koffi') as typeof import('koffi')
 
-// BASS_BFX_PEAKEQ layout (see old_swift/HiFidelity/Core/Audio/bass-include/bass_fx.h).
+// BASS_BFX_PEAKEQ layout (see bass_fx.h from un4seen.com).
 export const BASS_BFX_PEAKEQ = koffi.struct('BASS_BFX_PEAKEQ', {
   lBand:      'int32_t',
   fBandwidth: 'float',
