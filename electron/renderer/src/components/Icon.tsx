@@ -5,6 +5,7 @@ const ICONS: Record<string, ReactNode> = {
   fwd:    <path d="M5 4l6 6-6 6" />,
   chevR:  <path d="M6 4l4 4-4 4" />,
   chevD:  <path d="M4 6l4 4 4-4" />,
+  chevU:  <path d="M4 10l4-4 4 4" />,
   play:   <path d="M5 3.5v13l11-6.5z" fill="currentColor" stroke="none" />,
   pause:  <g><rect x="4.5" y="3.5" width="3.5" height="13" rx="0.5" fill="currentColor" stroke="none" /><rect x="12" y="3.5" width="3.5" height="13" rx="0.5" fill="currentColor" stroke="none" /></g>,
   prev:   <g><path d="M5 4v12" strokeLinecap="round" /><path d="M16 4.5v11l-9-5.5z" fill="currentColor" stroke="none" /></g>,

@@ -233,6 +233,10 @@ export interface TracksApi {
   trash(trackIds: number[]): Promise<TrashTracksResult>
 }
 
+export interface AlbumsApi {
+  setFavorite(id: number, favorite: boolean): Promise<void>
+}
+
 export interface ArtistsApi {
   setFavorite(id: number, favorite: boolean): Promise<void>
 }
@@ -250,6 +254,7 @@ export interface Api {
   audio: AudioApi
   eq: EqApi
   tracks: TracksApi
+  albums: AlbumsApi
   artists: ArtistsApi
   settings: SettingsApi
 }

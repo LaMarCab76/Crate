@@ -113,10 +113,11 @@ export function TrackTable({
                           type="button"
                           className="tb-icon-btn"
                           style={{
-                            width: 22,
+                            width: '100%',
                             height: 22,
                             color: 'inherit',
-                            marginLeft: 'auto',
+                            padding: 0,
+                            justifyContent: 'center',
                           }}
                           title={playing ? 'Pause' : 'Play'}
                           aria-label={playing ? 'Pause' : 'Play'}

@@ -155,11 +155,13 @@ export function dbToUiAlbum(a: DbAlbum, tracks: Track[] = []): Album {
     title: a.title,
     artist: a.album_artist ?? '',
     year: parseInt(a.year ?? '0', 10) || 0,
+    added: a.date_added,
     seed,
     palette: palette(seed),
     pattern: patternFor(seed),
     genre: tracks[0]?.genre ?? '',
     tracks,
+    favorite: a.is_favorite === 1,
     artworkPath: a.artwork_path ?? firstTrackArt,
   }
 }

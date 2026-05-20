@@ -1,8 +1,10 @@
-import { type CSSProperties, useEffect, useRef, useState } from 'react'
+import { type CSSProperties, type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
 import type { Album, Artist, Playlist } from '@shared/types/library'
 import { Sidebar } from './components/Sidebar'
 import { Toolbar } from './components/Toolbar'
 import { PlayerPane } from './components/PlayerPane'
+import { PlayerBottomBar } from './components/PlayerBottomBar'
+import { UpNextToast } from './components/UpNextToast'
 import { NowPlayingFull } from './components/NowPlayingFull'
 import { LibraryView } from './views/LibraryView'
 import { AlbumsView } from './views/AlbumsView'
@@ -17,6 +19,7 @@ import { GenresView } from './views/GenresView'
 import { useTweaks } from './stores/settingsStore'
 import { useAlbumByUiId, useFavoriteTracks, useLibraryStore } from './stores/libraryStore'
 import { usePlaybackStore } from './stores/playbackStore'
+import { installAutoHideScrollbars } from './utils/autoHideScrollbars'
 import { extractDominantColor } from './utils/colorExtract'
 
 export type View =
@@ -33,6 +36,42 @@ export type View =
   | { kind: 'playlist'; playlist: Playlist }
   | { kind: 'favoriteTracks' }
 
+const SIDEBAR_WIDTH_STORAGE_KEY = 'crate.layout.sidebarWidth.v1'
+const PLAYER_PANE_OPEN_STORAGE_KEY = 'crate.layout.playerPaneOpen.v1'
+
+const SIDEBAR_WIDTH_DEFAULT = 240
+const SIDEBAR_WIDTH_MIN = 180
+const SIDEBAR_WIDTH_MAX = 420
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value))
+}
+
+function loadPersistedWidth(key: string, fallback: number, min: number, max: number): number {
+  try {
+    if (typeof window === 'undefined') return fallback
+    const raw = window.localStorage.getItem(key)
+    if (!raw) return fallback
+    const parsed = Number(raw)
+    if (!Number.isFinite(parsed)) return fallback
+    return clamp(parsed, min, max)
+  } catch {
+    return fallback
+  }
+}
+
+function loadPersistedBool(key: string, fallback: boolean): boolean {
+  try {
+    if (typeof window === 'undefined') return fallback
+    const raw = window.localStorage.getItem(key)
+    if (raw === 'true') return true
+    if (raw === 'false') return false
+    return fallback
+  } catch {
+    return fallback
+  }
+}
+
 export default function App() {
   const [tweak, setTweak] = useTweaks()
   const [history, setHistory] = useState<View[]>([{ kind: 'library' }])
@@ -40,8 +79,16 @@ export default function App() {
   const [expanded, setExpanded] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [sidebarOpen, setSidebarOpen] = useState(true)
-  const [playerPaneOpen, setPlayerPaneOpen] = useState(true)
+  const [playerPaneOpen, setPlayerPaneOpen] = useState(() =>
+    loadPersistedBool(PLAYER_PANE_OPEN_STORAGE_KEY, true)
+  )
+  const [sidebarWidth, setSidebarWidth] = useState(() =>
+    loadPersistedWidth(SIDEBAR_WIDTH_STORAGE_KEY, SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX)
+  )
+  const [isResizingSidebar, setIsResizingSidebar] = useState(false)
+  const sidebarWidthRef = useRef(sidebarWidth)
   const contentRef = useRef<HTMLDivElement>(null)
+  const frameRef = useRef<HTMLDivElement>(null)
   const scrollPositionsRef = useRef(new Map<number, number>())
   const view = history[idx]
   const viewAlbum = view.kind === 'album' ? view.album : null
@@ -58,16 +105,50 @@ export default function App() {
   const viewedAlbum = useAlbumByUiId(viewAlbumId)
   const favoriteTracks = useFavoriteTracks()
   const canShowPlayerPane = nowTrack != null && !expanded
+  const isPlayerPaneOpen = playerPaneOpen && canShowPlayerPane
+  const showBottomPlayer = !isPlayerPaneOpen && canShowPlayerPane
+  const [bottomPlayerVisible, setBottomPlayerVisible] = useState(false)
+  const [bottomPlayerClosing, setBottomPlayerClosing] = useState(false)
   const [playingTint, setPlayingTint] = useState<string | null>(null)
   const [albumTint, setAlbumTint] = useState<string | null>(null)
   const playingArtworkPath = nowAlbum?.artworkPath ?? nowTrack?.artworkPath ?? null
   const isPlaying = playbackStatus === 'playing'
   const contentTint = viewAlbum ? (albumTint ?? viewAlbumFallbackTint) : null
 
+  useEffect(() => {
+    sidebarWidthRef.current = sidebarWidth
+  }, [sidebarWidth])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(PLAYER_PANE_OPEN_STORAGE_KEY, String(playerPaneOpen))
+    } catch { /* ignore */ }
+  }, [playerPaneOpen])
+
+  useEffect(() => {
+    if (showBottomPlayer) {
+      setBottomPlayerVisible(true)
+      setBottomPlayerClosing(false)
+      return
+    }
+
+    if (!bottomPlayerVisible) return
+
+    setBottomPlayerClosing(true)
+    const timeout = window.setTimeout(() => {
+      setBottomPlayerVisible(false)
+      setBottomPlayerClosing(false)
+    }, 220)
+
+    return () => window.clearTimeout(timeout)
+  }, [showBottomPlayer, bottomPlayerVisible])
+
   // Kick off the first library load when the renderer is ready.
   useEffect(() => {
     if (!loaded) refresh()
   }, [loaded, refresh])
+
+  useEffect(() => installAutoHideScrollbars(), [])
 
   const saveCurrentScroll = () => {
     const el = contentRef.current
@@ -209,11 +290,43 @@ export default function App() {
     }
   })()
 
+  const beginSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!sidebarOpen) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+
+    const onMove = (e: globalThis.PointerEvent) => {
+      const frame = frameRef.current
+      if (!frame) return
+      const rect = frame.getBoundingClientRect()
+      const nextWidth = clamp(Math.round(e.clientX - rect.left), SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX)
+      sidebarWidthRef.current = nextWidth
+      setSidebarWidth(nextWidth)
+    }
+
+    const stop = () => {
+      document.removeEventListener('pointermove', onMove)
+      document.removeEventListener('pointerup', stop)
+      document.body.style.userSelect = ''
+      setIsResizingSidebar(false)
+
+      try {
+        window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidthRef.current))
+      } catch { /* ignore */ }
+    }
+
+    setIsResizingSidebar(true)
+    document.body.style.userSelect = 'none'
+    document.addEventListener('pointermove', onMove)
+    document.addEventListener('pointerup', stop)
+  }
+
   function renderContent() {
     switch (view.kind) {
       case 'library':
-      case 'recent':
         return <LibraryView />
+      case 'recent':
+        return <AlbumsView mode="recent" onSelect={al => navigate({ kind: 'album', album: al })} />
       case 'albums':
         return <AlbumsView onSelect={al => navigate({ kind: 'album', album: al })} />
       case 'album':
@@ -230,6 +343,7 @@ export default function App() {
       case 'favoriteTracks':
         return (
           <PlaylistView
+            kind="favoriteTracks"
             playlist={{
               id: 'pfavorites',
               name: 'Temas favoritos',
@@ -241,7 +355,7 @@ export default function App() {
           />
         )
       case 'playlist':
-        return <PlaylistView playlist={view.playlist} />
+        return <PlaylistView kind="playlist" playlist={view.playlist} />
       case 'search':
         return (
           <SearchView
@@ -264,7 +378,13 @@ export default function App() {
   return (
     <div className="desktop">
       <div className="window">
-        <div className="frame">
+        <div
+          ref={frameRef}
+          className={`frame ${isResizingSidebar ? 'layout-resizing-sidebar' : ''}`}
+          style={{
+            '--sb-w': `${sidebarWidth}px`,
+          } as CSSProperties}
+        >
           <Sidebar
             setView={navigate}
             selectedKey={sidebarKey}
@@ -276,7 +396,15 @@ export default function App() {
             favoriteTracksCount={favoriteTracks.length}
           />
 
-          <div className={`main-area ${sidebarOpen ? 'with-sidebar' : 'without-sidebar'}`}>
+          {sidebarOpen && (
+            <div
+              className={`layout-resize-handle sidebar-resize-handle ${isResizingSidebar ? 'active' : ''}`}
+              onPointerDown={beginSidebarResize}
+              aria-hidden
+            />
+          )}
+
+          <div className={`main-area ${sidebarOpen ? 'with-sidebar' : 'without-sidebar'} ${bottomPlayerVisible ? 'with-floating-player' : ''}`}>
             <Toolbar
               view={view}
               history={history}
@@ -288,7 +416,7 @@ export default function App() {
               onSearchQueryChange={setSearchQuery}
               sidebarOpen={sidebarOpen}
               onToggleSidebar={() => setSidebarOpen(open => !open)}
-              playerPaneOpen={playerPaneOpen && canShowPlayerPane}
+              playerPaneOpen={isPlayerPaneOpen}
               canTogglePlayerPane={canShowPlayerPane}
               onTogglePlayerPane={() => setPlayerPaneOpen(open => !open)}
             />
@@ -301,14 +429,26 @@ export default function App() {
             </div>
           </div>
 
-        <PlayerPane
-          expanded={expanded}
-          isOpen={playerPaneOpen}
-          onExpand={() => setExpanded(true)}
-          onCollapse={() => setPlayerPaneOpen(false)}
-          onOpenAlbum={album => navigate({ kind: 'album', album })}
-          onOpenArtist={artist => navigate({ kind: 'artist', artist })}
-        />
+          <PlayerPane
+            expanded={expanded}
+            isOpen={isPlayerPaneOpen}
+            onExpand={() => setExpanded(true)}
+            onCollapse={() => setPlayerPaneOpen(false)}
+            onOpenAlbum={album => navigate({ kind: 'album', album })}
+            onOpenArtist={artist => navigate({ kind: 'artist', artist })}
+          />
+
+          {!expanded && bottomPlayerVisible && !bottomPlayerClosing && <UpNextToast variant="bottom" />}
+
+          {bottomPlayerVisible && (
+            <PlayerBottomBar
+              closing={bottomPlayerClosing}
+              onExpand={() => setExpanded(true)}
+              onShowPanel={() => setPlayerPaneOpen(true)}
+              onOpenAlbum={album => navigate({ kind: 'album', album })}
+              onOpenArtist={artist => navigate({ kind: 'artist', artist })}
+            />
+          )}
         </div>
 
         {expanded && nowTrack && (

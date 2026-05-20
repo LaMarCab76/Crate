@@ -63,6 +63,13 @@ function patternFor(seed: number): Pattern {
   return SYNTH_PATTERNS[seed % SYNTH_PATTERNS.length]
 }
 
+function toAlbumDbId(albumUiId: string): number | null {
+  if (albumUiId.startsWith(UNRESOLVED_ALBUM_PREFIX)) return null
+  const raw = albumUiId.startsWith('a') ? albumUiId.slice(1) : albumUiId
+  const parsed = Number.parseInt(raw, 10)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 function inferUnresolvedAlbumArtist(tracks: Track[]): string {
   const artists = new Set(tracks.map(t => t.artist).filter(Boolean))
   if (artists.size <= 1) return tracks[0]?.artist || ''
@@ -80,6 +87,7 @@ function buildUnresolvedAlbum(albumId: string, tracks: Track[]): Album {
     title,
     artist: inferUnresolvedAlbumArtist(sorted),
     year,
+    added: latestTrackAddedDateInAlbum(tracks),
     seed,
     palette: palette(seed),
     pattern: patternFor(seed),
@@ -103,6 +111,13 @@ function compareTrackNumberAsc(a: Track, b: Track): number {
 function firstTrackAddedDateInAlbum(tracks: Track[]): string {
   if (tracks.length === 0) return ''
   return tracks[0]?.added || ''
+}
+
+function latestTrackAddedDateInAlbum(tracks: Track[]): string {
+  return tracks.reduce((latest, track) => {
+    if (!track.added) return latest
+    return track.added.localeCompare(latest) > 0 ? track.added : latest
+  }, '')
 }
 
 interface LibraryState {
@@ -280,6 +295,33 @@ export async function toggleArtistFavorite(artistDbId: number, favorite: boolean
   useLibraryStore.setState(state => ({
     artists: state.artists.map(ar => (ar.dbId === artistDbId ? { ...ar, favorite } : ar)),
   }))
+}
+
+export async function toggleAlbumFavorite(albumUiIdOrDbId: string | number, favorite: boolean): Promise<void> {
+  const albumDbId =
+    typeof albumUiIdOrDbId === 'number'
+      ? albumUiIdOrDbId
+      : toAlbumDbId(albumUiIdOrDbId)
+  if (!albumDbId || albumDbId <= 0) {
+    throw new Error('Cannot set favorite for non-persisted album')
+  }
+
+  const albumId = `a${albumDbId}`
+  const applyLocalFavorite = (nextFavorite: boolean) => {
+    useLibraryStore.setState(state => ({
+      albums: state.albums.map(album =>
+        album.id === albumId ? { ...album, favorite: nextFavorite } : album,
+      ),
+    }))
+  }
+
+  applyLocalFavorite(favorite)
+  try {
+    await window.api.albums.setFavorite(albumDbId, favorite)
+  } catch (error) {
+    applyLocalFavorite(!favorite)
+    throw error
+  }
 }
 
 export async function toggleTrackFavorite(trackDbId: number, favorite: boolean): Promise<void> {

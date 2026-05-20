@@ -4,6 +4,7 @@ import { CodecStrip } from './CodecStrip'
 import { Icon } from './Icon'
 import { EQBars } from './EQBars'
 import { SpectrumVisualizer } from './SpectrumVisualizer'
+import { UpNextToast } from './UpNextToast'
 import { fmtTime } from '@renderer/utils/format'
 import {
   toggleTrackFavorite,
@@ -48,7 +49,7 @@ export function PlayerPane({ expanded, isOpen, onExpand, onCollapse, onOpenAlbum
   const artworkPath = track?.artworkPath ?? album?.artworkPath ?? null
   const [artworkTint, setArtworkTint] = useState<string | null>(null)
   const [dragProgress, setDragProgress] = useState<number | null>(null)
-  const [showUpNext, setShowUpNext] = useState(false)
+  const [activeTab, setActiveTab] = useState<'nowPlaying' | 'upNext'>('nowPlaying')
   const [deviceMenuOpen, setDeviceMenuOpen] = useState(false)
   const [outputDevices, setOutputDevices] = useState<AudioOutputDevice[]>([])
   const [deviceLoading, setDeviceLoading] = useState(false)
@@ -70,7 +71,10 @@ export function PlayerPane({ expanded, isOpen, onExpand, onCollapse, onOpenAlbum
   }, [totalQueueRemainingSec])
 
   useEffect(() => {
-    if (!isOpen) setDeviceMenuOpen(false)
+    if (!isOpen) {
+      setDeviceMenuOpen(false)
+      setActiveTab('nowPlaying')
+    }
   }, [isOpen])
 
   useEffect(() => {
@@ -238,27 +242,46 @@ export function PlayerPane({ expanded, isOpen, onExpand, onCollapse, onOpenAlbum
       style={{ '--np-tint': tint ?? 'transparent' } as CSSProperties}
     >
       <div className="pp-header">
-        <div className="pp-header-nav">
-          <span className="pp-header-tab active">Now Playing</span>
+        <div className="pp-header-nav" role="tablist" aria-label="Player panel">
+          <button
+            type="button"
+            className={`pp-header-tab ${activeTab === 'nowPlaying' ? 'active' : ''}`}
+            role="tab"
+            aria-selected={activeTab === 'nowPlaying'}
+            onClick={() => setActiveTab('nowPlaying')}
+          >
+            Now Playing
+          </button>
+          <span className="pp-header-separator" aria-hidden="true">|</span>
+          <button
+            type="button"
+            className={`pp-header-tab ${activeTab === 'upNext' ? 'active' : ''}`}
+            role="tab"
+            aria-selected={activeTab === 'upNext'}
+            onClick={() => setActiveTab('upNext')}
+          >
+            Up Next
+          </button>
         </div>
         <div className="actions">
-          <button className="tb-icon-btn" title="Hide Player Panel" aria-label="Hide Player Panel" onClick={onCollapse}>
-            <Icon name="sidebarRight" size={13} />
+          <button className="tb-icon-btn pp-collapse-arrow" title="Collapse to bottom player" aria-label="Collapse to bottom player" onClick={onCollapse}>
+            <Icon name="chevD" size={13} />
           </button>
           <button className="tb-icon-btn" title="Expand" onClick={onExpand}><Icon name="expand" size={13} /></button>
         </div>
       </div>
 
       <div className="pp-tab-content">
-        <div className="pp-player">
+        {activeTab === 'nowPlaying' ? (
+          <div className="pp-player" role="tabpanel" aria-label="Now Playing">
             <div className="pp-player-top">
               <div className="art" onClick={onExpand} role="button" tabIndex={0}>
                 <Artwork album={album} radius={8} objectFit="contain" />
               </div>
 
               <div className="info">
-                  <div className="title-row">
-                {canOpenAlbum ? (
+                <div className="title-row">
+                  {canOpenAlbum ? (
                     <button
                       type="button"
                       className="t pp-link-title"
@@ -421,43 +444,40 @@ export function PlayerPane({ expanded, isOpen, onExpand, onCollapse, onOpenAlbum
                 </button>
                 {showVisualizer && <SpectrumVisualizer mode="mini" />}
               </div>
-              <div className={`pp-player-upnext${showUpNext ? '' : ' collapsed'}`}>
-                <button
-                  type="button"
-                  className="pp-player-viz-head"
-                  onClick={() => setShowUpNext(v => !v)}
-                  aria-expanded={showUpNext}
-                  title={showUpNext ? 'Hide queue' : 'Show queue'}
-                >
-                  <span>Up Next</span>
-                  <Icon name={showUpNext ? 'chevD' : 'chevR'} size={12} />
-                </button>
-                {showUpNext && (
-                  <div className="pp-upnext-list">
-                    <div className="queue-section-label">Playing from · {album?.title ?? '—'}</div>
-                    <div className="queue-item now">
-                      <div className="art"><Artwork album={album} /></div>
-                      <div>
-                        <div className="t">{track.t}</div>
-                        <div className="a">{track.artist}</div>
-                      </div>
-                      <EQBars style={{ color: 'var(--text-primary)' }} />
-                    </div>
-                    {queueNext.length === 0 && queueHistory.length === 0 && (
-                      <div className="queue-section-label" style={{ color: 'var(--text-tertiary)' }}>
-                        Queue is empty
-                      </div>
-                    )}
-                    {queueNext.map(t => <QueueItem key={t.id} track={t} />)}
-                    {queueHistory.length > 0 && <div className="queue-section-label">History</div>}
-                    {queueHistory.slice().reverse().map(t => <QueueItem key={`h-${t.id}`} track={t} dim />)}
-                  </div>
-                )}
-              </div>
             </div>
           </div>
+        ) : (
+          <div className="pp-queue" role="tabpanel" aria-label="Up Next">
+            <div className="queue-head">
+              <div className="queue-head-main">
+                <h3>Up Next</h3>
+                <div className="queue-remaining">{totalQueueRemainingText} remaining</div>
+              </div>
+            </div>
+            <div className="queue-list">
+              <div className="queue-section-label">Playing from · {album?.title ?? '—'}</div>
+              <div className="queue-item now">
+                <div className="art"><Artwork album={album} /></div>
+                <div>
+                  <div className="t">{track.t}</div>
+                  <div className="a">{track.artist}</div>
+                </div>
+                <EQBars style={{ color: 'var(--text-primary)' }} />
+              </div>
+              {queueNext.length === 0 && queueHistory.length === 0 && (
+                <div className="queue-section-label" style={{ color: 'var(--text-tertiary)' }}>
+                  Queue is empty
+                </div>
+              )}
+              {queueNext.map(t => <QueueItem key={t.id} track={t} />)}
+              {queueHistory.length > 0 && <div className="queue-section-label">History</div>}
+              {queueHistory.slice().reverse().map(t => <QueueItem key={`h-${t.id}`} track={t} dim />)}
+            </div>
+          </div>
+        )}
       </div>
 
+      {isOpen && activeTab !== 'upNext' && <UpNextToast variant="side" />}
     </div>
   )
 }

@@ -1,8 +1,17 @@
-import { useEffect, useState, type CSSProperties, type MouseEvent } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
 import type { Album, Artist } from '@shared/types/library'
 import { Artwork } from '@renderer/components/Artwork'
+import { ListPrefsMenu } from '@renderer/components/ListPrefsMenu'
 import { Icon } from '@renderer/components/Icon'
+import { useListPrefs } from '@renderer/stores/settingsStore'
 import { useAlbumActions } from '@renderer/components/MediaActions'
+import {
+  createListPrefsDefaults,
+  sortArtistAlbums,
+  sortTracks,
+  type ArtistAlbumSortBy,
+  type ArtistTrackSortBy,
+} from '@renderer/utils/listSort'
 import { TrackTable } from '@renderer/components/TrackTable'
 import { fmtFileSize, fmtTotal } from '@renderer/utils/format'
 import { toggleArtistFavorite, useArtistByUiId } from '@renderer/stores/libraryStore'
@@ -16,13 +25,46 @@ interface Props {
 interface ArtistAlbumBlockProps {
   album: Album
   onSelectAlbum?: (al: Album) => void
-  onOpenAlbumMenu: (event: MouseEvent<HTMLElement>, album: Album) => void
+  onOpenAlbumMenu: (event: ReactMouseEvent<HTMLElement>, album: Album) => void
+  trackSortBy: ArtistTrackSortBy
+  trackSortDir: 'asc' | 'desc'
 }
 
-function ArtistAlbumBlock({ album: al, onSelectAlbum, onOpenAlbumMenu }: ArtistAlbumBlockProps) {
+const TRACK_SORT_OPTIONS: Array<{ value: ArtistTrackSortBy, label: string }> = [
+  { value: 'trackNo', label: 'Pista' },
+  { value: 'title', label: 'Título' },
+  { value: 'duration', label: 'Duración' },
+  { value: 'plays', label: 'Reproducciones' },
+]
+
+const ALBUM_SORT_OPTIONS: Array<{ value: ArtistAlbumSortBy, label: string }> = [
+  { value: 'year', label: 'Año' },
+  { value: 'title', label: 'Título' },
+  { value: 'trackCount', label: 'Pistas' },
+]
+
+function trackSortLabel(value: ArtistTrackSortBy): string {
+  return TRACK_SORT_OPTIONS.find(option => option.value === value)?.label ?? value
+}
+
+function albumSortLabel(value: ArtistAlbumSortBy): string {
+  return ALBUM_SORT_OPTIONS.find(option => option.value === value)?.label ?? value
+}
+
+function ArtistAlbumBlock({
+  album: al,
+  onSelectAlbum,
+  onOpenAlbumMenu,
+  trackSortBy,
+  trackSortDir,
+}: ArtistAlbumBlockProps) {
   const [tint, setTint] = useState(al.palette[1])
-  const total = al.tracks.reduce((s, t) => s + t.d, 0)
-  const totalSize = al.tracks.reduce((s, t) => s + (t.fileSize ?? 0), 0)
+  const tracks = useMemo(
+    () => sortTracks(al.tracks, trackSortBy, trackSortDir),
+    [al.tracks, trackSortBy, trackSortDir],
+  )
+  const total = tracks.reduce((s, t) => s + t.d, 0)
+  const totalSize = tracks.reduce((s, t) => s + (t.fileSize ?? 0), 0)
 
   useEffect(() => {
     setTint(al.palette[1])
@@ -52,7 +94,7 @@ function ArtistAlbumBlock({ album: al, onSelectAlbum, onOpenAlbumMenu }: ArtistA
           <div className="aa-title" onClick={() => onSelectAlbum?.(al)} role="button" tabIndex={0}>
             {al.title}
           </div>
-          <div className="aa-sub">{al.tracks.length} tracks · {fmtTotal(total)} · {fmtFileSize(totalSize)}</div>
+          <div className="aa-sub">{tracks.length} tracks · {fmtTotal(total)} · {fmtFileSize(totalSize)}</div>
         </div>
         <div className="aa-actions">
           <button className="btn sm"><Icon name="play" size={11} /> Play</button>
@@ -66,7 +108,7 @@ function ArtistAlbumBlock({ album: al, onSelectAlbum, onOpenAlbumMenu }: ArtistA
           </button>
         </div>
       </div>
-      <TrackTable tracks={al.tracks} showArt={false} showAlbum={false} showPlays={false} showSize showTrackNo compact />
+      <TrackTable tracks={tracks} showArt={false} showAlbum={false} showPlays={false} showSize showTrackNo compact />
     </div>
   )
 }
@@ -76,10 +118,18 @@ export function ArtistView({ artist, onSelectAlbum }: Props) {
   const fresh = useArtistByUiId(artist?.id)
   const ar = fresh ?? artist
   const albumActions = useAlbumActions()
-  if (!ar) return null
-
+  const [prefs, setPrefs] = useListPrefs('artist')
+  const defaults = useMemo(() => createListPrefsDefaults(), [])
   const allTracks = ar.albums.flatMap(a => a.tracks)
-  const sortedAlbums = [...ar.albums].sort((a, b) => b.year - a.year)
+
+  const sortedAlbums = useMemo(
+    () => sortArtistAlbums(ar.albums, prefs.albumSortBy, prefs.albumSortDir),
+    [ar.albums, prefs.albumSortBy, prefs.albumSortDir],
+  )
+
+  const totalPlays = allTracks.reduce((s, t) => s + t.plays, 0)
+
+  if (!ar) return null
 
   return (
     <div className="artist-page">
@@ -102,10 +152,11 @@ export function ArtistView({ artist, onSelectAlbum }: Props) {
             )}
           </div>
           <div className="stat">
-            {ar.albums.length} album{ar.albums.length > 1 ? 's' : ''} · {allTracks.length} tracks ·{' '}
-            {allTracks.reduce((s, t) => s + t.plays, 0)} plays
+            {ar.albums.length} album{ar.albums.length > 1 ? 's' : ''} · {allTracks.length} tracks · {totalPlays} plays
+            {` · Álbumes ordenadas por ${albumSortLabel(prefs.albumSortBy)} (${prefs.albumSortDir})`}
+            {` · Tracks ordenados por ${trackSortLabel(prefs.trackSortBy)} (${prefs.trackSortDir})`}
           </div>
-          <div style={{ display: 'flex', gap: 8, marginTop: 14, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 8, marginTop: 14, alignItems: 'center', flexWrap: 'wrap' }}>
             <button className="btn primary"><Icon name="play" size={12} /> Play</button>
             <button className="btn"><Icon name="shuffle" size={14} /> Shuffle</button>
             <div className="view-toggle" style={{ marginLeft: 'auto' }}>
@@ -117,6 +168,56 @@ export function ArtistView({ artist, onSelectAlbum }: Props) {
               </button>
             </div>
           </div>
+          <div className="actions list-toolbar" style={{ marginTop: 12, flexWrap: 'wrap' }}>
+            <ListPrefsMenu
+              buttonLabel="Filtro"
+              menuTitle="Artista"
+              onReset={() => setPrefs(defaults.artist)}
+            >
+              <div className="list-prefs-row">
+                <div className="list-prefs-label">Ordenar álbumes</div>
+                <div className="list-prefs-row-inline">
+                  <select
+                    className="list-select"
+                    value={prefs.albumSortBy}
+                    onChange={e => setPrefs({ albumSortBy: e.target.value as ArtistAlbumSortBy })}
+                    aria-label="Ordenar álbumes"
+                  >
+                    {ALBUM_SORT_OPTIONS.map(option => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                  <button
+                    className="btn sm"
+                    onClick={() => setPrefs({ albumSortDir: prefs.albumSortDir === 'asc' ? 'desc' : 'asc' })}
+                  >
+                    {prefs.albumSortDir === 'asc' ? 'Asc' : 'Desc'}
+                  </button>
+                </div>
+              </div>
+              <div className="list-prefs-row">
+                <div className="list-prefs-label">Ordenar tracks</div>
+                <div className="list-prefs-row-inline">
+                  <select
+                    className="list-select"
+                    value={prefs.trackSortBy}
+                    onChange={e => setPrefs({ trackSortBy: e.target.value as ArtistTrackSortBy })}
+                    aria-label="Ordenar tracks"
+                  >
+                    {TRACK_SORT_OPTIONS.map(option => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                  <button
+                    className="btn sm"
+                    onClick={() => setPrefs({ trackSortDir: prefs.trackSortDir === 'asc' ? 'desc' : 'asc' })}
+                  >
+                    {prefs.trackSortDir === 'asc' ? 'Asc' : 'Desc'}
+                  </button>
+                </div>
+              </div>
+            </ListPrefsMenu>
+          </div>
         </div>
       </div>
 
@@ -127,6 +228,8 @@ export function ArtistView({ artist, onSelectAlbum }: Props) {
             album={al}
             onSelectAlbum={onSelectAlbum}
             onOpenAlbumMenu={albumActions.openAlbumMenu}
+            trackSortBy={prefs.trackSortBy}
+            trackSortDir={prefs.trackSortDir}
           />
         ))
       ) : (

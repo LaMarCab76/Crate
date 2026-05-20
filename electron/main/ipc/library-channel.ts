@@ -210,6 +210,12 @@ export function registerLibraryChannel(): void {
     broadcast('library:changed', { reason: 'track-favorite' })
   })
 
+  ipcMain.handle('album:setFavorite', (_, payload: { id: number; favorite: boolean }) => {
+    repos.albums.setFavorite(payload.id, payload.favorite)
+    getLibraryBackup().scheduleWriteForAlbum(payload.id)
+    broadcast('library:changed', { reason: 'album-favorite' })
+  })
+
   ipcMain.handle('track:updateMetadata', async (_, payload: { trackId: number; metadata: TrackMetadataUpdatePayload }) => {
     const track = repos.tracks.getById(payload.trackId)
     if (!track) return

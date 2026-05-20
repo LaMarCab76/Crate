@@ -5,7 +5,11 @@ import { Icon } from '@renderer/components/Icon'
 import { useAlbumActions } from '@renderer/components/MediaActions'
 import { TrackTable } from '@renderer/components/TrackTable'
 import { fmtFileSize, fmtTime } from '@renderer/utils/format'
-import { refreshTrackMetadata, useAlbumByUiId } from '@renderer/stores/libraryStore'
+import {
+  refreshTrackMetadata,
+  toggleAlbumFavorite,
+  useAlbumByUiId,
+} from '@renderer/stores/libraryStore'
 import { useQueueStore } from '@renderer/stores/queueStore'
 
 interface Props {
@@ -36,7 +40,9 @@ export function AlbumView({ album }: Props) {
 
     await playNow(tracks[0], tracks)
   }
+
   const isUnresolvedAlbum = a?.id.startsWith('a-unresolved-') ?? false
+  const isFavorite = a?.favorite === true
 
   useEffect(() => {
     if (!a) return
@@ -83,7 +89,22 @@ export function AlbumView({ album }: Props) {
             <button className="btn" type="button" onClick={() => { void handleShuffleAlbum() }}>
               <Icon name="shuffle" size={14} /> Shuffle
             </button>
-            <button className="btn ghost icon"><Icon name="heart" /></button>
+            <button
+              className="btn ghost icon"
+              type="button"
+              disabled={isUnresolvedAlbum}
+              title={isUnresolvedAlbum
+                ? 'No se puede marcar favorito mientras el álbum no está persistido'
+                : isFavorite
+                  ? 'Quitar de favoritos'
+                  : 'Agregar a favoritos'}
+              onClick={() => {
+                if (!a || isUnresolvedAlbum) return
+                void toggleAlbumFavorite(a.id, !isFavorite)
+              }}
+            >
+              <Icon name={isFavorite ? 'heartF' : 'heart'} size={14} />
+            </button>
             <button className="btn ghost icon"><Icon name="plus" /></button>
             <button
               className="btn ghost icon"

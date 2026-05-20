@@ -50,6 +50,8 @@ export interface Album {
   title: string
   artist: string
   year: number
+  added: string
+  favorite?: boolean
   seed: number
   palette: [string, string, string]
   pattern: Pattern

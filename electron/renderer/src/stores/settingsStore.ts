@@ -1,10 +1,11 @@
 import { create } from 'zustand'
+import { createListPrefsDefaults } from '@renderer/utils/listSort'
+import type { ListPrefsMap, ListViewKind } from '@renderer/utils/listSort'
 
 export type Layout = 'classic' | 'editorial' | 'dense'
 export type Density = 'compact' | 'regular' | 'comfy'
 export type ArtistsMode = 'manual' | 'topPlays'
 export type PlayerTintSource = 'default' | 'preset' | 'custom' | 'artwork'
-export type FullPlayerMode = 'studio' | 'ambient'
 
 export interface Tweak {
   dark: boolean
@@ -27,9 +28,9 @@ export interface Tweak {
   // Show the FFT bar visualizer in the player pane. Off skips the FFT
   // subscription so the engine can downshift its FFT mode and save work.
   showPlayerVisualizer: boolean
-  // Which fullscreen player layout to show. Persisted so reopening the
-  // fullscreen view restores the last-used mode.
-  fullPlayerMode: FullPlayerMode
+  // Show the full-screen background spectrum in the fullscreen player. Off
+  // keeps just the artwork; persisted so the toggle restores on reopen.
+  fullPlayerVisualizer: boolean
 }
 
 const TWEAK_DEFAULTS: Tweak = {
@@ -48,10 +49,11 @@ const TWEAK_DEFAULTS: Tweak = {
   playerTintSource: 'artwork',
   playerTintColor: '#0a84ff',
   showPlayerVisualizer: true,
-  fullPlayerMode: 'studio',
+  fullPlayerVisualizer: false,
 }
 
 const STORAGE_KEY = 'crate.tweaks.v1'
+const LIST_PREFS_STORAGE_KEY = 'crate.listPrefs.v1'
 
 function load(): Tweak {
   if (typeof window === 'undefined') return TWEAK_DEFAULTS
@@ -74,6 +76,71 @@ function load(): Tweak {
 interface TweakStore {
   tweak: Tweak
   setTweak<K extends keyof Tweak>(k: K, v: Tweak[K]): void
+}
+
+interface ListPrefsStore {
+  listPrefs: ListPrefsMap
+  setListPrefs: <K extends ListViewKind>(kind: K, patch: Partial<ListPrefsMap[K]>) => void
+}
+
+function parseListPrefs(raw: string | null): ListPrefsMap | null {
+  try {
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<ListPrefsMap>
+    const defaults = createListPrefsDefaults()
+    return {
+      library: { ...defaults.library, ...(parsed.library ?? {}) },
+      albums: { ...defaults.albums, ...(parsed.albums ?? {}) },
+      artists: { ...defaults.artists, ...(parsed.artists ?? {}) },
+      genres: { ...defaults.genres, ...(parsed.genres ?? {}) },
+      playlist: { ...defaults.playlist, ...(parsed.playlist ?? {}) },
+      favoriteTracks: { ...defaults.favoriteTracks, ...(parsed.favoriteTracks ?? {}) },
+      album: { ...defaults.album, ...(parsed.album ?? {}) },
+      artist: { ...defaults.artist, ...(parsed.artist ?? {}) },
+    }
+  } catch {
+    return null
+  }
+}
+
+function loadListPrefs(): ListPrefsMap {
+  if (typeof window === 'undefined') return createListPrefsDefaults()
+  try {
+    const raw = window.localStorage.getItem(LIST_PREFS_STORAGE_KEY)
+    return parseListPrefs(raw) ?? createListPrefsDefaults()
+  } catch {
+    return createListPrefsDefaults()
+  }
+}
+
+function persistListPrefs(listPrefs: ListPrefsMap): void {
+  try {
+    window.localStorage.setItem(LIST_PREFS_STORAGE_KEY, JSON.stringify(listPrefs))
+  } catch {
+    // ignore quota / private mode failures
+  }
+}
+
+export const useListPrefsStore = create<ListPrefsStore>((set) => ({
+  listPrefs: loadListPrefs(),
+  setListPrefs: (kind, patch) => {
+    set(state => {
+      const current = state.listPrefs[kind]
+      const nextByKind = { ...current, ...patch }
+      const next = {
+        ...state.listPrefs,
+        [kind]: nextByKind,
+      } as ListPrefsMap
+      persistListPrefs(next)
+      return { listPrefs: next }
+    })
+  },
+}))
+
+export function useListPrefs<K extends ListViewKind>(kind: K): [ListPrefsMap[K], (patch: Partial<ListPrefsMap[K]>) => void] {
+  const prefs = useListPrefsStore(state => state.listPrefs[kind])
+  const setListPrefs = useListPrefsStore(state => state.setListPrefs)
+  return [prefs, patch => setListPrefs(kind, patch)]
 }
 
 // Single zustand store so views outside Settings (e.g. ArtistsView) can read

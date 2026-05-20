@@ -30,6 +30,11 @@ export interface BackupArtist {
   stateUpdatedAt?: string | null // ISO 8601
 }
 
+export interface BackupAlbum {
+  favorite?: boolean
+  stateUpdatedAt?: string | null // ISO 8601
+}
+
 export interface BackupFile {
   version: number
   appName: string
@@ -37,4 +42,5 @@ export interface BackupFile {
   updatedAt: string             // ISO 8601, refreshed on every write
   tracks: Record<string, BackupTrack>
   artists: Record<string, BackupArtist>
+  albums: Record<string, BackupAlbum>
 }

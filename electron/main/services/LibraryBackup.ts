@@ -16,6 +16,7 @@ import { getDatabase } from '../db/database'
 import { getRepos } from '../db/repositories'
 import type {
   BackupArtist,
+  BackupAlbum,
   BackupFile,
   BackupTrack,
 } from '@shared/types/library-backup'
@@ -88,6 +89,7 @@ class LibraryBackupService {
     const tx = this.db.transaction(() => {
       this.mergeTracks(folderPath, backup.tracks ?? {})
       this.mergeArtists(backup.artists ?? {})
+      this.mergeAlbums(backup.albums ?? {})
     })
     tx()
   }
@@ -154,6 +156,90 @@ class LibraryBackupService {
     }
   }
 
+  private mergeAlbums(albums: Record<string, BackupAlbum>): void {
+    const findAlbum = (title: string, albumArtist: string | null, year: string | null): { id: number; is_favorite: number; state_updated_at: number | null } | undefined => {
+      if (albumArtist === null && year === null) {
+        return this.db
+          .prepare<
+            [string],
+            { id: number; is_favorite: number; state_updated_at: number | null }
+          >(
+            `SELECT id, is_favorite, state_updated_at
+             FROM albums
+             WHERE title = ? AND album_artist IS NULL AND year IS NULL`,
+          )
+          .get(title)
+      }
+
+      if (albumArtist === null) {
+        const safeYear = year as string
+        return this.db
+          .prepare<
+            [string, string],
+            { id: number; is_favorite: number; state_updated_at: number | null }
+          >(
+            `SELECT id, is_favorite, state_updated_at
+             FROM albums
+             WHERE title = ? AND album_artist IS NULL AND year = ?`,
+          )
+          .get(title, safeYear)
+      }
+
+      if (year === null) {
+        return this.db
+          .prepare<
+            [string, string],
+            { id: number; is_favorite: number; state_updated_at: number | null }
+          >(
+            `SELECT id, is_favorite, state_updated_at
+             FROM albums
+             WHERE title = ? AND album_artist = ? AND year IS NULL`,
+          )
+          .get(title, albumArtist)
+      }
+
+      return this.db
+        .prepare<
+          [string, string, string],
+          { id: number; is_favorite: number; state_updated_at: number | null }
+        >(
+          `SELECT id, is_favorite, state_updated_at
+           FROM albums
+           WHERE title = ? AND album_artist = ? AND year = ?`,
+        )
+        .get(title, albumArtist, year)
+    }
+
+    const update = this.db.prepare(
+      `UPDATE albums SET is_favorite = ?, state_updated_at = ? WHERE id = ?`,
+    )
+
+    for (const [key, ja] of Object.entries(albums)) {
+      let album: { title: string; artist: string | null; year: string | null }
+      try {
+        const parsed = JSON.parse(key)
+        if (!Array.isArray(parsed) || parsed.length < 1) continue
+        album = {
+          title: String(parsed[0]),
+          artist: parsed[1] == null ? null : String(parsed[1]),
+          year: parsed[2] == null ? null : String(parsed[2]),
+        }
+      } catch {
+        continue
+      }
+
+      const row = findAlbum(album.title, album.artist, album.year)
+      if (!row) continue
+
+      const jsonTs = ja.stateUpdatedAt ? Date.parse(ja.stateUpdatedAt) || 0 : 0
+      const dbTs = row.state_updated_at ?? 0
+      const jsonWins = jsonTs > dbTs
+      if (jsonWins && ja.favorite !== undefined) {
+        update.run(ja.favorite ? 1 : 0, Math.max(dbTs, jsonTs), row.id)
+      }
+    }
+  }
+
   // ----- WRITE -----
 
   writeForFolderImmediate(folderId: number): void {
@@ -188,6 +274,16 @@ class LibraryBackupService {
         `SELECT DISTINCT folder_id FROM tracks WHERE artist_id = ? AND folder_id IS NOT NULL`,
       )
       .all(artistId)
+    for (const { folder_id } of rows) this.scheduleWriteForFolder(folder_id)
+  }
+
+  scheduleWriteForAlbum(albumId: number): void {
+    if (!this.enabled) return
+    const rows = this.db
+      .prepare<[number], { folder_id: number }>(
+        `SELECT DISTINCT folder_id FROM tracks WHERE album_id = ? AND folder_id IS NOT NULL`,
+      )
+      .all(albumId)
     for (const { folder_id } of rows) this.scheduleWriteForFolder(folder_id)
   }
 
@@ -313,6 +409,34 @@ class LibraryBackupService {
       artists[ar.name] = entry
     }
 
+    const albumRows = this.db
+      .prepare<
+        [number],
+        {
+          title: string
+          album_artist: string | null
+          year: string | null
+          is_favorite: number
+          state_updated_at: number | null
+        }
+      >(
+        `SELECT DISTINCT a.title, a.album_artist, a.year, a.is_favorite, a.state_updated_at
+         FROM albums a
+         JOIN tracks t ON t.album_id = a.id
+         WHERE t.folder_id = ?`,
+      )
+      .all(folderId)
+
+    const albums: Record<string, BackupAlbum> = {}
+    for (const a of albumRows) {
+      if (!a.is_favorite && !a.state_updated_at) continue
+      const key = JSON.stringify([a.title, a.album_artist, a.year])
+      const entry: BackupAlbum = {}
+      if (a.is_favorite) entry.favorite = true
+      if (a.state_updated_at) entry.stateUpdatedAt = new Date(a.state_updated_at).toISOString()
+      albums[key] = entry
+    }
+
     return {
       version: BACKUP_VERSION,
       appName: APP_NAME,
@@ -320,6 +444,7 @@ class LibraryBackupService {
       updatedAt: new Date().toISOString(),
       tracks,
       artists,
+      albums,
     }
   }
 }

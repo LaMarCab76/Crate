@@ -34,6 +34,8 @@ export interface DbAlbum {
   artwork_data: Buffer | null
   artwork_path: string | null
   date_added: string
+  is_favorite: number
+  state_updated_at: number | null
 }
 
 export interface DbArtist {
@@ -151,6 +153,6 @@ export interface DbQueueEntry {
 // Input shapes for insert operations (omit auto-generated columns).
 export type DbTrackInsert = Omit<DbTrack, 'id'>
 export type DbFolderInsert = Omit<DbFolder, 'id' | 'track_count'> & { track_count?: number }
-export type DbAlbumInsert = Omit<DbAlbum, 'id' | 'track_count' | 'total_duration'>
+export type DbAlbumInsert = Omit<DbAlbum, 'id' | 'track_count' | 'total_duration' | 'is_favorite' | 'state_updated_at'>
 export type DbArtistInsert = Omit<DbArtist, 'id' | 'track_count' | 'album_count'>
 export type DbGenreInsert = Omit<DbGenre, 'id' | 'track_count'>

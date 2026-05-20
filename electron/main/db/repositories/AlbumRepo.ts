@@ -9,6 +9,7 @@ export class AlbumRepo {
   private stmtAll
   private stmtByArtist
   private stmtInsert
+  private stmtSetFavorite
 
   constructor(db: BetterSqliteDatabase) {
     this.db = db
@@ -27,6 +28,9 @@ export class AlbumRepo {
       INSERT INTO albums (title, normalized_name, sort_name, album_artist, year, date_added)
       VALUES (?, ?, ?, ?, ?, ?)
     `)
+    this.stmtSetFavorite = db.prepare<[number, number, number]>(
+      `UPDATE albums SET is_favorite = ?, state_updated_at = ? WHERE id = ?`,
+    )
   }
 
   getOrCreate(title: string, albumArtist: string | null, year: string | null): DbAlbum {
@@ -74,5 +78,9 @@ export class AlbumRepo {
 
   getByArtist(albumArtist: string): DbAlbum[] {
     return this.stmtByArtist.all(albumArtist)
+  }
+
+  setFavorite(id: number, favorite: boolean): void {
+    this.stmtSetFavorite.run(favorite ? 1 : 0, Date.now(), id)
   }
 }

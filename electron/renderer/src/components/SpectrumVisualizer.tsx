@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
 import { binsToBands, getLatestFft, subscribeFftDemand } from '@renderer/utils/fft'
+import { FULL_VIZ_SEGMENTS } from '@renderer/constants/visualizer'
 import { EQ_BAND_LABELS } from '@shared/constants/equalizer'
 
 // Symmetric EMA weight on the previous value — higher = smoother bars.
@@ -16,13 +17,15 @@ const FFT_DISPLAY_GAIN = 2.2
 const PEAK_DECAY = 0.05
 const PEAK_EPSILON = 0.04
 
-// Mini: a fixed column per EQ frequency, aligned with the EQ labels so the
-// sidebar visualizer keeps a familiar 25 Hz → 16 kHz layout.
+// Mini/bar: fixed columns per EQ frequency, aligned with the EQ labels so the
+// sidebar and collapsed-player visualizers keep a familiar 25 Hz → 16 kHz layout.
 const MINI_BAND_COUNT = EQ_BAND_LABELS.length
 const MINI_SEGMENTS = 12
+const BAR_SEGMENTS = 5
 // Full: a richer spectrum that sizes itself to the available width. More
-// vertical "steps" and a dynamic column count fill the fullscreen panel.
-const FULL_SEGMENTS = 22
+// vertical "steps" and a dynamic column count fill the fullscreen panel. The
+// step count is shared with the VU meters via FULL_VIZ_SEGMENTS.
+const FULL_SEGMENTS = FULL_VIZ_SEGMENTS
 const FULL_MIN_BANDS = 12
 const FULL_MAX_BANDS = 48 // ≤ FFT_BINS_OUT (64) emitted by the engine
 const FULL_PX_PER_BAND = 26
@@ -43,9 +46,10 @@ function freqTickLabel(hz: number): string {
 
 interface Props {
   // 'mini' — fixed-width sidebar strip with frequency labels.
+  // 'bar'  — horizontal collapsed-player strip with five LED steps.
   // 'full' — fullscreen spectrum with a width-driven dynamic column count,
   //          plus a dB scale and a log frequency axis.
-  mode?: 'mini' | 'full'
+  mode?: 'mini' | 'bar' | 'full'
 }
 
 // Pure FFT spectrum. The EQ used to live here as draggable columns, but it now
@@ -61,7 +65,8 @@ export function SpectrumVisualizer({ mode = 'mini' }: Props) {
   )
 
   const isFull = mode === 'full'
-  const segmentCount = isFull ? FULL_SEGMENTS : MINI_SEGMENTS
+  const isBar = mode === 'bar'
+  const segmentCount = isFull ? FULL_SEGMENTS : isBar ? BAR_SEGMENTS : MINI_SEGMENTS
 
   const bandsRef = useRef<HTMLDivElement>(null)
   const [bandCount, setBandCount] = useState(isFull ? FULL_MIN_BANDS : MINI_BAND_COUNT)
@@ -194,7 +199,7 @@ export function SpectrumVisualizer({ mode = 'mini' }: Props) {
 
   return (
     <div
-      className={`spectrum-viz ${isFull ? 'full' : 'mini'}`}
+      className={`spectrum-viz ${isFull ? 'full' : isBar ? 'bar' : 'mini'}`}
       style={{ '--seg': segmentCount } as CSSProperties}
     >
       <div className="spectrum-body">
@@ -208,7 +213,7 @@ export function SpectrumVisualizer({ mode = 'mini' }: Props) {
             {Array.from({ length: bandCount }).map((_, i) => {
               // Mini keeps frequency labels but shows only every other one so
               // they don't crowd; full mode uses the dedicated axis below.
-              const label = !isFull && i % 2 === 0 ? EQ_BAND_LABELS[i] : null
+              const label = !isFull && !isBar && i % 2 === 0 ? EQ_BAND_LABELS[i] : null
               return (
                 <div
                   className="spectrum-band"

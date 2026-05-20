@@ -154,6 +154,10 @@ const api: Api = {
     trash: (trackIds: number[]) =>
       ipcRenderer.invoke('track:trash', trackIds) as Promise<TrashTracksResult>,
   },
+  albums: {
+    setFavorite: (id: number, favorite: boolean) =>
+      ipcRenderer.invoke('album:setFavorite', { id, favorite }) as Promise<void>,
+  },
   artists: {
     setFavorite: (id: number, favorite: boolean) =>
       ipcRenderer.invoke('artist:setFavorite', { id, favorite }) as Promise<void>,
