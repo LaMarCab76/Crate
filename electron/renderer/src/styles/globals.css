@@ -1888,11 +1888,35 @@ button:disabled { cursor: not-allowed; }
   transition: background 400ms ease;
 }
 .np-full-head {
+  position: relative; z-index: 2;
   height: 44px; flex-shrink: 0;
-  display: flex; align-items: center;
+  display: flex; align-items: center; gap: 10px;
   padding: 0 14px;
   -webkit-app-region: drag;
 }
+.np-head-spacer { flex: 1; }
+/* "LIVE" indicator + current track in the Studio header band. */
+.np-live {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--text-secondary);
+  min-width: 0;
+}
+.np-live-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #6cc080; flex-shrink: 0;
+  box-shadow: 0 0 0 0 rgba(108, 192, 128, 0.6);
+  animation: np-live-pulse 2s ease-out infinite;
+}
+@keyframes np-live-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(108, 192, 128, 0.5); }
+  70%, 100% { box-shadow: 0 0 0 6px rgba(108, 192, 128, 0); }
+}
+.np-live-label { font-weight: 700; letter-spacing: 0.08em; color: var(--text-tertiary); }
+.np-live-track {
+  color: var(--text-primary); font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+@media (prefers-reduced-motion: reduce) { .np-live-dot { animation: none; } }
 /* Buttons inside a drag-region get swallowed by the Electron drag handler;
    opt them out so clicks actually fire. */
 .np-full-head .tb-icon-btn { -webkit-app-region: no-drag; }
@@ -1906,48 +1930,207 @@ button:disabled { cursor: not-allowed; }
   -webkit-app-region: no-drag;
 }
 .np-full-close:hover { background: var(--bg-hover); color: var(--text-primary); }
-.np-full-body {
-  flex: 1; display: grid;
-  grid-template-columns: 1fr 1fr; gap: 60px;
-  padding: 20px 60px 40px;
-  min-height: 0;
+/* Color tokens shared by the Studio meters + waveform. Kept theme-aware so
+   light mode stays legible. */
+:root {
+  --meter-green: #6cc080;
+  --meter-amber: #d6b94a;
+  --meter-red: #ff453a;
+  --wave-played: #6cc080;
+  --wave-remaining: rgba(255, 255, 255, 0.16);
+  --wave-playhead: rgba(255, 255, 255, 0.92);
 }
-.np-full-left {
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 24px;
+.theme-light {
+  --wave-played: #2f8c4a;
+  --wave-remaining: rgba(0, 0, 0, 0.16);
+  --wave-playhead: rgba(0, 0, 0, 0.7);
 }
-/* The art grows to fill the space left by the title/controls. container-type
-   lets the inner square take the largest size that fits both axes (cqmin), so
-   it stretches until it hits the width or the height limit — whichever first. */
-.np-full-art-box {
-  flex: 1 1 auto; min-height: 0; width: 100%;
-  container-type: size;
+
+/* Mode switch pill (Studio ⇄ Ambient). Studio shows it bottom-left of the meta
+   column; Ambient floats it over the artwork. */
+.mode-pill {
+  align-self: flex-start;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 11px;
+  font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--text-secondary);
+  background: var(--bg-elev);
+  border: 0.5px solid var(--border-default);
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.mode-pill:hover { color: var(--text-primary); border-color: var(--border-strong); }
+.mode-pill.ambient-mode {
+  position: absolute; top: 52px; left: 14px; z-index: 3;
+  color: rgba(255, 255, 255, 0.88);
+  background: rgba(0, 0, 0, 0.4);
+  border-color: rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(8px);
+}
+.mode-pill.ambient-mode:hover { color: #fff; background: rgba(0, 0, 0, 0.55); }
+
+/* ---------------- Studio view ---------------- */
+.studio-view {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  gap: 12px;
+  padding: 6px 28px 14px;
+}
+.studio-grid {
+  flex: 1; min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(0, 1.7fr) minmax(196px, 0.85fr);
+  gap: 28px;
+}
+.studio-left, .studio-center, .studio-right { min-width: 0; min-height: 0; }
+.studio-left {
+  display: flex; flex-direction: column; gap: 16px;
+  overflow-y: auto; padding-right: 4px;
+}
+.studio-art-box { display: flex; justify-content: center; flex-shrink: 0; }
+.studio-art {
+  width: 100%; max-width: 200px; aspect-ratio: 1;
+  border-radius: 10px; overflow: hidden;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
+}
+.studio-id h2 {
+  font-size: 22px; font-weight: 700; letter-spacing: -0.02em;
+  margin: 0 0 3px; color: var(--text-primary);
+}
+.studio-id .artist { font-size: 14px; color: var(--text-secondary); margin: 0; }
+.studio-id .album { font-size: 12px; color: var(--text-tertiary); margin: 2px 0 0; }
+
+.studio-center { display: flex; flex-direction: column; gap: 14px; }
+.studio-center .spectrum-viz.full { flex: 1; min-height: 0; }
+/* Tint the fullscreen studio spectrum green to match the meters + waveform,
+   without touching the shared mini visualizer. */
+.studio-center .spectrum-segment {
+  background: color-mix(in oklab, var(--meter-green), var(--text-primary) 12%);
+}
+.studio-wave-block { flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; }
+.studio-wave-times {
+  display: flex; justify-content: space-between;
+  font-family: var(--font-mono); font-size: 10.5px;
+  color: var(--text-tertiary); font-variant-numeric: tabular-nums;
+}
+
+.studio-right { display: flex; flex-direction: column; min-height: 0; }
+
+.studio-transport {
+  flex: 0 0 auto;
+  display: grid; grid-template-columns: 1fr auto 1fr;
+  align-items: center; gap: 16px;
+  padding: 2px 6px;
+}
+.studio-transport-center { display: flex; align-items: center; gap: 18px; justify-self: center; }
+.studio-time {
+  font-family: var(--font-mono); font-size: 12px;
+  color: var(--text-secondary); font-variant-numeric: tabular-nums;
+}
+.studio-volume { justify-self: end; width: 100%; max-width: 150px; }
+
+/* ---------------- VU meters ---------------- */
+.vu-meters { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.vu-plot { flex: 1; min-height: 0; display: flex; gap: 10px; }
+.vu-scale { flex: 0 0 24px; position: relative; }
+.vu-scale span {
+  position: absolute; right: 0; transform: translateY(50%);
+  font-family: var(--font-mono); font-size: 9px; line-height: 1;
+  color: var(--text-tertiary);
+}
+.vu-bar {
+  flex: 1; position: relative; overflow: hidden;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25), inset 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+.theme-light .vu-bar { background: rgba(0, 0, 0, 0.06); }
+/* Full-height gradient revealed from the bottom via clip-path, so the colour at
+   a given height is stable regardless of the current level. */
+.vu-fill {
+  position: absolute; inset: 0;
+  background: linear-gradient(to top,
+    var(--meter-green) 0%, var(--meter-green) 52%,
+    var(--meter-amber) 80%, var(--meter-red) 100%);
+  clip-path: inset(calc((1 - var(--fill, 0)) * 100%) 0 0 0);
+  transition: clip-path 70ms linear;
+}
+.vu-peak-tick {
+  position: absolute; left: 0; right: 0; height: 2px;
+  bottom: calc(var(--peak, 0) * 100%);
+  transform: translateY(50%);
+  background: var(--text-primary); opacity: 0.9;
+}
+.vu-axis { flex: 0 0 auto; display: flex; gap: 10px; }
+.vu-axis-pad { flex: 0 0 24px; }
+.vu-axis .vu-ch {
+  flex: 1; text-align: center;
+  font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary);
+}
+.vu-readouts {
+  flex: 0 0 auto;
+  display: flex; flex-direction: column; gap: 5px;
+  padding-top: 8px; border-top: 0.5px solid var(--border-subtle);
+}
+.vu-row { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 11px; }
+.vu-row .k { color: var(--text-tertiary); }
+.vu-row .v { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+
+/* ---------------- Waveform ---------------- */
+.studio-waveform {
+  position: relative; width: 100%; height: 92px;
+  cursor: pointer; -webkit-app-region: no-drag;
+}
+.studio-waveform-canvas { display: block; width: 100%; height: 100%; }
+.studio-waveform-loading {
+  position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
+  font-size: 11px; color: var(--text-tertiary);
 }
-.np-full-art {
-  width: min(100cqw, 100cqh);
-  height: min(100cqw, 100cqh);
-  border-radius: 10px;
-  overflow: hidden;
-  box-shadow: 0 24px 60px rgba(0,0,0,0.5);
-}
-.np-full-title { text-align: center; max-width: 460px; }
-.np-full-title h2 {
-  font-size: 28px; font-weight: 700; letter-spacing: -0.02em;
-  margin: 0 0 4px; color: var(--text-primary);
-}
-.np-full-title p { font-size: 15px; color: var(--text-secondary); margin: 0; }
 
-.np-full-right { display: flex; flex-direction: column; min-height: 0; }
-.np-full-tabs { display: flex; gap: 4px; margin-bottom: 16px; }
-
-/* Fullscreen volume — reuses the .pp-volume slider styling, just constrained
-   and centered under the transport controls. */
-.np-volume-wrap {
-  width: 100%; max-width: 320px;
-  margin: 2px auto 0;
+/* ---------------- Track metadata table ---------------- */
+.track-meta-table { display: flex; flex-direction: column; margin: 0; }
+.track-meta-row {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  padding: 5px 0; border-bottom: 0.5px solid var(--border-subtle);
 }
-.np-volume-wrap .pp-volume .ic { display: inline-flex; }
+.track-meta-row:last-child { border-bottom: none; }
+.track-meta-row dt { font-size: 11px; color: var(--text-tertiary); }
+.track-meta-row dd {
+  margin: 0; text-align: right;
+  font-family: var(--font-mono); font-size: 12px;
+  color: var(--text-primary); font-variant-numeric: tabular-nums;
+}
+
+/* ---------------- Ambient view ---------------- */
+.ambient-view { position: absolute; inset: 0; z-index: 1; overflow: hidden; }
+.ambient-art { position: absolute; inset: 0; }
+.ambient-scrim {
+  position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(to bottom,
+    rgba(0, 0, 0, 0.35) 0%, rgba(0, 0, 0, 0) 26%,
+    rgba(0, 0, 0, 0) 45%, rgba(0, 0, 0, 0.8) 100%);
+}
+.ambient-overlay {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+  display: flex; flex-direction: column; gap: 18px;
+  padding: 0 56px 48px;
+}
+.ambient-meta { display: flex; flex-direction: column; gap: 6px; }
+.ambient-meta h2 {
+  margin: 0; font-size: 46px; font-weight: 700; letter-spacing: -0.02em;
+  color: #fff; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.55);
+}
+.ambient-meta p {
+  margin: 0; font-size: 16px; color: rgba(255, 255, 255, 0.82);
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.55);
+}
+.ambient-meta .pp-quality-chip { margin-top: 2px; }
+.ambient-progress { max-width: none; }
+.ambient-progress .np-bar-track { height: 5px; cursor: pointer; }
+.ambient-buttons { gap: 22px; }
 
 /* "Up next" toast — slides up from the bottom of the fullscreen view during the
    final seconds of a track to preview what plays next. */
@@ -2118,6 +2301,16 @@ button:disabled { cursor: not-allowed; }
   pointer-events: none;
 }
 .spectrum-viz.full .spectrum-clip { height: 6px; }
+/* Peak-hold tick inside the bar track (full mode). Positioned by --peak (0..seg,
+   set per band on .spectrum-band) over the --seg range. */
+.spectrum-peak {
+  position: absolute; left: 2px; right: 2px;
+  height: 2px; border-radius: 1px;
+  bottom: calc(var(--peak, 0) / var(--seg, 22) * 100%);
+  background: color-mix(in oklab, var(--meter-green), var(--text-primary) 35%);
+  opacity: 0.75; pointer-events: none;
+  transition: bottom 90ms linear;
+}
 .spectrum-hz {
   font-family: var(--font-mono);
   font-size: 9px;

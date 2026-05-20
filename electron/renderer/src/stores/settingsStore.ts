@@ -4,6 +4,7 @@ export type Layout = 'classic' | 'editorial' | 'dense'
 export type Density = 'compact' | 'regular' | 'comfy'
 export type ArtistsMode = 'manual' | 'topPlays'
 export type PlayerTintSource = 'default' | 'preset' | 'custom' | 'artwork'
+export type FullPlayerMode = 'studio' | 'ambient'
 
 export interface Tweak {
   dark: boolean
@@ -26,6 +27,9 @@ export interface Tweak {
   // Show the FFT bar visualizer in the player pane. Off skips the FFT
   // subscription so the engine can downshift its FFT mode and save work.
   showPlayerVisualizer: boolean
+  // Which fullscreen player layout to show. Persisted so reopening the
+  // fullscreen view restores the last-used mode.
+  fullPlayerMode: FullPlayerMode
 }
 
 const TWEAK_DEFAULTS: Tweak = {
@@ -44,6 +48,7 @@ const TWEAK_DEFAULTS: Tweak = {
   playerTintSource: 'artwork',
   playerTintColor: '#0a84ff',
   showPlayerVisualizer: true,
+  fullPlayerMode: 'studio',
 }
 
 const STORAGE_KEY = 'crate.tweaks.v1'

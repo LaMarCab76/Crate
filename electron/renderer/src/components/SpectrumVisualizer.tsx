@@ -11,6 +11,10 @@ const LIT_EPSILON = 0.03
 // Boost applied inside the sqrt display curve so that typical FFT values
 // (0.05–0.20) map to a visible bar height rather than near-zero.
 const FFT_DISPLAY_GAIN = 2.2
+// Peak-hold (full mode only): each band keeps its recent max as a tick that
+// falls slowly. Decay is in segment units per frame.
+const PEAK_DECAY = 0.05
+const PEAK_EPSILON = 0.04
 
 // Mini: a fixed column per EQ frequency, aligned with the EQ labels so the
 // sidebar visualizer keeps a familiar 25 Hz → 16 kHz layout.
@@ -71,6 +75,8 @@ export function SpectrumVisualizer({ mode = 'mini' }: Props) {
   const smoothedRef = useRef<Float32Array>(new Float32Array(bandCount))
   const bandScratchRef = useRef<Float32Array>(new Float32Array(bandCount))
   const lastLitRef = useRef<Float32Array>(new Float32Array(bandCount))
+  const peakRef = useRef<Float32Array>(new Float32Array(bandCount))
+  const lastPeakRef = useRef<Float32Array>(new Float32Array(bandCount))
 
   // Frequency-axis ticks placed at their log position (full mode only). x is a
   // fraction of the bands area, which aligns with the matching column center.
@@ -119,8 +125,13 @@ export function SpectrumVisualizer({ mode = 'mini' }: Props) {
     if (!shouldAnimate) {
       smoothedRef.current.fill(0)
       lastLitRef.current.fill(0)
+      peakRef.current.fill(0)
+      lastPeakRef.current.fill(0)
       for (const el of bandRefs.current) {
-        if (el) el.style.setProperty('--lit', '0')
+        if (el) {
+          el.style.setProperty('--lit', '0')
+          el.style.setProperty('--peak', '0')
+        }
       }
       return
     }
@@ -130,6 +141,7 @@ export function SpectrumVisualizer({ mode = 'mini' }: Props) {
     const stopDemand = subscribeFftDemand('full')
     // Force a write on the first frame even if the value didn't change.
     lastLitRef.current.fill(-1)
+    lastPeakRef.current.fill(-1)
 
     let frame = 0
     const tick = () => {
@@ -140,10 +152,14 @@ export function SpectrumVisualizer({ mode = 'mini' }: Props) {
         smoothedRef.current = new Float32Array(n)
         bandScratchRef.current = new Float32Array(n)
         lastLitRef.current = new Float32Array(n).fill(-1)
+        peakRef.current = new Float32Array(n)
+        lastPeakRef.current = new Float32Array(n).fill(-1)
       }
       const targets = binsToBands(getLatestFft(), n, bandScratchRef.current)
       const smoothed = smoothedRef.current
       const lastLit = lastLitRef.current
+      const peak = peakRef.current
+      const lastPeak = lastPeakRef.current
       for (let i = 0; i < n; i++) {
         smoothed[i] = smoothed[i] * EMA_ALPHA + targets[i] * (1 - EMA_ALPHA)
         const el = bandRefs.current[i]
@@ -155,6 +171,15 @@ export function SpectrumVisualizer({ mode = 'mini' }: Props) {
         if (Math.abs(lit - lastLit[i]) >= LIT_EPSILON) {
           lastLit[i] = lit
           el.style.setProperty('--lit', lit.toFixed(2))
+        }
+        // Peak-hold tick (full mode only): rise instantly to a new max, then
+        // fall slowly. Writes are suppressed when the value barely moved.
+        if (isFull) {
+          peak[i] = lit >= peak[i] ? lit : Math.max(lit, peak[i] - PEAK_DECAY)
+          if (Math.abs(peak[i] - lastPeak[i]) >= PEAK_EPSILON) {
+            lastPeak[i] = peak[i]
+            el.style.setProperty('--peak', peak[i].toFixed(2))
+          }
         }
       }
       frame = requestAnimationFrame(tick)
@@ -199,6 +224,7 @@ export function SpectrumVisualizer({ mode = 'mini' }: Props) {
                         style={{ '--idx': segmentCount - 1 - segIdx } as CSSProperties}
                       />
                     ))}
+                    {isFull && <div className="spectrum-peak" aria-hidden="true" />}
                   </div>
                   {!isFull && <div className="spectrum-hz">{label ?? ' '}</div>}
                 </div>
