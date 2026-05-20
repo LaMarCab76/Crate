@@ -819,12 +819,6 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  /* Push the visualizer card past the surrounding --pp-inline padding so the
-     bars run nearly edge-to-edge in the sidebar. The header re-applies the
-     padding internally so the "VISUALIZER" label still aligns with the
-     other controls above. */
-  margin-left: calc(var(--pp-inline) * -1);
-  margin-right: calc(var(--pp-inline) * -1);
 }
 
 .pp-player-viz-head {
@@ -832,9 +826,8 @@ html, body {
   align-items: center;
   justify-content: space-between;
   height: 20px;
-  /* Pulls inwards to match the surrounding controls (which sit inside the
-     player-bottom's --pp-inline padding) since .pp-player-viz uses negative
-     margins to extend past it. */
+  /* Full-width sections such as Up Next extend past --pp-inline, so their
+     header restores the surrounding control alignment. */
   padding: 0 calc(var(--pp-inline) + 2px);
   border: 0;
   background: transparent;
@@ -846,6 +839,10 @@ html, body {
   text-transform: uppercase;
   cursor: pointer;
   transition: color 120ms;
+}
+
+.pp-player-viz > .pp-player-viz-head {
+  padding: 0 2px;
 }
 
 .pp-player-viz-head:hover {
@@ -1149,8 +1146,32 @@ html, body {
                     color-mix(in oklab, var(--bg-tint) 18%, transparent)),
     var(--bg-hover);
 }
-.tbl tbody tr.playing { color: var(--color-playing); }
+.tbl tbody tr.playing {
+  --track-playing-tint: var(--color-playing);
+  color: var(--text-primary);
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in oklab, var(--track-playing-tint) 26%, transparent),
+      color-mix(in oklab, var(--track-playing-tint) 14%, transparent) 38%,
+      color-mix(in oklab, var(--track-playing-tint) 9%, transparent)
+    ),
+    var(--bg-content);
+}
+.tbl tbody tr.playing:hover {
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in oklab, var(--track-playing-tint) 32%, transparent),
+      color-mix(in oklab, var(--track-playing-tint) 18%, transparent) 38%,
+      color-mix(in oklab, var(--track-playing-tint) 11%, transparent)
+    ),
+    var(--bg-hover);
+}
 .tbl tbody tr.playing .title { font-weight: 600; }
+.tbl tbody tr.playing td {
+  border-bottom-color: color-mix(in oklab, var(--track-playing-tint) 24%, var(--border-subtle));
+}
 .tbl tbody td {
   padding: 0 10px;
   border-bottom: 0.5px solid var(--border-subtle);
@@ -1258,10 +1279,20 @@ html, body {
   text-overflow: ellipsis;
 }
 .tbl td.actions { width: 44px; text-align: right; }
-.tbl tbody tr.playing td.num .eq-bars { color: var(--color-playing); }
+.tbl tbody tr.playing td.num,
+.tbl tbody tr.playing td.num .eq-bars {
+  color: color-mix(in oklab, var(--track-playing-tint) 82%, var(--text-tertiary));
+}
 
 /* Mini equalizer indicator */
-.eq-bars { display: inline-flex; align-items: flex-end; gap: 1.5px; height: 12px; width: 12px; }
+.eq-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 1px;
+  height: 14px;
+  width: 17px;
+}
 .eq-bars > i {
   display: block; width: 2px; height: 100%; background: currentColor;
   border-radius: 1px;
@@ -1736,6 +1767,29 @@ button:disabled { cursor: not-allowed; }
 }
 .artist-album > .tbl tbody td {
   border-bottom-color: color-mix(in oklab, var(--artist-album-tint) 12%, var(--border-subtle));
+}
+.artist-album > .tbl tbody tr.playing {
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in oklab, var(--track-playing-tint) 26%, transparent),
+      color-mix(in oklab, var(--track-playing-tint) 14%, transparent) 38%,
+      color-mix(in oklab, var(--track-playing-tint) 9%, transparent)
+    ),
+    var(--bg-content);
+}
+.artist-album > .tbl tbody tr.playing:hover {
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in oklab, var(--track-playing-tint) 32%, transparent),
+      color-mix(in oklab, var(--track-playing-tint) 18%, transparent) 38%,
+      color-mix(in oklab, var(--track-playing-tint) 11%, transparent)
+    ),
+    var(--bg-hover);
+}
+.artist-album > .tbl tbody tr.playing td {
+  border-bottom-color: color-mix(in oklab, var(--track-playing-tint) 24%, var(--border-subtle));
 }
 .aa-head {
   display: flex; align-items: flex-end; gap: 18px;

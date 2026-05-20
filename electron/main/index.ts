@@ -1,5 +1,6 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, nativeImage, shell } from 'electron'
 import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { closeDatabase, getDatabase } from './db/database'
 import { registerLibraryChannel } from './ipc/library-channel'
@@ -14,6 +15,11 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
 const isDev = !app.isPackaged
 
+// A packaged build gets its icon from the app bundle (.icns/.ico). In dev there
+// is no bundle, so we point Electron at the source PNG to brand the dock/taskbar.
+const devIconPath = join(__dirname, '../../electron-build/icon.png')
+const devIcon = isDev && existsSync(devIconPath) ? nativeImage.createFromPath(devIconPath) : null
+
 // Privileged protocol schemes must be registered BEFORE app.whenReady.
 registerProtocolSchemes()
 
@@ -24,6 +30,7 @@ function createMainWindow(): BrowserWindow {
     minWidth: 900,
     minHeight: 600,
     show: false,
+    icon: devIcon ?? undefined,
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 14, y: 16 },
     backgroundColor: '#0a0a0c',
@@ -61,7 +68,7 @@ function createMainWindow(): BrowserWindow {
 
   if (isDev && process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'])
-    if (process.env['HIFI_OPEN_DEVTOOLS'] === '1') {
+    if (process.env['CRATE_OPEN_DEVTOOLS'] === '1') {
       win.webContents.openDevTools({ mode: 'detach' })
     }
   } else {
@@ -72,6 +79,9 @@ function createMainWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
+  // Dev-only dock branding (a packaged macOS app uses the bundle icon instead).
+  if (devIcon && process.platform === 'darwin') app.dock?.setIcon(devIcon)
+
   // Initialize the SQLite database before the renderer can call any IPC handler.
   // Migrations are applied during the first getDatabase() call.
   getDatabase()

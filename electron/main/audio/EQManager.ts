@@ -4,7 +4,10 @@
 // (gapless swap, track change), so AudioEngine notifies us via the reapply()
 // entry point.
 
-import { BASS_FX_BFX_PEAKEQ } from './bass-constants'
+import {
+  BASS_FX_BFX_PEAKEQ,
+  bassErrorName,
+} from './bass-constants'
 import {
   BASS_BFX_CHANALL,
   loadBassFx,
@@ -114,6 +117,12 @@ export class EQManager {
       // Each band gets its own PEAKEQ instance. Priority is 0; ordering
       // within BASS doesn't matter for parallel peaking filters.
       const fx = bass.ChannelSetFX(this.currentStream, BASS_FX_BFX_PEAKEQ, 0)
+      if (fx === 0) {
+        const code = bass.ErrorGetCode()
+        console.warn(`[eq] ChannelSetFX failed for band ${i} (${EQ_BAND_FREQUENCIES[i]} Hz): ${bassErrorName(code)} (${code})`)
+        this.fxHandles[i] = 0
+        continue
+      }
       this.fxHandles[i] = fx
       this.applyBand(i)
     }
@@ -140,6 +149,7 @@ export class EQManager {
     const fx = this.fxHandles[index]
     if (!fx) return
     const fxLib = loadBassFx()
+    const bass = loadBass()
     const params: PeakEqParams = {
       lBand:      index,
       fBandwidth: EQ_FILTER_BANDWIDTH,
@@ -148,7 +158,11 @@ export class EQManager {
       fGain:      clampEqGain(gainDb),
       lChannel:   BASS_BFX_CHANALL,
     }
-    fxLib.FXSetParameters(fx, params)
+    const ok = fxLib.FXSetParameters(fx, params)
+    if (!ok) {
+      const code = bass.ErrorGetCode()
+      console.warn(`[eq] FXSetParameters failed for band ${index} (${EQ_BAND_FREQUENCIES[index]} Hz): ${bassErrorName(code)} (${code})`)
+    }
   }
 }
 
@@ -158,4 +172,3 @@ export function getEQManager(): EQManager {
 }
 
 export { EQ_BAND_FREQUENCIES, PRESETS }
-

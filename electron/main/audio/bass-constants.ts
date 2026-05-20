@@ -129,7 +129,7 @@ export const BASS_DATA_FFT2048  = 0x80000003
 // ---------------- BASS_FX ----------------
 
 // EQ filter types — we only use PEAKEQ (multi-band parametric peak).
-export const BASS_FX_BFX_PEAKEQ = 0x10000
+export const BASS_FX_BFX_PEAKEQ = 0x10004
 
 // ---------------- Helper ----------------
 

@@ -1,9 +1,11 @@
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import type { Track } from '@shared/types/library'
 import { Artwork } from './Artwork'
 import { CodecStrip } from './CodecStrip'
 import { Icon } from './Icon'
 import { EQBars } from './EQBars'
 import { fmtFileSize, fmtTime } from '@renderer/utils/format'
+import { extractDominantColor } from '@renderer/utils/colorExtract'
 import { useAlbums } from '@renderer/stores/libraryStore'
 import { toggleTrackFavorite } from '@renderer/stores/libraryStore'
 import { useQueueStore } from '@renderer/stores/queueStore'
@@ -43,6 +45,29 @@ export function TrackTable({
   const playingId = currentTrack?.id
   const showRefreshAction = onRefreshMetadata != null
   const trackActions = useTrackActions()
+  const playingAlbum = useMemo(
+    () => albums.find(a => a.id === currentTrack?.albumId),
+    [albums, currentTrack?.albumId],
+  )
+  const playingArtworkPath = currentTrack?.artworkPath ?? playingAlbum?.artworkPath ?? null
+  const playingFallbackTint = playingAlbum?.palette[1] ?? 'var(--color-playing)'
+  const [playingTint, setPlayingTint] = useState<string | null>(null)
+  const playingRowStyle = {
+    '--track-playing-tint': playingTint ?? playingFallbackTint,
+  } as CSSProperties
+
+  useEffect(() => {
+    setPlayingTint(null)
+    if (!playingArtworkPath) return
+
+    let cancelled = false
+    const src = `crate://artwork/${encodeURIComponent(playingArtworkPath)}`
+    void extractDominantColor(src).then(hex => {
+      if (!cancelled && hex) setPlayingTint(hex)
+    })
+
+    return () => { cancelled = true }
+  }, [playingArtworkPath])
 
   return (
     <>
@@ -71,6 +96,7 @@ export function TrackTable({
               <tr
                 key={t.id}
                 className={isP ? 'playing' : ''}
+                style={isP ? playingRowStyle : undefined}
                 onContextMenu={e => trackActions.openTrackMenu(e, t)}
                 onDoubleClick={() => { void playNow(t, tracks) }}
               >

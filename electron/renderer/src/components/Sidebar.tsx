@@ -4,6 +4,7 @@ import { Artwork } from './Artwork'
 import { Icon, type IconName } from './Icon'
 import type { View } from '@renderer/App'
 import { useFavoriteArtists, usePlaylists, useTrackCount } from '@renderer/stores/libraryStore'
+import crateLogo from '@renderer/assets/crate-logo.png'
 
 interface SidebarProps {
   setView: (v: View) => void
@@ -60,21 +61,15 @@ export function Sidebar({
       <div className="sb-header" style={{ WebkitAppRegion: 'drag' } as CSSProperties} />
 
       <div className="sb-scroll">
-        <div style={{ padding: '0 8px 4px' }}>
+        <div style={{ padding: '0 0 4px' }}>
           <div className="sb-item" style={{ height: 32, fontSize: 14, fontWeight: 700, padding: '0 10px', gap: 8 }}>
-            <div
-              style={{
-                width: 22,
-                height: 22,
-                borderRadius: 5,
-                background: 'linear-gradient(135deg, #fff, #888)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <span style={{ color: '#111', fontWeight: 800, fontSize: 13, fontFamily: 'var(--font-mono)' }}>♪</span>
-            </div>
+            <img
+              src={crateLogo}
+              alt=""
+              width={28}
+              height={28}
+              style={{ borderRadius: 7, display: 'block', objectFit: 'contain' }}
+            />
             Crate
           </div>
         </div>

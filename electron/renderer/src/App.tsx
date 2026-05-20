@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { type CSSProperties, useEffect, useRef, useState } from 'react'
 import type { Album, Artist, Playlist } from '@shared/types/library'
 import { Sidebar } from './components/Sidebar'
 import { Toolbar } from './components/Toolbar'
@@ -41,36 +41,83 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('')
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [playerPaneOpen, setPlayerPaneOpen] = useState(true)
+  const contentRef = useRef<HTMLDivElement>(null)
+  const scrollPositionsRef = useRef(new Map<number, number>())
+  const view = history[idx]
+  const viewAlbum = view.kind === 'album' ? view.album : null
+  const viewAlbumId = viewAlbum?.id
+  const viewAlbumTrackCount = viewAlbum?.tracks.length ?? 0
+  const viewAlbumFallbackTint = viewAlbum?.palette[1] ?? null
+  const viewAlbumArtworkPath = viewAlbum?.artworkPath ?? null
 
   const refresh = useLibraryStore(s => s.refresh)
   const loaded = useLibraryStore(s => s.loaded)
   const nowTrack = usePlaybackStore(s => s.currentTrack)
   const playbackStatus = usePlaybackStore(s => s.status)
   const nowAlbum = useAlbumByUiId(nowTrack?.albumId)
+  const viewedAlbum = useAlbumByUiId(viewAlbumId)
   const favoriteTracks = useFavoriteTracks()
   const canShowPlayerPane = nowTrack != null && !expanded
   const [playingTint, setPlayingTint] = useState<string | null>(null)
+  const [albumTint, setAlbumTint] = useState<string | null>(null)
   const playingArtworkPath = nowAlbum?.artworkPath ?? nowTrack?.artworkPath ?? null
   const isPlaying = playbackStatus === 'playing'
-
-  const view = history[idx]
+  const contentTint = viewAlbum ? (albumTint ?? viewAlbumFallbackTint) : null
 
   // Kick off the first library load when the renderer is ready.
   useEffect(() => {
     if (!loaded) refresh()
   }, [loaded, refresh])
 
+  const saveCurrentScroll = () => {
+    const el = contentRef.current
+    if (!el) return
+    scrollPositionsRef.current.set(idx, el.scrollTop)
+  }
+
   const navigate = (v: View, { replace = false }: { replace?: boolean } = {}) => {
+    saveCurrentScroll()
+
     if (replace) {
       const h = [...history]
       h[idx] = v
+      scrollPositionsRef.current.set(idx, 0)
       setHistory(h)
       return
     }
     const trimmed = history.slice(0, idx + 1)
+    const nextIdx = trimmed.length
+    for (const key of scrollPositionsRef.current.keys()) {
+      if (key >= nextIdx) scrollPositionsRef.current.delete(key)
+    }
+    scrollPositionsRef.current.set(nextIdx, 0)
     setHistory([...trimmed, v])
-    setIdx(trimmed.length)
+    setIdx(nextIdx)
   }
+
+  const goBack = () => {
+    if (idx <= 0) return
+    saveCurrentScroll()
+    setIdx(idx - 1)
+  }
+
+  const goForward = () => {
+    if (idx >= history.length - 1) return
+    saveCurrentScroll()
+    setIdx(idx + 1)
+  }
+
+  useEffect(() => {
+    const el = contentRef.current
+    if (!el) return
+
+    const top = scrollPositionsRef.current.get(idx) ?? 0
+    const frame = window.requestAnimationFrame(() => {
+      el.scrollTo({ top, behavior: 'auto' })
+    })
+
+    return () => window.cancelAnimationFrame(frame)
+  }, [idx, view])
 
   // Body class management (theme + density + layout).
   useEffect(() => {
@@ -109,6 +156,44 @@ export default function App() {
       root.style.removeProperty('--bg-tint')
     }
   }, [playingTint, isPlaying])
+
+  // If the open album becomes empty after deletion, return to previous view.
+  useEffect(() => {
+    if (!viewAlbum || idx <= 0) return
+
+    const currentCount = viewedAlbum?.tracks.length ?? 0
+    if (currentCount === 0) {
+      goBack()
+      return
+    }
+
+    if (viewedAlbum == null && viewAlbumTrackCount === 0) {
+      goBack()
+    }
+  }, [viewAlbum, idx, viewedAlbum?.tracks.length, viewedAlbum, viewAlbumTrackCount])
+
+  // Album view tint should always follow the album being shown, independent of
+  // now-playing/mini-player tinting.
+  useEffect(() => {
+    if (!viewAlbum) {
+      setAlbumTint(null)
+      return
+    }
+
+    setAlbumTint(viewAlbumFallbackTint)
+
+    if (!viewAlbumArtworkPath) return
+
+    let cancelled = false
+    const src = `crate://artwork/${encodeURIComponent(viewAlbumArtworkPath)}`
+    void extractDominantColor(src).then(hex => {
+      if (!cancelled && hex) setAlbumTint(hex)
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [viewAlbum, viewAlbumArtworkPath, viewAlbumFallbackTint])
 
   const sidebarKey = (() => {
     switch (view.kind) {
@@ -196,8 +281,8 @@ export default function App() {
               view={view}
               history={history}
               idx={idx}
-              onBack={() => idx > 0 && setIdx(idx - 1)}
-              onForward={() => idx < history.length - 1 && setIdx(idx + 1)}
+              onBack={goBack}
+              onForward={goForward}
               onNavigate={navigate}
               searchQuery={searchQuery}
               onSearchQueryChange={setSearchQuery}
@@ -207,7 +292,13 @@ export default function App() {
               canTogglePlayerPane={canShowPlayerPane}
               onTogglePlayerPane={() => setPlayerPaneOpen(open => !open)}
             />
-            <div className="content">{renderContent()}</div>
+            <div
+              ref={contentRef}
+              className="content"
+              style={contentTint ? ({ '--bg-tint': contentTint } as CSSProperties) : undefined}
+            >
+              {renderContent()}
+            </div>
           </div>
 
         <PlayerPane
