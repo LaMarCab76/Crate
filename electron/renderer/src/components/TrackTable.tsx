@@ -10,6 +10,7 @@ import { useAlbums } from '@renderer/stores/libraryStore'
 import { toggleTrackFavorite } from '@renderer/stores/libraryStore'
 import { useQueueStore } from '@renderer/stores/queueStore'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
+import { useTweakStore } from '@renderer/stores/settingsStore'
 import { useTrackActions } from './MediaActions'
 
 interface TrackTableProps {
@@ -41,8 +42,12 @@ export function TrackTable({
 }: TrackTableProps) {
   const albums = useAlbums()
   const playNow = useQueueStore(s => s.playNow)
+  const togglePlay = useQueueStore(s => s.togglePlay)
   const currentTrack = usePlaybackStore(s => s.currentTrack)
+  const status = usePlaybackStore(s => s.status)
+  const showPlayerVisualizer = useTweakStore(s => s.tweak.showPlayerVisualizer)
   const playingId = currentTrack?.id
+  const playing = status === 'playing'
   const showRefreshAction = onRefreshMetadata != null
   const trackActions = useTrackActions()
   const playingAlbum = useMemo(
@@ -102,7 +107,31 @@ export function TrackTable({
               >
                 <td className={`num ${t.dbId != null ? 'has-like' : ''}`}>
                   <span className="track-index">
-                    {isP ? <EQBars /> : showTrackNo ? (t.no || i + 1) : null}
+                    {isP ? (
+                      showPlayerVisualizer ? (
+                        <button
+                          type="button"
+                          className="tb-icon-btn"
+                          style={{
+                            width: 22,
+                            height: 22,
+                            color: 'inherit',
+                            marginLeft: 'auto',
+                          }}
+                          title={playing ? 'Pause' : 'Play'}
+                          aria-label={playing ? 'Pause' : 'Play'}
+                          onClick={e => {
+                            e.stopPropagation()
+                            void togglePlay()
+                          }}
+                          onDoubleClick={e => e.stopPropagation()}
+                        >
+                          <Icon name={playing ? 'pause' : 'play'} size={13} />
+                        </button>
+                      ) : (
+                        <EQBars />
+                      )
+                    ) : showTrackNo ? (t.no || i + 1) : null}
                   </span>
                   {t.dbId != null && (
                     <button

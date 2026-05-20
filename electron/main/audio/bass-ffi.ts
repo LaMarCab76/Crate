@@ -95,6 +95,7 @@ interface BassBindings {
   ChannelRemoveFX: (handle: number, fx: number) => number
   ChannelGetInfo: (handle: number, info: object) => number
   ChannelGetData: (handle: number, buffer: Float32Array, length: number) => number
+  ChannelGetLevelEx: (handle: number, levels: Float32Array, length: number, flags: number) => number
   ChannelSetDevice: (handle: number, device: number) => number
 }
 
@@ -134,6 +135,7 @@ export function loadBass(): BassBindings {
     ChannelRemoveFX:    lib.func('int32_t BASS_ChannelRemoveFX(uint32_t, uint32_t)'),
     ChannelGetInfo:     lib.func('int32_t BASS_ChannelGetInfo(uint32_t, _Out_ BASS_CHANNELINFO *)'),
     ChannelGetData:     lib.func('uint32_t BASS_ChannelGetData(uint32_t, _Out_ float *, uint32_t)'),
+    ChannelGetLevelEx:  lib.func('int32_t BASS_ChannelGetLevelEx(uint32_t, _Out_ float *, float, uint32_t)'),
     ChannelSetDevice:   lib.func('int32_t BASS_ChannelSetDevice(uint32_t, uint32_t)'),
   } as unknown as BassBindings
 

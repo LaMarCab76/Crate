@@ -168,6 +168,18 @@ export interface FftEvent {
   bins: number[]               // ~64 log-spaced amplitude bins, 0..1
 }
 
+export interface LevelsEvent {
+  peakL: number; peakR: number  // linear 0..1
+  rmsL: number;  rmsR: number   // linear 0..1
+}
+
+export interface WaveformResult {
+  peaks: number[]              // max-abs amplitude per bucket, 0..1
+  drApprox: number             // crest-factor dB (approximate dynamic range)
+  peakDb: number               // true peak dBFS
+  buckets: number
+}
+
 export interface ArtistListMode {
   mode: 'manual' | 'topPlays'
   n?: number
@@ -181,6 +193,8 @@ export interface AudioApi {
   seek(positionSec: number): Promise<void>
   setVolume(value: number): Promise<void>
   setFftMode(mode: FftMode): Promise<void>
+  setMeterEnabled(enabled: boolean): Promise<void>
+  getWaveform(path: string, buckets?: number): Promise<WaveformResult>
   preloadNext(path: string): Promise<void>
   clearNext(): Promise<void>
   swapNow(): Promise<boolean>
@@ -196,6 +210,7 @@ export interface AudioApi {
   onGaplessFired(h: (e: { path: string }) => void): EventOff
   onStateChanged(h: (e: { status: PlaybackStatus }) => void): EventOff
   onFft(h: (e: FftEvent) => void): EventOff
+  onLevels(h: (e: LevelsEvent) => void): EventOff
   onExclusiveModeChanged(h: (e: ExclusiveModeState) => void): EventOff
 }
 

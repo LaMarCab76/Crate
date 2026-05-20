@@ -9,6 +9,7 @@ import type {
   FftMode,
   ImportCompleteEvent,
   ImportProgressEvent,
+  LevelsEvent,
   ListTracksOpts,
   PickFolderResult,
   PlaybackStatePayload,
@@ -19,6 +20,7 @@ import type {
   StreamInfoPayload,
   TrackMetadataUpdatePayload,
   TrashTracksResult,
+  WaveformResult,
 } from '@shared/types/ipc-contract'
 import type {
   DbAlbum,
@@ -100,6 +102,10 @@ const api: Api = {
       ipcRenderer.invoke('audio:setVolume', { value }) as Promise<void>,
     setFftMode: (mode: FftMode) =>
       ipcRenderer.invoke('audio:setFftMode', { mode }) as Promise<void>,
+    setMeterEnabled: (enabled: boolean) =>
+      ipcRenderer.invoke('audio:setMeterEnabled', { enabled }) as Promise<void>,
+    getWaveform: (path: string, buckets?: number) =>
+      ipcRenderer.invoke('audio:getWaveform', { path, buckets }) as Promise<WaveformResult>,
     preloadNext: (path: string) =>
       ipcRenderer.invoke('audio:preloadNext', { path }) as Promise<void>,
     clearNext: () => ipcRenderer.invoke('audio:clearNext') as Promise<void>,
@@ -118,6 +124,7 @@ const api: Api = {
     onGaplessFired: (h) => subscribe<{ path: string }>('audio:gapless-fired', h),
     onStateChanged: (h) => subscribe<{ status: PlaybackStatus }>('audio:state-changed', h),
     onFft: (h) => subscribe<FftEvent>('audio:fft', h),
+    onLevels: (h) => subscribe<LevelsEvent>('audio:levels', h),
     onExclusiveModeChanged: (h) => subscribe<ExclusiveModeState>('audio:exclusive-changed', h),
   },
   eq: {

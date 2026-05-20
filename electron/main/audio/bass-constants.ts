@@ -126,6 +126,13 @@ export const BASS_DATA_FFT512   = 0x80000001
 export const BASS_DATA_FFT1024  = 0x80000002
 export const BASS_DATA_FFT2048  = 0x80000003
 
+// BASS_ChannelGetLevelEx flags. STEREO returns 2 values [L, R]; RMS swaps the
+// peak measurement for RMS; VOL factors the channel volume in.
+export const BASS_LEVEL_MONO   = 1
+export const BASS_LEVEL_RMS    = 2
+export const BASS_LEVEL_STEREO = 4
+export const BASS_LEVEL_VOL    = 8
+
 // ---------------- BASS_FX ----------------
 
 // EQ filter types — we only use PEAKEQ (multi-band parametric peak).

@@ -13,8 +13,9 @@ import { broadcast } from '../ipc/events'
 import {
   BASS_ACTIVE_PAUSED, BASS_ACTIVE_PLAYING, BASS_ACTIVE_STOPPED,
   BASS_ATTRIB_VOL, BASS_DATA_FFT2048, BASS_DEVICE_DEFAULT, BASS_DEVICE_ENABLED,
-  BASS_DEVICE_INIT, BASS_DEVICE_LOOPBACK, BASS_POS_BYTE, BASS_SAMPLE_FLOAT,
-  BASS_STREAM_PRESCAN, bassErrorName,
+  BASS_DEVICE_INIT, BASS_DEVICE_LOOPBACK, BASS_LEVEL_RMS, BASS_LEVEL_STEREO,
+  BASS_POS_BYTE, BASS_SAMPLE_FLOAT, BASS_STREAM_DECODE, BASS_STREAM_PRESCAN,
+  bassErrorName,
 } from './bass-constants'
 import {
   loadBass,
@@ -24,7 +25,7 @@ import {
   type HSTREAM,
 } from './bass-ffi'
 import { loadAllPlugins } from './PluginLoader'
-import type { AudioOutputDevice, FftMode } from '@shared/types/ipc-contract'
+import type { AudioOutputDevice, FftMode, WaveformResult } from '@shared/types/ipc-contract'
 
 // FFT2048 returns 1024 complex bins as magnitudes (0..1).
 const FFT_BINS_RAW = 1024
@@ -44,6 +45,19 @@ const MAX_SCREEN_FFT_HZ = 60
 const DEFAULT_SCREEN_FFT_INTERVAL_MS = Math.round(1000 / MAX_SCREEN_FFT_HZ)
 const DEFAULT_OUTPUT_FREQ = 48000
 const DEFAULT_OUTPUT_FLAGS = 0
+
+// Level metering (VU): independent of FFT so the meters keep working even when
+// no spectrum visualizer is mounted. ~30 Hz matches the 'full' FFT cadence.
+const METER_INTERVAL_MS = 33
+// How much audio ChannelGetLevelEx averages per measurement, in seconds.
+const METER_WINDOW_SEC = 0.035
+
+// Waveform extraction: decode the whole file once and downsample to this many
+// max-abs buckets. Reads run in float chunks with event-loop yields so a long
+// FLAC doesn't block playback. Results are cached per path (bounded LRU-ish).
+const WAVEFORM_DEFAULT_BUCKETS = 1200
+const WAVEFORM_READ_FLOATS = 65536
+const WAVEFORM_CACHE_MAX = 50
 
 export type PlaybackStatus = 'stopped' | 'playing' | 'paused' | 'loading'
 
@@ -72,6 +86,10 @@ export class AudioEngine {
   private screenFftIntervalMs = DEFAULT_SCREEN_FFT_INTERVAL_MS
   private fftBuffer: Float32Array = new Float32Array(FFT_BINS_RAW)
   private fftOut: number[] = new Array(FFT_BINS_OUT).fill(0)
+  private meterTimer: NodeJS.Timeout | null = null
+  private meterEnabled = false
+  private levelBuf: Float32Array = new Float32Array(2)
+  private waveformCache = new Map<string, WaveformResult>()
   private getInfo: ReturnType<typeof makeChannelGetInfo> | null = null
   // Optional listener invoked after setOutputDevice succeeds. Used by
   // ExclusiveModeManager to transfer hog ownership across device switches
@@ -218,6 +236,14 @@ export class AudioEngine {
     this.fftMode = mode
     this.screenFftIntervalMs = nextScreenIntervalMs
     this.syncFftTimer()
+  }
+
+  // Toggle real-time L/R level metering. The renderer turns this on only while a
+  // VU meter is mounted; the actual timer is additionally gated on playback.
+  setMeterEnabled(enabled: boolean): void {
+    if (this.meterEnabled === enabled) return
+    this.meterEnabled = enabled
+    this.syncMeterTimer()
   }
 
   listOutputDevices(): AudioOutputDevice[] {
@@ -441,11 +467,13 @@ export class AudioEngine {
     this.clearProgressTimer()
     this.progressTimer = setInterval(() => this.emitProgress(), 250)
     this.syncFftTimer()
+    this.syncMeterTimer()
   }
 
   private stopProgressTimer(): void {
     this.clearProgressTimer()
     this.stopFftTimer()
+    this.stopMeterTimer()
   }
 
   private clearProgressTimer(): void {
@@ -507,6 +535,112 @@ export class AudioEngine {
       this.fftOut[i] = Math.min(1, Math.sqrt(Math.max(0, amp)) * 1.6)
     }
     broadcast('audio:fft', { bins: this.fftOut })
+  }
+
+  // Mirror of syncFftTimer for the VU meter feed. Runs only while metering is
+  // requested, a stream exists, and it's actually playing.
+  private syncMeterTimer(): void {
+    if (!this.meterEnabled || this.getStatus() !== 'playing' || this.currentStream === 0) {
+      this.stopMeterTimer()
+      return
+    }
+    if (this.meterTimer) return
+    this.emitLevels()
+    this.meterTimer = setInterval(() => this.emitLevels(), METER_INTERVAL_MS)
+  }
+
+  private stopMeterTimer(sendFlatline = true): void {
+    if (this.meterTimer) {
+      clearInterval(this.meterTimer)
+      this.meterTimer = null
+    }
+    if (sendFlatline) {
+      broadcast('audio:levels', { peakL: 0, peakR: 0, rmsL: 0, rmsR: 0 })
+    }
+  }
+
+  private emitLevels(): void {
+    if (this.currentStream === 0) return
+    const bass = loadBass()
+    // ChannelGetLevelEx writes one float per channel into levelBuf. STEREO → 2
+    // values [L, R]; a second call with RMS swaps peak for RMS. length is in
+    // SECONDS (not bytes like ChannelGetData). Returns FALSE when not playing.
+    const okPeak = bass.ChannelGetLevelEx(this.currentStream, this.levelBuf, METER_WINDOW_SEC, BASS_LEVEL_STEREO)
+    const peakL = okPeak ? this.levelBuf[0] : 0
+    const peakR = okPeak ? this.levelBuf[1] : 0
+    const okRms = bass.ChannelGetLevelEx(this.currentStream, this.levelBuf, METER_WINDOW_SEC, BASS_LEVEL_STEREO | BASS_LEVEL_RMS)
+    const rmsL = okRms ? this.levelBuf[0] : 0
+    const rmsR = okRms ? this.levelBuf[1] : 0
+    broadcast('audio:levels', { peakL, peakR, rmsL, rmsR })
+  }
+
+  // Decode the whole file once on a separate decode stream and downsample to a
+  // max-abs envelope. Computes a crest-factor approximation of dynamic range and
+  // the true peak in the same pass. Yields to the event loop between reads so a
+  // long file doesn't stall playback. Results are cached per path.
+  async getWaveform(path: string, buckets = WAVEFORM_DEFAULT_BUCKETS): Promise<WaveformResult> {
+    const cached = this.waveformCache.get(path)
+    if (cached && cached.buckets === buckets) return cached
+
+    this.ensureInit()
+    const bass = loadBass()
+    const handle = bass.StreamCreateFile(0, path, 0n, 0n, BASS_STREAM_DECODE | BASS_SAMPLE_FLOAT)
+    if (handle === 0) {
+      const code = bass.ErrorGetCode()
+      throw new Error(`Waveform decode failed for ${path}: ${bassErrorName(code)} (${code})`)
+    }
+
+    try {
+      const info = this.getInfo!(handle) as BassChannelInfo
+      const chans = Math.max(1, info.chans)
+      const lengthBytes = Number(bass.ChannelGetLength(handle, BASS_POS_BYTE))
+      const totalFrames = Math.max(1, Math.floor(lengthBytes / (4 * chans)))
+      const framesPerBucket = Math.max(1, Math.floor(totalFrames / buckets))
+
+      const peaks = new Array(buckets).fill(0)
+      const readFloats = WAVEFORM_READ_FLOATS - (WAVEFORM_READ_FLOATS % chans)
+      const buf = new Float32Array(readFloats)
+      let frameCursor = 0
+      let globalPeak = 0
+      let sumSq = 0
+      let sampleCount = 0
+
+      for (;;) {
+        const ret = bass.ChannelGetData(handle, buf, readFloats * 4)
+        if (ret === 0xFFFFFFFF) break          // error / end of stream
+        const floatsRead = ret >>> 2           // bytes → float count
+        if (floatsRead === 0) break
+        for (let i = 0; i + chans <= floatsRead; i += chans) {
+          let frameMax = 0
+          for (let c = 0; c < chans; c++) {
+            const s = buf[i + c]
+            const a = Math.abs(s)
+            if (a > frameMax) frameMax = a
+            sumSq += s * s
+          }
+          sampleCount += chans
+          if (frameMax > globalPeak) globalPeak = frameMax
+          const b = Math.min(buckets - 1, Math.floor(frameCursor / framesPerBucket))
+          if (frameMax > peaks[b]) peaks[b] = frameMax
+          frameCursor++
+        }
+        await new Promise(resolve => setImmediate(resolve))
+      }
+
+      const rms = Math.sqrt(sumSq / Math.max(1, sampleCount))
+      const peakDb = 20 * Math.log10(Math.max(1e-6, globalPeak))
+      const drApprox = 20 * Math.log10(Math.max(1e-6, globalPeak) / Math.max(1e-6, rms))
+      const result: WaveformResult = { peaks, drApprox, peakDb, buckets }
+
+      if (this.waveformCache.size >= WAVEFORM_CACHE_MAX) {
+        const oldest = this.waveformCache.keys().next().value
+        if (oldest !== undefined) this.waveformCache.delete(oldest)
+      }
+      this.waveformCache.set(path, result)
+      return result
+    } finally {
+      bass.StreamFree(handle)
+    }
   }
 
   private intervalFromScreenHz(screenHz: number | undefined): number {

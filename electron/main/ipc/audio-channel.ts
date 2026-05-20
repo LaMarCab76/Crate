@@ -70,6 +70,10 @@ export function registerAudioChannel(): void {
     const mode = normalizeFftMode(payload?.mode)
     engine.setFftMode(mode, mode === 'screen' ? getSenderDisplayHz(event.sender) : undefined)
   })
+  ipcMain.handle('audio:setMeterEnabled', (_, payload: { enabled: boolean }) =>
+    engine.setMeterEnabled(Boolean(payload?.enabled)))
+  ipcMain.handle('audio:getWaveform', (_, payload: { path: string; buckets?: number }) =>
+    engine.getWaveform(payload.path, payload.buckets))
 
   ipcMain.handle('audio:preloadNext', (_, payload: { path: string }) => {
     getGapless().preloadNext(payload.path)

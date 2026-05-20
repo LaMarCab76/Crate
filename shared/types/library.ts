@@ -41,6 +41,7 @@ export interface Track {
   sampleRate?: number | null
   channels?: number | null
   bitDepth?: number | null
+  loudness?: number | null  // R128 integrated loudness (LUFS); null if untagged
   artworkPath?: string   // filename under userData/artwork/, served via crate://
 }
 
