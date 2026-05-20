@@ -38,6 +38,12 @@ export function AlbumsView({
   const title = mode === 'recent' ? 'Recently Added' : 'Albums'
 
   const visibleAlbums = useMemo(() => {
+    // Recently Added is a fixed view: always newest-first by date added,
+    // decoupled from the Albums sort/filter preferences.
+    if (mode === 'recent') {
+      return sortAlbums(albums, 'dateAdded', 'desc')
+    }
+
     const query = prefs.query.trim().toLowerCase()
     const list = albums.filter(album => {
       if (prefs.onlyWithArtwork && !album.artworkPath) return false
@@ -50,7 +56,7 @@ export function AlbumsView({
     })
 
     return sortAlbums(list, prefs.sortBy, prefs.sortDir)
-  }, [albums, prefs.onlyWithArtwork, prefs.query, prefs.sortBy, prefs.sortDir, prefs.yearMin, prefs.yearMax])
+  }, [mode, albums, prefs.onlyWithArtwork, prefs.query, prefs.sortBy, prefs.sortDir, prefs.yearMin, prefs.yearMax])
 
   const playAlbum = (album: Album, e?: MouseEvent<HTMLElement>) => {
     if (e) e.stopPropagation()
@@ -79,9 +85,11 @@ export function AlbumsView({
   ]
 
   const subtitle =
-    `${visibleAlbums.length} álbum${visibleAlbums.length === 1 ? '' : 's'} · ` +
-    `Ordenado por ${sortLabel}${prefs.sortDir === 'desc' ? ' · Desc' : ' · Asc'}` +
-    (filters.length > 0 ? ` · Filtrado por ${filters.join(', ')}` : '')
+    mode === 'recent'
+      ? `${visibleAlbums.length} álbum${visibleAlbums.length === 1 ? '' : 's'} · Ordenado por Date Added · Desc`
+      : `${visibleAlbums.length} álbum${visibleAlbums.length === 1 ? '' : 's'} · ` +
+        `Ordenado por ${sortLabel}${prefs.sortDir === 'desc' ? ' · Desc' : ' · Asc'}` +
+        (filters.length > 0 ? ` · Filtrado por ${filters.join(', ')}` : '')
 
   return (
     <>
@@ -90,6 +98,7 @@ export function AlbumsView({
           <h1>{title}</h1>
           <div className="sub">{subtitle}</div>
         </div>
+        {mode === 'albums' && (
         <div className="actions list-toolbar">
           <ListPrefsMenu buttonLabel="Filtro" menuTitle="Albums" onReset={() => setPrefs(defaults.albums)}>
             <div className="list-prefs-row">
@@ -162,6 +171,7 @@ export function AlbumsView({
             </div>
           </ListPrefsMenu>
         </div>
+        )}
       </div>
       <div className="grid">
         {visibleAlbums.map(al => (

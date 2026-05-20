@@ -19,7 +19,6 @@ import type { AudioOutputDevice, ExclusiveModeState } from '@shared/types/ipc-co
 import type { Album, Artist, Track } from '@shared/types/library'
 
 interface PlayerPaneProps {
-  expanded: boolean
   isOpen: boolean
   onExpand: () => void
   onCollapse: () => void
@@ -27,8 +26,10 @@ interface PlayerPaneProps {
   onOpenArtist?: (artist: Artist) => void
 }
 
-export function PlayerPane({ expanded, isOpen, onExpand, onCollapse, onOpenAlbum, onOpenArtist }: PlayerPaneProps) {
-  const track = usePlaybackStore(s => s.currentTrack)
+export function PlayerPane({ isOpen, onExpand, onCollapse, onOpenAlbum, onOpenArtist }: PlayerPaneProps) {
+  const currentTrack = usePlaybackStore(s => s.currentTrack)
+  const [lastTrack, setLastTrack] = useState<Track | null>(() => currentTrack)
+  const track = currentTrack ?? lastTrack
   const status = usePlaybackStore(s => s.status)
   const positionSec = usePlaybackStore(s => s.positionSec)
   const durationSec = usePlaybackStore(s => s.durationSec)
@@ -42,11 +43,13 @@ export function PlayerPane({ expanded, isOpen, onExpand, onCollapse, onOpenAlbum
   const setVolume = useQueueStore(s => s.setVolume)
   const album = useAlbumByUiId(track?.albumId)
   const artist = useArtistByUiId(track?.artistId)
+  const [lastAlbum, setLastAlbum] = useState<Album | null>(null)
+  const displayAlbum = album ?? (track?.albumId === lastAlbum?.id ? lastAlbum : undefined)
   const playerTintSource = useTweakStore(s => s.tweak.playerTintSource)
   const playerTintColor = useTweakStore(s => s.tweak.playerTintColor)
   const showVisualizer = useTweakStore(s => s.tweak.showPlayerVisualizer)
   const setTweak = useTweakStore(s => s.setTweak)
-  const artworkPath = track?.artworkPath ?? album?.artworkPath ?? null
+  const artworkPath = track?.artworkPath ?? displayAlbum?.artworkPath ?? null
   const [artworkTint, setArtworkTint] = useState<string | null>(null)
   const [dragProgress, setDragProgress] = useState<number | null>(null)
   const [activeTab, setActiveTab] = useState<'nowPlaying' | 'upNext'>('nowPlaying')
@@ -58,6 +61,14 @@ export function PlayerPane({ expanded, isOpen, onExpand, onCollapse, onOpenAlbum
   const [exclusiveBusy, setExclusiveBusy] = useState(false)
   const [exclusiveError, setExclusiveError] = useState<string | null>(null)
   const deviceMenuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (currentTrack) setLastTrack(currentTrack)
+  }, [currentTrack])
+
+  useEffect(() => {
+    if (album) setLastAlbum(album)
+  }, [album])
 
   const totalQueueRemainingSec =
     Math.max(0, durationSec - positionSec) + queueNext.reduce((sum, item) => sum + item.d, 0)
@@ -125,7 +136,7 @@ export function PlayerPane({ expanded, isOpen, onExpand, onCollapse, onOpenAlbum
     }
   }, [deviceMenuOpen])
 
-  if (!track || expanded) return null
+  if (!track) return null
 
   const playing = status === 'playing'
   const progress = durationSec > 0 ? positionSec / durationSec : 0
@@ -274,9 +285,10 @@ export function PlayerPane({ expanded, isOpen, onExpand, onCollapse, onOpenAlbum
       <div className="pp-tab-content">
         {activeTab === 'nowPlaying' ? (
           <div className="pp-player" role="tabpanel" aria-label="Now Playing">
+            <UpNextToast variant="side" />
             <div className="pp-player-top">
               <div className="art" onClick={onExpand} role="button" tabIndex={0}>
-                <Artwork album={album} radius={8} objectFit="contain" />
+                <Artwork album={displayAlbum} radius={8} objectFit="contain" />
               </div>
 
               <div className="info">
@@ -387,7 +399,7 @@ export function PlayerPane({ expanded, isOpen, onExpand, onCollapse, onOpenAlbum
                     aria-expanded={deviceMenuOpen}
                     onClick={onOutputButtonClick}
                   >
-                    <Icon name="airplay" size={14} />
+                    <Icon name="speaker" size={14} />
                   </button>
                   {deviceMenuOpen && (
                     <div className={`output-device-menu upward ${exclusiveBusy ? 'transitioning' : ''}`} role="menu">
@@ -455,9 +467,9 @@ export function PlayerPane({ expanded, isOpen, onExpand, onCollapse, onOpenAlbum
               </div>
             </div>
             <div className="queue-list">
-              <div className="queue-section-label">Playing from · {album?.title ?? '—'}</div>
+              <div className="queue-section-label">Playing from · {displayAlbum?.title ?? '—'}</div>
               <div className="queue-item now">
-                <div className="art"><Artwork album={album} /></div>
+                <div className="art"><Artwork album={displayAlbum} /></div>
                 <div>
                   <div className="t">{track.t}</div>
                   <div className="a">{track.artist}</div>
@@ -476,8 +488,6 @@ export function PlayerPane({ expanded, isOpen, onExpand, onCollapse, onOpenAlbum
           </div>
         )}
       </div>
-
-      {isOpen && activeTab !== 'upNext' && <UpNextToast variant="side" />}
     </div>
   )
 }

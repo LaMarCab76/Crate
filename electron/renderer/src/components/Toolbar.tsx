@@ -134,7 +134,11 @@ export function Toolbar({
       <button className="tb-icon-btn" onClick={() => onNavigate({ kind: 'import' })} title="Add to Library">
         <Icon name="plus" />
       </button>
-      <button className="tb-icon-btn" onClick={() => onNavigate({ kind: 'settings' })} title="Preferences">
+      <button
+        className={`tb-icon-btn ${view.kind === 'settings' ? 'active' : ''}`}
+        onClick={() => onNavigate({ kind: 'settings' })}
+        title="Preferences"
+      >
         <Icon name="sliders" />
       </button>
     </div>

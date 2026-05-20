@@ -38,6 +38,8 @@ export type View =
 
 const SIDEBAR_WIDTH_STORAGE_KEY = 'crate.layout.sidebarWidth.v1'
 const PLAYER_PANE_OPEN_STORAGE_KEY = 'crate.layout.playerPaneOpen.v1'
+const PLAYER_PANE_EXIT_MS = 280
+const PB_PLAYER_EXIT_MS = 190
 
 const SIDEBAR_WIDTH_DEFAULT = 240
 const SIDEBAR_WIDTH_MIN = 180
@@ -107,8 +109,10 @@ export default function App() {
   const canShowPlayerPane = nowTrack != null && !expanded
   const isPlayerPaneOpen = playerPaneOpen && canShowPlayerPane
   const showBottomPlayer = !isPlayerPaneOpen && canShowPlayerPane
+  const [playerPaneVisible, setPlayerPaneVisible] = useState(() => isPlayerPaneOpen)
   const [bottomPlayerVisible, setBottomPlayerVisible] = useState(false)
   const [bottomPlayerClosing, setBottomPlayerClosing] = useState(false)
+  const isBottomPlayerClosing = bottomPlayerVisible && !showBottomPlayer
   const [playingTint, setPlayingTint] = useState<string | null>(null)
   const [albumTint, setAlbumTint] = useState<string | null>(null)
   const playingArtworkPath = nowAlbum?.artworkPath ?? nowTrack?.artworkPath ?? null
@@ -138,10 +142,25 @@ export default function App() {
     const timeout = window.setTimeout(() => {
       setBottomPlayerVisible(false)
       setBottomPlayerClosing(false)
-    }, 220)
+    }, PB_PLAYER_EXIT_MS)
 
     return () => window.clearTimeout(timeout)
   }, [showBottomPlayer, bottomPlayerVisible])
+
+  useEffect(() => {
+    if (isPlayerPaneOpen) {
+      setPlayerPaneVisible(true)
+      return
+    }
+
+    if (!playerPaneVisible) return
+
+    const timeout = window.setTimeout(() => {
+      setPlayerPaneVisible(false)
+    }, PLAYER_PANE_EXIT_MS)
+
+    return () => window.clearTimeout(timeout)
+  }, [isPlayerPaneOpen, playerPaneVisible])
 
   // Kick off the first library load when the renderer is ready.
   useEffect(() => {
@@ -429,20 +448,21 @@ export default function App() {
             </div>
           </div>
 
-          <PlayerPane
-            expanded={expanded}
-            isOpen={isPlayerPaneOpen}
-            onExpand={() => setExpanded(true)}
-            onCollapse={() => setPlayerPaneOpen(false)}
-            onOpenAlbum={album => navigate({ kind: 'album', album })}
-            onOpenArtist={artist => navigate({ kind: 'artist', artist })}
-          />
+          {playerPaneVisible && (
+            <PlayerPane
+              isOpen={isPlayerPaneOpen}
+              onExpand={() => setExpanded(true)}
+              onCollapse={() => setPlayerPaneOpen(false)}
+              onOpenAlbum={album => navigate({ kind: 'album', album })}
+              onOpenArtist={artist => navigate({ kind: 'artist', artist })}
+            />
+          )}
 
-          {!expanded && bottomPlayerVisible && !bottomPlayerClosing && <UpNextToast variant="bottom" />}
+          {!expanded && bottomPlayerVisible && !isBottomPlayerClosing && <UpNextToast variant="bottom" />}
 
           {bottomPlayerVisible && (
             <PlayerBottomBar
-              closing={bottomPlayerClosing}
+              closing={isBottomPlayerClosing || bottomPlayerClosing}
               onExpand={() => setExpanded(true)}
               onShowPanel={() => setPlayerPaneOpen(true)}
               onOpenAlbum={album => navigate({ kind: 'album', album })}

@@ -13,7 +13,7 @@ import { useQueueStore } from '@renderer/stores/queueStore'
 import { useTweakStore } from '@renderer/stores/settingsStore'
 import { extractDominantColor } from '@renderer/utils/colorExtract'
 import type { AudioOutputDevice, ExclusiveModeState } from '@shared/types/ipc-contract'
-import type { Album, Artist } from '@shared/types/library'
+import type { Album, Artist, Track } from '@shared/types/library'
 
 interface PlayerBottomBarProps {
   closing?: boolean
@@ -24,7 +24,9 @@ interface PlayerBottomBarProps {
 }
 
 export function PlayerBottomBar({ closing = false, onExpand, onShowPanel, onOpenAlbum, onOpenArtist }: PlayerBottomBarProps) {
-  const track = usePlaybackStore(s => s.currentTrack)
+  const currentTrack = usePlaybackStore(s => s.currentTrack)
+  const [lastTrack, setLastTrack] = useState<Track | null>(() => currentTrack)
+  const track = currentTrack ?? lastTrack
   const status = usePlaybackStore(s => s.status)
   const positionSec = usePlaybackStore(s => s.positionSec)
   const durationSec = usePlaybackStore(s => s.durationSec)
@@ -40,9 +42,11 @@ export function PlayerBottomBar({ closing = false, onExpand, onShowPanel, onOpen
   const setRepeat = useQueueStore(s => s.setRepeat)
   const album = useAlbumByUiId(track?.albumId)
   const artist = useArtistByUiId(track?.artistId)
+  const [lastAlbum, setLastAlbum] = useState<Album | null>(null)
+  const displayAlbum = album ?? (track?.albumId === lastAlbum?.id ? lastAlbum : undefined)
   const playerTintSource = useTweakStore(s => s.tweak.playerTintSource)
   const playerTintColor = useTweakStore(s => s.tweak.playerTintColor)
-  const artworkPath = track?.artworkPath ?? album?.artworkPath ?? null
+  const artworkPath = track?.artworkPath ?? displayAlbum?.artworkPath ?? null
   const [artworkTint, setArtworkTint] = useState<string | null>(null)
   const [dragProgress, setDragProgress] = useState<number | null>(null)
   const [deviceMenuOpen, setDeviceMenuOpen] = useState(false)
@@ -53,6 +57,14 @@ export function PlayerBottomBar({ closing = false, onExpand, onShowPanel, onOpen
   const [exclusiveBusy, setExclusiveBusy] = useState(false)
   const [exclusiveError, setExclusiveError] = useState<string | null>(null)
   const deviceMenuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (currentTrack) setLastTrack(currentTrack)
+  }, [currentTrack])
+
+  useEffect(() => {
+    if (album) setLastAlbum(album)
+  }, [album])
 
   useEffect(() => {
     if (playerTintSource !== 'artwork' || !artworkPath) {
@@ -235,7 +247,7 @@ export function PlayerBottomBar({ closing = false, onExpand, onShowPanel, onOpen
       <div className="player-bottom-bar">
         <div className="pb-now">
           <button type="button" className="pb-art" onClick={onExpand} title="Expand player">
-            <Artwork album={album} radius={7} objectFit="cover" />
+            <Artwork album={displayAlbum} radius={7} objectFit="cover" />
           </button>
           <div className="pb-meta">
             {canOpenAlbum ? (
@@ -347,7 +359,7 @@ export function PlayerBottomBar({ closing = false, onExpand, onShowPanel, onOpen
               aria-expanded={deviceMenuOpen}
               onClick={onOutputButtonClick}
             >
-              <Icon name="airplay" size={14} />
+              <Icon name="speaker" size={14} />
             </button>
             {deviceMenuOpen && (
               <div className={`output-device-menu upward ${exclusiveBusy ? 'transitioning' : ''}`} role="menu">
