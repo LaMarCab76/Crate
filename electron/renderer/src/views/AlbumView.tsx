@@ -4,7 +4,7 @@ import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
 import { useAlbumActions } from '@renderer/components/MediaActions'
 import { TrackTable } from '@renderer/components/TrackTable'
-import { fmtTime } from '@renderer/utils/format'
+import { fmtFileSize, fmtTime } from '@renderer/utils/format'
 import { refreshTrackMetadata, useAlbumByUiId } from '@renderer/stores/libraryStore'
 import { useQueueStore } from '@renderer/stores/queueStore'
 
@@ -18,7 +18,7 @@ export function AlbumView({ album }: Props) {
   const fresh = useAlbumByUiId(album?.id)
   const a = fresh ?? album
   const playNow = useQueueStore(s => s.playNow)
-  const refreshedAlbumId = useRef<string | null>(null)
+  const refreshedAlbumIds = useRef(new Set<string>())
   const albumActions = useAlbumActions()
 
   const handlePlayAlbum = async () => {
@@ -39,18 +39,27 @@ export function AlbumView({ album }: Props) {
   const isUnresolvedAlbum = a?.id.startsWith('a-unresolved-') ?? false
 
   useEffect(() => {
-    if (!a || !isUnresolvedAlbum) return
-    if (refreshedAlbumId.current === a.id) return
+    if (!a) return
+    if (refreshedAlbumIds.current.has(a.id)) return
 
-    refreshedAlbumId.current = a.id
+    const ids = a.tracks
+      .filter(track =>
+        track.dbId != null &&
+        (isUnresolvedAlbum || track.fileSize == null),
+      )
+      .map(track => track.dbId!)
+
+    if (ids.length === 0) return
+
+    refreshedAlbumIds.current.add(a.id)
     void (async () => {
-      const ids = a.tracks.map(track => track.dbId).filter((id): id is number => id != null)
       await Promise.all(ids.map(refreshTrackMetadata))
     })()
   }, [isUnresolvedAlbum, a?.id, a?.tracks.length])
 
   if (!a) return null
   const totalDur = a.tracks.reduce((s, t) => s + t.d, 0)
+  const totalSize = a.tracks.reduce((s, t) => s + (t.fileSize ?? 0), 0)
   return (
     <>
       <div className="album-hero" onContextMenu={e => albumActions.openAlbumMenu(e, a)}>
@@ -59,7 +68,7 @@ export function AlbumView({ album }: Props) {
           <div className="kicker">{a.genre}</div>
           <h1>{a.title}</h1>
           <div className="credits">
-            <a>{a.artist}</a> · {a.year} · {a.tracks.length} tracks · {fmtTime(totalDur)}
+            <a>{a.artist}</a> · {a.year} · {a.tracks.length} tracks · {fmtTime(totalDur)} · {fmtFileSize(totalSize)}
           </div>
           {isUnresolvedAlbum && (
             <div className="meta-note">
@@ -93,7 +102,9 @@ export function AlbumView({ album }: Props) {
         showAlbum={false}
         showPlays={false}
         showPath={isUnresolvedAlbum}
+        showSize
         showTrackNo
+        compact
       />
       {albumActions.elements}
     </>

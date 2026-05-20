@@ -401,7 +401,13 @@ export class AudioEngine {
     this.currentPath = path
     this.streamInfo = this.computeStreamInfo(handle)
     const bass = loadBass()
+    // Set volume before starting playback so the swap doesn't blip to full
+    // volume for a frame. Start playback BEFORE setStatus/startProgressTimer:
+    // syncFftTimer() queries BASS for the live channel state, so the channel
+    // must already be playing or it would stop the FFT timer (visualizer
+    // freezes after a gapless swap).
     bass.ChannelSetAttribute(handle, BASS_ATTRIB_VOL, this.volume)
+    bass.ChannelPlay(handle, 0)
     this.setStatus('playing')
     this.startProgressTimer()
   }

@@ -133,6 +133,8 @@ export function dbToUiTrack(t: DbTrack): Track {
     dateModified: t.date_modified,
     loved: t.is_favorite === 1,
     fileSize: t.file_size,
+    bpm: t.bpm,
+    musicalKey: t.musical_key,
     codec: t.codec,
     bitrate: t.bitrate,
     sampleRate: t.sample_rate,

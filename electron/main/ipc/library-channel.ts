@@ -109,6 +109,8 @@ async function refreshTrackMetadataInDb(repos: Repos, trackId: number): Promise<
     channels: md.channels,
     bitDepth: md.bitDepth,
     fileSize: md.fileSize,
+    bpm: md.bpm,
+    musicalKey: md.musicalKey,
     dateModified: md.dateModified,
     artworkPath: md.artwork?.filename ?? track.artwork_path,
     filename: basename(track.path),

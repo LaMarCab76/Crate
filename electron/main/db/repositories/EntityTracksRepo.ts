@@ -6,7 +6,7 @@ const ALL_COLUMNS = `
   file_size, date_modified, album_artist, composer, genre, year,
   is_favorite, play_count, last_played_date, rating,
   track_number, total_tracks, disc_number, total_discs,
-  compilation, release_date, original_release_date, bpm, media_type,
+  compilation, release_date, original_release_date, bpm, musical_key, media_type,
   sort_title, sort_artist, sort_album, sort_album_artist,
   bitrate, sample_rate, channels, codec, bit_depth,
   artwork_data, artwork_path, date_added, is_duplicate, primary_track_id, duplicate_group_id,

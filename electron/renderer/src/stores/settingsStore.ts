@@ -41,7 +41,7 @@ const TWEAK_DEFAULTS: Tweak = {
   artistsTopN: 20,
   libraryBackup: true,
   exclusiveMode: false,
-  playerTintSource: 'default',
+  playerTintSource: 'artwork',
   playerTintColor: '#0a84ff',
   showPlayerVisualizer: true,
 }

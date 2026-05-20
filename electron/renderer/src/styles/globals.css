@@ -246,6 +246,12 @@ html, body {
   border-radius: 3px;
   background: linear-gradient(135deg, #6b6b6b, #3a3a3a);
 }
+.sb-artist-art {
+  width: 18px; height: 18px; flex-shrink: 0;
+  border-radius: 3px;
+  overflow: hidden;
+  box-shadow: 0 0 0 0.5px rgba(255,255,255,0.12), 0 1px 3px rgba(0,0,0,0.22);
+}
 
 /* Toolbar */
 .toolbar {
@@ -1125,6 +1131,7 @@ html, body {
 .tbl thead th.dur { width: 64px; text-align: right; }
 .tbl thead th.plays { width: 60px; text-align: right; }
 .tbl thead th.fmt { width: 180px; }
+.tbl thead th.size { width: 72px; text-align: right; }
 .tbl thead th.path { max-width: 380px; width: 40%; }
 .tbl thead th.actions { width: 44px; text-align: right; }
 
@@ -1150,6 +1157,11 @@ html, body {
   height: var(--row-h);
   vertical-align: middle;
 }
+/* Compact rows for art-less track listings (album / artist views) so they stay
+   tight instead of reading like the full-height library/playlist rows. Fixed
+   height independent of the global density setting. */
+.tbl.compact tbody tr,
+.tbl.compact tbody td { height: 40px; }
 .tbl td.num {
   width: 32px; text-align: right; padding-right: 12px;
   position: relative;
@@ -1219,6 +1231,14 @@ html, body {
 }
 .tbl td.dur { font-variant-numeric: tabular-nums; color: var(--text-secondary); text-align: right; font-size: 11.5px; }
 .tbl td.plays { font-variant-numeric: tabular-nums; color: var(--text-tertiary); text-align: right; font-size: 11.5px; }
+.tbl td.size {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+  text-align: right;
+  white-space: nowrap;
+  font-size: 10.5px;
+}
 .tbl td.fmt {
   font-family: var(--font-mono);
   font-size: 10.5px;
@@ -1645,9 +1665,23 @@ button:disabled { cursor: not-allowed; }
 }
 .artist-hero .meta { position: relative; z-index: 1; }
 .artist-hero .kicker { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.85; }
-.artist-hero h1 {
+.artist-title-row {
+  display: flex; align-items: center; gap: 12px;
+  min-width: 0;
+}
+.artist-title-row h1 {
   font-size: 56px; font-weight: 800; letter-spacing: -0.025em;
   margin: 6px 0 4px;
+  line-height: 1.05;
+}
+.artist-fav-btn {
+  width: 30px; height: 30px;
+  flex: 0 0 auto;
+  color: rgba(255,255,255,0.78);
+}
+.artist-fav-btn:hover {
+  color: #fff;
+  background: rgba(255,255,255,0.14);
 }
 .artist-hero .stat { font-size: 13px; opacity: 0.85; }
 
@@ -1657,13 +1691,62 @@ button:disabled { cursor: not-allowed; }
 
 /* Artist page — per-album block */
 .artist-album {
-  padding: 18px var(--artist-inline) 10px;
-  border-bottom: 0.5px solid var(--divider);
+  --artist-album-pad-top: 18px;
+  --artist-album-tint: var(--accent);
+  padding: var(--artist-album-pad-top) var(--artist-inline) 10px;
+  border-bottom: 0.5px solid color-mix(in oklab, var(--artist-album-tint) 22%, var(--divider));
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--artist-album-tint) 18%, transparent),
+      color-mix(in oklab, var(--artist-album-tint) 10%, transparent)
+    ),
+    var(--bg-content);
 }
 .artist-album:last-child { border-bottom: none; }
+.artist-album > .tbl {
+  width: calc(100% + var(--artist-inline) + var(--artist-inline));
+  margin-left: calc(0px - var(--artist-inline));
+  margin-right: calc(0px - var(--artist-inline));
+}
+.artist-album > .tbl thead th {
+  background:
+    linear-gradient(
+      color-mix(in oklab, var(--artist-album-tint) 28%, transparent),
+      color-mix(in oklab, var(--artist-album-tint) 28%, transparent)
+    ),
+    color-mix(in oklab, var(--bg-content), black 12%);
+  border-bottom-color: color-mix(in oklab, var(--artist-album-tint) 22%, var(--divider));
+}
+.artist-album > .tbl tbody tr {
+  background:
+    linear-gradient(
+      color-mix(in oklab, var(--artist-album-tint) 8%, transparent),
+      color-mix(in oklab, var(--artist-album-tint) 8%, transparent)
+    ),
+    var(--bg-content);
+}
+.artist-album > .tbl tbody tr:hover {
+  background:
+    linear-gradient(
+      color-mix(in oklab, var(--artist-album-tint) 18%, transparent),
+      color-mix(in oklab, var(--artist-album-tint) 18%, transparent)
+    ),
+    var(--bg-hover);
+}
+.artist-album > .tbl tbody td {
+  border-bottom-color: color-mix(in oklab, var(--artist-album-tint) 12%, var(--border-subtle));
+}
 .aa-head {
   display: flex; align-items: flex-end; gap: 18px;
-  padding-bottom: 14px;
+  margin: calc(0px - var(--artist-album-pad-top)) calc(0px - var(--artist-inline)) 0;
+  padding: var(--artist-album-pad-top) var(--artist-inline) 14px;
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in oklab, var(--artist-album-tint) 24%, transparent),
+      color-mix(in oklab, var(--artist-album-tint) 10%, transparent)
+    );
 }
 .aa-art {
   width: 130px; height: 130px; flex-shrink: 0;
@@ -1675,7 +1758,7 @@ button:disabled { cursor: not-allowed; }
 .aa-kicker {
   font-size: 10.5px; font-weight: 600;
   letter-spacing: 0.06em; text-transform: uppercase;
-  color: var(--text-tertiary);
+  color: color-mix(in oklab, var(--artist-album-tint) 68%, var(--text-tertiary));
 }
 .aa-title {
   font-size: 24px; font-weight: 700;
@@ -1689,12 +1772,12 @@ button:disabled { cursor: not-allowed; }
 
 .editorial .artist-page { --artist-inline: 42px; }
 .editorial .artist-grid { padding: 18px var(--artist-inline) 38px; }
-.editorial .artist-album { padding: 28px var(--artist-inline) 12px; }
+.editorial .artist-album { --artist-album-pad-top: 28px; padding-bottom: 12px; }
 .editorial .aa-art { width: 170px; height: 170px; }
 .editorial .aa-title { font-size: 32px; }
 .dense .artist-page { --artist-inline: 18px; }
 .dense .artist-grid { padding: 10px var(--artist-inline) 22px; }
-.dense .artist-album { padding: 10px var(--artist-inline) 6px; }
+.dense .artist-album { --artist-album-pad-top: 10px; padding-bottom: 6px; }
 .dense .aa-art { width: 80px; height: 80px; }
 .dense .aa-title { font-size: 16px; }
 .dense .aa-head { padding-bottom: 8px; }
@@ -1779,8 +1862,17 @@ button:disabled { cursor: not-allowed; }
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 24px;
 }
+/* The art grows to fill the space left by the title/controls. container-type
+   lets the inner square take the largest size that fits both axes (cqmin), so
+   it stretches until it hits the width or the height limit — whichever first. */
+.np-full-art-box {
+  flex: 1 1 auto; min-height: 0; width: 100%;
+  container-type: size;
+  display: flex; align-items: center; justify-content: center;
+}
 .np-full-art {
-  width: min(380px, 90%); aspect-ratio: 1;
+  width: min(100cqw, 100cqh);
+  height: min(100cqw, 100cqh);
   border-radius: 10px;
   overflow: hidden;
   box-shadow: 0 24px 60px rgba(0,0,0,0.5);
@@ -1794,6 +1886,59 @@ button:disabled { cursor: not-allowed; }
 
 .np-full-right { display: flex; flex-direction: column; min-height: 0; }
 .np-full-tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+
+/* Fullscreen volume — reuses the .pp-volume slider styling, just constrained
+   and centered under the transport controls. */
+.np-volume-wrap {
+  width: 100%; max-width: 320px;
+  margin: 2px auto 0;
+}
+.np-volume-wrap .pp-volume .ic { display: inline-flex; }
+
+/* "Up next" toast — slides up from the bottom of the fullscreen view during the
+   final seconds of a track to preview what plays next. */
+.np-up-next-toast {
+  position: absolute;
+  left: 50%; bottom: 24px;
+  transform: translate(-50%, calc(100% + 48px));
+  display: flex; align-items: center; gap: 12px;
+  max-width: 78%;
+  padding: 9px 18px 9px 9px;
+  background: color-mix(in oklab, var(--bg-elev), var(--np-tint) 16%);
+  border: 0.5px solid var(--divider);
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 60;
+  transition:
+    transform 440ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 320ms ease;
+}
+.np-up-next-toast.show {
+  transform: translate(-50%, 0);
+  opacity: 1;
+}
+.np-up-next-toast .art {
+  width: 46px; height: 46px;
+  border-radius: 6px; overflow: hidden; flex-shrink: 0;
+}
+.np-up-next-toast .info { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.np-up-next-toast .label {
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--text-tertiary);
+}
+.np-up-next-toast .t {
+  font-size: 13px; font-weight: 600; color: var(--text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.np-up-next-toast .a {
+  font-size: 11.5px; color: var(--text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+@media (prefers-reduced-motion: reduce) {
+  .np-up-next-toast { transition: opacity 320ms ease; transform: translate(-50%, 0); }
+}
 
 /* Visualizer */
 .viz {
@@ -1818,184 +1963,115 @@ button:disabled { cursor: not-allowed; }
   50% { transform: scaleY(1); }
 }
 
-/* Unified EQ + spectrum visualizer used in the fullscreen player.
-   Live FFT bars in the back, EQ band sliders on top. */
-.eq-viz {
-  flex: 1; min-height: 220px;
+/* Pure FFT spectrum visualizer (SpectrumVisualizer). Two flavours:
+   - .mini : fixed columns + spaced frequency labels (sidebar player)
+   - .full : width-driven dynamic column count (fullscreen player)
+   The EQ is no longer drawn here — it lives only in Settings. */
+.spectrum-viz {
+  display: flex; flex-direction: column;
   background: var(--bg-panel);
   border-radius: 12px;
-  display: flex; flex-direction: column;
   overflow: hidden;
 }
-.eq-viz-head {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 14px;
-  border-bottom: 0.5px solid var(--border-subtle, rgba(255,255,255,0.06));
-  flex-shrink: 0;
+.spectrum-viz.full {
+  flex: 1; min-height: 0;
 }
-.eq-viz-head .switch-label {
-  font-size: 11.5px; color: var(--text-secondary); user-select: none;
-}
-.eq-viz-body {
-  position: relative; flex: 1;
-  /* Tight horizontal padding so the bar columns + dB scale use as much of
-     the panel width as possible. Vertical padding keeps comfortable
-     breathing room above the bars and below the labels. */
-  padding: 14px 8px 8px;
-  min-height: 0;
+.spectrum-body {
+  position: relative; flex: 1; min-height: 0;
   display: flex; flex-direction: column;
 }
-.eq-viz .eq-bands {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-  display: flex; align-items: stretch; gap: 3px;
-}
-
-/* Vertical dB legend pinned to the left of the band columns. Mirrors the
-   .eq-band flex layout (track area + hz placeholder + optional gain
-   placeholder) so the topmost and bottommost ticks land flush with the
-   first/last segment of each band. */
-.eq-viz .eq-db-scale {
-  flex: 0 0 auto;
-  display: flex; flex-direction: column; align-items: stretch; gap: 4px;
-  margin-right: 4px;
-}
-.eq-viz .eq-db-scale .eq-db-track {
+.spectrum-viz.mini .spectrum-body { padding: 12px 10px 7px; min-height: 160px; }
+.spectrum-viz.full .spectrum-body { padding: 26px 26px 18px; }
+/* Plot = dB scale (full only) + the bar columns. The 8px gap and 30px dB width
+   are mirrored by .spectrum-freq-row's padding so the freq axis lines up under
+   the bars. */
+.spectrum-plot {
   flex: 1; min-height: 0;
+  display: flex; gap: 8px;
+}
+.spectrum-db {
+  flex: 0 0 auto; width: 30px;
   display: flex; flex-direction: column; justify-content: space-between;
   font-family: var(--font-mono);
-  font-size: 8px;
-  line-height: 1;
+  font-size: 9px; line-height: 1;
   color: var(--text-tertiary);
   text-align: right;
-  padding: 1px 2px;
+  padding: 1px 2px 0 0;
 }
-.eq-viz .eq-db-scale .eq-db-spacer {
-  /* Same height as .hz/.gain labels so the dB track top/bottom align with
-     the band tracks above the per-band labels. */
-  font-size: 8.5px;
-  line-height: 1;
-  visibility: hidden;
+.spectrum-bands {
+  flex: 1; min-height: 0;
+  display: flex; align-items: stretch;
 }
-.eq-viz .eq-band {
+/* Log frequency axis under the bars (full only). Labels are absolutely placed
+   at their log-x position, which aligns with the matching column center. */
+.spectrum-freq-row {
+  flex: 0 0 auto;
+  height: 12px; margin-top: 8px;
+  padding-left: 38px; /* .spectrum-db width (30) + .spectrum-plot gap (8) */
+}
+.spectrum-freq { position: relative; height: 100%; }
+.spectrum-freq > span {
+  position: absolute; top: 0;
+  transform: translateX(-50%);
+  font-family: var(--font-mono);
+  font-size: 9px; line-height: 1;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+/* Wider gaps in fullscreen so the columns spread out and use the space. */
+.spectrum-viz.mini .spectrum-bands { gap: 3px; }
+.spectrum-viz.full .spectrum-bands { gap: 7px; }
+.spectrum-band {
   flex: 1; min-width: 0;
-  display: flex; flex-direction: column; align-items: stretch; gap: 4px;
-  height: auto;
-  cursor: ns-resize;
-  user-select: none;
-  touch-action: none;
-  outline: none;
+  display: flex; flex-direction: column; align-items: stretch; gap: 5px;
 }
-.eq-viz .eq-band[aria-disabled="true"] {
-  cursor: not-allowed;
-}
-.eq-viz .eq-band:focus-visible {
-  outline: 1px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 4px;
-}
-.eq-viz .eq-band-track {
-  flex: 1; position: relative;
-  width: 100%;
+.spectrum-band-track {
+  flex: 1; position: relative; width: 100%;
   background: rgba(255, 255, 255, 0.04);
   border-radius: 4px;
   overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: flex; flex-direction: column; gap: 2px;
   padding: 2px;
-  /* Recessed-panel feel for vintage gear: subtle inner border + top-edge
-     shadow. Reads well over both light and dark themes. */
+  /* Recessed-panel feel: subtle inner border + top-edge shadow. */
   box-shadow:
     inset 0 0 0 1px rgba(0, 0, 0, 0.25),
     inset 0 1px 3px rgba(0, 0, 0, 0.4);
 }
-.eq-viz .eq-band-track::before {
-  content: '';
-  position: absolute;
-  left: 0; right: 0;
-  top: 50%;
-  height: 1px;
-  background: rgba(255, 255, 255, 0.06);
-  pointer-events: none;
-}
-/* Discrete LED-style segments. Each segment is a row in the band track flex
-   column; its lit/unlit state is driven by --lit (on the parent track) and
-   --idx (on this element). Background uses the same gain-norm tint as the
-   old continuous fill, so EQ boosts/cuts still color the bars. */
-.eq-viz .eq-band-segment {
+/* Discrete LED-style segments. Lit state is driven by --lit (on the parent
+   track) and --idx (on the segment). */
+.spectrum-segment {
   flex: 1;
   min-height: 0;
   border-radius: 1.5px;
-  background: color-mix(in oklab,
-    var(--text-tertiary),
-    var(--accent) calc(max(var(--gain-norm, 0), 0) * 100%)
-  );
-  /* clamp(0, lit - idx, 1):
-       - lit ≥ idx + 1  → 1 (fully on)
-       - lit ≤ idx      → 0 (off, fades to 0.08 dim glow below)
-       - in between     → fractional, only on the topmost lit segment */
-  opacity: calc(0.08 + 0.92 * clamp(0, calc(var(--lit, 0) - var(--idx, 0)), 1));
-  /* Negative gains dim the whole column without fighting the on/off opacity. */
-  filter: brightness(calc(1 - max(var(--gain-norm, 0) * -0.4, 0)));
+  background: color-mix(in oklab, var(--text-tertiary), var(--accent) 28%);
+  /* clamp(0, lit - idx, 1): topmost lit segment is fractional; the rest snap
+     on/off. Off segments keep a faint glow so idle columns read as present. */
+  opacity: calc(0.07 + 0.93 * clamp(0, calc(var(--lit, 0) - var(--idx, 0)), 1));
   transition: opacity 60ms linear;
   will-change: opacity;
   pointer-events: none;
 }
-
-/* Thin cap line at the top of each bar — reuses --lit so no extra JS
-   property is needed. 12 = SEGMENT_COUNT. lit=0 → top:100% (clipped by
-   overflow:hidden, invisible at idle); lit=12 → top:0 (full bar). */
-.eq-viz .eq-band-track::after {
-  content: '';
-  position: absolute;
-  left: 2px; right: 2px;
-  height: 2px;
-  border-radius: 1px;
-  background: color-mix(in oklab,
-    var(--text-primary),
-    var(--accent) calc(max(var(--gain-norm, 0), 0) * 60%)
-  );
-  top: calc((1 - var(--lit, 0) / 12) * 100%);
-  opacity: 0.9;
+/* Separate clip / peak LED that sits ABOVE the column (a sibling of the bar
+   track, so the .spectrum-band gap keeps it visually detached from the top
+   segment). Faint at rest; lights bright across the final segment, when --lit
+   (inherited from .spectrum-band) approaches --seg. */
+.spectrum-clip {
+  flex: 0 0 auto;
+  height: 4px;
+  border-radius: 1.5px;
+  background: #ff453a;
+  opacity: calc(0.08 + 0.92 * clamp(0, calc(var(--lit, 0) - (var(--seg, 12) - 1)), 1));
   pointer-events: none;
-  z-index: 1;
 }
-
-.eq-viz .eq-band-thumb {
-  position: absolute;
-  left: 0; right: 0;
-  height: 2px;
-  top: calc(50% - var(--gain-norm, 0) * 50% - 1px);
-  background: var(--text-primary);
-  opacity: 0.7;
-  pointer-events: none;
-  /* Sits above segments + peak so the gain indicator stays readable. */
-  z-index: 2;
-  transition: top 80ms ease-out, background-color 120ms ease, height 120ms ease, opacity 120ms ease;
-}
-.eq-viz .eq-band.dragging .eq-band-thumb {
-  background: var(--accent);
-  opacity: 1;
-  height: 3px;
-  box-shadow: 0 0 8px rgba(255, 255, 255, 0.25);
-}
-.eq-viz .eq-band .hz {
+.spectrum-viz.full .spectrum-clip { height: 6px; }
+.spectrum-hz {
   font-family: var(--font-mono);
-  font-size: 8.5px;
+  font-size: 9px;
   color: var(--text-tertiary);
   text-align: center;
   line-height: 1;
+  height: 9px;
   white-space: nowrap;
-}
-.eq-viz .eq-band .gain {
-  font-family: var(--font-mono);
-  font-size: 8.5px;
-  color: var(--text-tertiary);
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-  line-height: 1;
 }
 /* Compact codec strip — used in the tracks table format column to mirror
    the fullscreen player's codec readout in a single line. */
@@ -2292,4 +2368,3 @@ button:disabled { cursor: not-allowed; }
   color: var(--text-secondary);
   letter-spacing: 0.04em;
 }
-

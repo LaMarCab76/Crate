@@ -6,7 +6,7 @@ const ALL_COLUMNS = `
   file_size, date_modified, album_artist, composer, genre, year,
   is_favorite, play_count, last_played_date, rating,
   track_number, total_tracks, disc_number, total_discs,
-  compilation, release_date, original_release_date, bpm, media_type,
+  compilation, release_date, original_release_date, bpm, musical_key, media_type,
   sort_title, sort_artist, sort_album, sort_album_artist,
   bitrate, sample_rate, channels, codec, bit_depth,
   artwork_data, artwork_path, date_added, is_duplicate, primary_track_id, duplicate_group_id,
@@ -79,6 +79,8 @@ export class TrackRepo {
         channels = @channels,
         bit_depth = @bitDepth,
         file_size = @fileSize,
+        bpm = @bpm,
+        musical_key = @musicalKey,
         date_modified = @dateModified,
         artwork_path = @artworkPath,
         filename = @filename,
@@ -94,7 +96,7 @@ export class TrackRepo {
         file_size, date_modified, album_artist, composer, genre, year,
         is_favorite, play_count, last_played_date, rating,
         track_number, total_tracks, disc_number, total_discs,
-        compilation, release_date, original_release_date, bpm, media_type,
+        compilation, release_date, original_release_date, bpm, musical_key, media_type,
         sort_title, sort_artist, sort_album, sort_album_artist,
         bitrate, sample_rate, channels, codec, bit_depth,
         artwork_data, artwork_path, date_added, is_duplicate, primary_track_id, duplicate_group_id,
@@ -104,7 +106,7 @@ export class TrackRepo {
         @file_size, @date_modified, @album_artist, @composer, @genre, @year,
         @is_favorite, @play_count, @last_played_date, @rating,
         @track_number, @total_tracks, @disc_number, @total_discs,
-        @compilation, @release_date, @original_release_date, @bpm, @media_type,
+        @compilation, @release_date, @original_release_date, @bpm, @musical_key, @media_type,
         @sort_title, @sort_artist, @sort_album, @sort_album_artist,
         @bitrate, @sample_rate, @channels, @codec, @bit_depth,
         @artwork_data, @artwork_path, @date_added, @is_duplicate, @primary_track_id, @duplicate_group_id,
@@ -167,6 +169,8 @@ export class TrackRepo {
     channels: number | null
     bitDepth: number | null
     fileSize: number | null
+    bpm: number | null
+    musicalKey: string | null
     dateModified: string | null
     artworkPath: string | null
     filename: string
@@ -196,6 +200,8 @@ export class TrackRepo {
       channels: args.channels,
       bitDepth: args.bitDepth,
       fileSize: args.fileSize,
+      bpm: args.bpm,
+      musicalKey: args.musicalKey,
       dateModified: args.dateModified,
       artworkPath: args.artworkPath,
       filename: args.filename,

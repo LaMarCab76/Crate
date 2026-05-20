@@ -23,6 +23,8 @@ export interface TrackMetadata {
   bitDepth: number | null
   channels: number | null
   fileSize: number | null
+  bpm: number | null
+  musicalKey: string | null
   dateModified: string | null
   artwork: ArtworkSaveResult | null
   replayGainTrack: number | null
@@ -52,6 +54,11 @@ function parseGainDb(s: string | undefined | null): number | null {
   return m ? parseFloat(m[1]) : null
 }
 
+function parseBpm(v: unknown): number | null {
+  const bpm = typeof v === 'number' ? v : Number.parseFloat(String(v ?? ''))
+  return Number.isFinite(bpm) && bpm > 0 ? Math.round(bpm) : null
+}
+
 export async function readTrackMetadata(filePath: string): Promise<TrackMetadata> {
   const stats = statSync(filePath)
   const filename = basename(filePath)
@@ -77,6 +84,7 @@ export async function readTrackMetadata(filePath: string): Promise<TrackMetadata
   const totalTracks = common.track?.of ?? null
   const discNumber = common.disk?.no ?? null
   const totalDiscs = common.disk?.of ?? null
+  const musicalKey = asString(common.key).trim() || null
 
   let artwork: ArtworkSaveResult | null = null
   const pictures = common.picture
@@ -109,6 +117,8 @@ export async function readTrackMetadata(filePath: string): Promise<TrackMetadata
     bitDepth: format.bitsPerSample ?? null,
     channels: format.numberOfChannels ?? null,
     fileSize: stats.size,
+    bpm: parseBpm(common.bpm),
+    musicalKey,
     dateModified: stats.mtime.toISOString(),
     artwork,
     replayGainTrack: parseGainDb(common.replaygain_track_gain?.dB?.toString()),

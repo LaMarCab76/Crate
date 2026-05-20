@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react'
 import type { Artist, Playlist } from '@shared/types/library'
+import { Artwork } from './Artwork'
 import { Icon, type IconName } from './Icon'
 import type { View } from '@renderer/App'
 import { useFavoriteArtists, usePlaylists, useTrackCount } from '@renderer/stores/libraryStore'
@@ -130,7 +131,13 @@ export function Sidebar({
               role="button"
               tabIndex={0}
             >
-              <div className="swatch" style={{ background: `linear-gradient(135deg, ${ar.palette[1]}, ${ar.palette[0]})` }} />
+              {ar.artworkPath ? (
+                <div className="sb-artist-art">
+                  <Artwork album={ar} radius={3} />
+                </div>
+              ) : (
+                <div className="sb-artist-art swatch" style={{ background: `linear-gradient(135deg, ${ar.palette[1]}, ${ar.palette[0]})` }} />
+              )}
               <span>{ar.name}</span>
             </div>
           ))

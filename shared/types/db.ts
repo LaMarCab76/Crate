@@ -92,6 +92,7 @@ export interface DbTrack {
   release_date: string | null
   original_release_date: string | null
   bpm: number | null
+  musical_key: string | null
   media_type: string | null
   sort_title: string | null
   sort_artist: string | null

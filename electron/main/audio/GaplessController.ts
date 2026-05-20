@@ -105,9 +105,9 @@ export class GaplessController {
 
     const old = this.engine.releaseCurrent()
     if (old.handle !== 0) this.engine.freeStream(old.handle)
+    // adoptStream() starts playback itself (so the FFT timer re-syncs against a
+    // live channel), so we don't call ChannelPlay here.
     this.engine.adoptStream(preloaded.handle, preloaded.path)
-    const bass = loadBass()
-    bass.ChannelPlay(preloaded.handle, 0)
     broadcast('audio:gapless-fired', { path: preloaded.path })
     return true
   }

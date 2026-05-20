@@ -3,7 +3,7 @@ import { Artwork } from './Artwork'
 import { CodecStrip } from './CodecStrip'
 import { Icon } from './Icon'
 import { EQBars } from './EQBars'
-import { EqVisualizerPanel } from './EqVisualizerPanel'
+import { SpectrumVisualizer } from './SpectrumVisualizer'
 import { fmtTime } from '@renderer/utils/format'
 import {
   toggleTrackFavorite,
@@ -419,7 +419,7 @@ export function PlayerPane({ expanded, isOpen, onExpand, onCollapse, onOpenAlbum
                   <span>Visualizer</span>
                   <Icon name={showVisualizer ? 'chevD' : 'chevR'} size={12} />
                 </button>
-                {showVisualizer && <EqVisualizerPanel track={track} interactive={false} />}
+                {showVisualizer && <SpectrumVisualizer mode="mini" />}
               </div>
               <div className={`pp-player-upnext${showUpNext ? '' : ' collapsed'}`}>
                 <button

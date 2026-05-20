@@ -34,6 +34,8 @@ export interface Track {
   dateModified?: string | null
   loved: boolean
   fileSize?: number | null
+  bpm?: number | null
+  musicalKey?: string | null
   codec?: string | null
   bitrate?: number | null
   sampleRate?: number | null

@@ -3,7 +3,7 @@ import { Artwork } from './Artwork'
 import { CodecStrip } from './CodecStrip'
 import { Icon } from './Icon'
 import { EQBars } from './EQBars'
-import { fmtTime } from '@renderer/utils/format'
+import { fmtFileSize, fmtTime } from '@renderer/utils/format'
 import { useAlbums } from '@renderer/stores/libraryStore'
 import { toggleTrackFavorite } from '@renderer/stores/libraryStore'
 import { useQueueStore } from '@renderer/stores/queueStore'
@@ -15,9 +15,13 @@ interface TrackTableProps {
   showArt?: boolean
   showAlbum?: boolean
   showFmt?: boolean
+  showSize?: boolean
   showPlays?: boolean
   showPath?: boolean
   showTrackNo?: boolean
+  // Tighter, fixed row height — used by art-less listings (album/artist tracks)
+  // so they don't read like the full-height library/playlist rows.
+  compact?: boolean
   onRefreshMetadata?: (track: Track) => void
 }
 
@@ -26,9 +30,11 @@ export function TrackTable({
   showArt = false,
   showAlbum = true,
   showFmt = true,
+  showSize = false,
   showPlays = true,
   showPath = false,
   showTrackNo = false,
+  compact = false,
   onRefreshMetadata,
 }: TrackTableProps) {
   const albums = useAlbums()
@@ -40,7 +46,7 @@ export function TrackTable({
 
   return (
     <>
-      <table className="tbl">
+      <table className={`tbl${compact ? ' compact' : ''}`}>
         <thead>
           <tr>
             <th className="num">{showTrackNo ? '#' : null}</th>
@@ -50,6 +56,7 @@ export function TrackTable({
             {showPath && <th className="path">Ruta</th>}
             {showPlays && <th className="plays">Plays</th>}
             {showFmt && <th className="fmt">Format</th>}
+            {showSize && <th className="size">Size</th>}
             <th className="dur">Time</th>
             {showRefreshAction && <th className="actions" />}
           </tr>
@@ -101,6 +108,7 @@ export function TrackTable({
                 {showPath && <td className="path" title={t.path}>{pathValue}</td>}
                 {showPlays && <td className="plays">{t.plays}</td>}
                 {showFmt && <td className="fmt"><CodecStrip track={t} compact /></td>}
+                {showSize && <td className="size">{fmtFileSize(t.fileSize)}</td>}
                 <td className="dur">{fmtTime(t.d)}</td>
                 {showRefreshAction && (
                   <td className="actions">

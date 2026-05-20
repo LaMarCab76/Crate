@@ -1,12 +1,12 @@
-import { type CSSProperties, useEffect, useState } from 'react'
+import { type CSSProperties, type MouseEvent, useEffect, useState } from 'react'
 import { Artwork } from './Artwork'
 import { CodecStrip } from './CodecStrip'
-import { EqVisualizerPanel } from './EqVisualizerPanel'
 import { Icon } from './Icon'
+import { SpectrumVisualizer } from './SpectrumVisualizer'
 import { fmtTime } from '@renderer/utils/format'
 import { useAlbumByUiId } from '@renderer/stores/libraryStore'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
-import { useQueueStore } from '@renderer/stores/queueStore'
+import { useQueueStore, useQueueUpNext } from '@renderer/stores/queueStore'
 import { useTweakStore } from '@renderer/stores/settingsStore'
 import { extractDominantColor } from '@renderer/utils/colorExtract'
 
@@ -14,15 +14,22 @@ interface NowPlayingFullProps {
   onCollapse: () => void
 }
 
+// Show the "up next" toast once the current track is this close to finishing.
+const NEXT_TOAST_SEC = 25
+
 export function NowPlayingFull({ onCollapse }: NowPlayingFullProps) {
   const track = usePlaybackStore(s => s.currentTrack)
   const status = usePlaybackStore(s => s.status)
   const positionSec = usePlaybackStore(s => s.positionSec)
   const durationSec = usePlaybackStore(s => s.durationSec)
+  const volume = usePlaybackStore(s => s.volume)
   const album = useAlbumByUiId(track?.albumId)
   const togglePlay = useQueueStore(s => s.togglePlay)
   const next = useQueueStore(s => s.next)
   const previous = useQueueStore(s => s.previous)
+  const setVolume = useQueueStore(s => s.setVolume)
+  const upNext = useQueueUpNext()[0]
+  const upNextAlbum = useAlbumByUiId(upNext?.albumId)
   const playerTintSource = useTweakStore(s => s.tweak.playerTintSource)
   const playerTintColor = useTweakStore(s => s.tweak.playerTintColor)
   const artworkPath = track?.artworkPath ?? album?.artworkPath ?? null
@@ -50,6 +57,23 @@ export function NowPlayingFull({ onCollapse }: NowPlayingFullProps) {
 
   const playing = status === 'playing'
   const progress = durationSec > 0 ? positionSec / durationSec : 0
+  const remainingSec = Math.max(0, durationSec - positionSec)
+  const showUpNext = playing && upNext != null && durationSec > 0 && remainingSec <= NEXT_TOAST_SEC
+
+  const onVolumeMouseDown = (e: MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const clamp = (clientX: number) =>
+      Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
+
+    void setVolume(clamp(e.clientX))
+    const onMove = (ev: globalThis.MouseEvent) => void setVolume(clamp(ev.clientX))
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
 
   return (
     <div className="np-full" style={{ '--np-tint': tint ?? 'transparent' } as CSSProperties}>
@@ -65,7 +89,9 @@ export function NowPlayingFull({ onCollapse }: NowPlayingFullProps) {
 
       <div className="np-full-body">
         <div className="np-full-left">
-          <div className="np-full-art"><Artwork album={album} radius={10} objectFit="contain" /></div>
+          <div className="np-full-art-box">
+            <div className="np-full-art"><Artwork album={album} radius={10} objectFit="contain" /></div>
+          </div>
           <div className="np-full-title">
             <h2>{track.t}</h2>
             <p>{track.artist} — {track.albumTitle}</p>
@@ -77,7 +103,7 @@ export function NowPlayingFull({ onCollapse }: NowPlayingFullProps) {
           <div className="np-progress" style={{ maxWidth: '90%' }}>
             <span className="time">{fmtTime(positionSec)}</span>
             <div className="np-bar-track"><div className="np-bar-fill" style={{ width: `${progress * 100}%` }} /></div>
-            <span className="time">-{fmtTime(Math.max(0, durationSec - positionSec))}</span>
+            <span className="time">-{fmtTime(remainingSec)}</span>
           </div>
 
           <div className="np-buttons">
@@ -89,6 +115,18 @@ export function NowPlayingFull({ onCollapse }: NowPlayingFullProps) {
             <button title="Next" onClick={() => { void next() }}><Icon name="next" size={22} /></button>
             <button className="sub active" title="Repeat"><Icon name="repeat" size={18} /></button>
           </div>
+
+          <div className="np-volume-wrap">
+            <div className="pp-volume">
+              <span className="ic"><Icon name={volume === 0 ? 'volumeM' : 'volume'} size={15} /></span>
+              <div className="slider-wrap" style={{ '--pct': `${volume * 100}%` } as CSSProperties}>
+                <div className="track" onMouseDown={onVolumeMouseDown} role="slider" tabIndex={0}>
+                  <div className="fill" style={{ width: `${volume * 100}%` }} />
+                </div>
+                <div className="dot" aria-hidden="true" />
+              </div>
+            </div>
+          </div>
         </div>
 
         <div className="np-full-right">
@@ -97,9 +135,20 @@ export function NowPlayingFull({ onCollapse }: NowPlayingFullProps) {
             <button className="btn ghost sm"><Icon name="tag" size={12} /> Metadata</button>
           </div>
 
-          <EqVisualizerPanel track={track} />
+          <SpectrumVisualizer mode="full" />
         </div>
       </div>
+
+      {upNext && (
+        <div className={`np-up-next-toast${showUpNext ? ' show' : ''}`} aria-hidden={!showUpNext}>
+          <div className="art"><Artwork album={upNextAlbum} radius={6} /></div>
+          <div className="info">
+            <div className="label">A continuación</div>
+            <div className="t">{upNext.t}</div>
+            <div className="a">{upNext.artist}</div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
