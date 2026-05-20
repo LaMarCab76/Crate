@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to publish
+        required: true
+        default: v0.1.0
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: macOS DMG
+    runs-on: macos-latest
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build macOS packages
+        run: npm run dist:mac
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: crate-${{ env.RELEASE_TAG }}-macos
+          path: |
+            release/*.dmg
+            release/*.dmg.blockmap
+            release/latest-mac.yml
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${RELEASE_TAG}"
+          notes_file="docs/releases/${tag}.md"
+          if [[ ! -f "${notes_file}" ]]; then
+            notes_file="docs/releases/${tag#v}.md"
+          fi
+          if [[ ! -f "${notes_file}" ]]; then
+            notes_file="$(mktemp)"
+            printf '# Crate %s\n\nRelease build.\n' "${tag}" > "${notes_file}"
+          fi
+
+          assets=(release/*.dmg release/*.dmg.blockmap release/latest-mac.yml)
+
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" "${assets[@]}" --clobber
+            gh release edit "${tag}" --title "Crate ${tag}" --notes-file "${notes_file}" --latest
+          else
+            gh release create "${tag}" "${assets[@]}" --title "Crate ${tag}" --notes-file "${notes_file}" --verify-tag --latest
+          fi
