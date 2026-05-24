@@ -3,8 +3,10 @@ import { getAudioEngine, type StreamInfo } from '../audio/AudioEngine'
 import { getEQManager } from '../audio/EQManager'
 import { GaplessController } from '../audio/GaplessController'
 import { getExclusiveModeManager } from '../audio/ExclusiveModeManager'
+import { getPlaybackAnalysisService } from '../audio/PlaybackAnalysisService'
 import { broadcast } from './events'
-import type { AudioOutputDevice, FftMode } from '@shared/types/ipc-contract'
+import { getRepos } from '../db/repositories'
+import type { AudioOutputDevice, FftMode, PlaybackCacheStats } from '@shared/types/ipc-contract'
 
 let gapless: GaplessController | null = null
 
@@ -45,9 +47,23 @@ function getSenderDisplayHz(sender: WebContents): number | undefined {
   return typeof frequency === 'number' && frequency > 0 ? frequency : undefined
 }
 
+function normalizeTrackId(trackId: unknown): number | null {
+  return Number.isInteger(trackId) && (trackId as number) > 0 ? trackId as number : null
+}
+
+function normalizeBuckets(buckets: unknown): number | undefined {
+  return Number.isInteger(buckets) && (buckets as number) > 0 ? buckets as number : undefined
+}
+
+function requirePath(value: unknown): string {
+  if (typeof value !== 'string' || value.trim().length === 0) throw new Error('Audio path is required')
+  return value
+}
+
 export function registerAudioChannel(): void {
   const engine = getAudioEngine()
   const eq = getEQManager()
+  const playbackAnalysis = getPlaybackAnalysisService()
   // Construct the exclusive-mode manager eagerly so it wires its
   // setOnDeviceChanged callback into the engine before any IPC arrives.
   // Otherwise the first device switch could fire before the manager exists,
@@ -55,6 +71,14 @@ export function registerAudioChannel(): void {
   getExclusiveModeManager()
 
   ipcMain.handle('audio:load', (_, payload: { path: string; trackId?: number | null }) => {
+    // Defense in depth: when a trackId is supplied, the path must match that track's
+    // DB record, so a compromised renderer can't point the engine at an arbitrary file.
+    if (payload?.trackId != null) {
+      const track = getRepos().tracks.getById(payload.trackId)
+      if (!track || track.path !== payload.path) {
+        throw new Error('audio:load: path does not match the track record')
+      }
+    }
     const info = engine.load(payload.path)
     eq.reapply(engine.getCurrentStream())
     broadcastEqState()
@@ -72,8 +96,60 @@ export function registerAudioChannel(): void {
   })
   ipcMain.handle('audio:setMeterEnabled', (_, payload: { enabled: boolean }) =>
     engine.setMeterEnabled(Boolean(payload?.enabled)))
-  ipcMain.handle('audio:getWaveform', (_, payload: { path: string; buckets?: number }) =>
-    engine.getWaveform(payload.path, payload.buckets))
+  const broadcastPlaybackCacheStats = (): PlaybackCacheStats => {
+    const stats = playbackAnalysis.stats()
+    broadcast('audio:playback-cache-changed', stats)
+    return stats
+  }
+
+  ipcMain.handle('audio:getWaveform', async (_, payload: { path: string; buckets?: number; trackId?: number | null }) => {
+    const result = await playbackAnalysis.ensure(
+      requirePath(payload?.path),
+      normalizeBuckets(payload?.buckets),
+      normalizeTrackId(payload?.trackId),
+    )
+    broadcastPlaybackCacheStats()
+    return result
+  })
+  ipcMain.handle('audio:getCachedAnalysis', (_, payload: { path: string; buckets?: number; trackId?: number | null }) =>
+    playbackAnalysis.getCached(
+      requirePath(payload?.path),
+      normalizeBuckets(payload?.buckets),
+      normalizeTrackId(payload?.trackId),
+    ))
+  ipcMain.handle('audio:ensurePlaybackAnalysis', async (_, payload: { path: string; buckets?: number; trackId?: number | null }) => {
+    const result = await playbackAnalysis.ensure(
+      requirePath(payload?.path),
+      normalizeBuckets(payload?.buckets),
+      normalizeTrackId(payload?.trackId),
+    )
+    broadcastPlaybackCacheStats()
+    return result
+  })
+  ipcMain.handle('audio:getCachedTableBars', (_, payload: { path: string; trackId?: number | null }) =>
+    playbackAnalysis.getCachedTableBars(
+      requirePath(payload?.path),
+      normalizeTrackId(payload?.trackId),
+    ))
+  ipcMain.handle('audio:ensureTableBars', async (_, payload: { path: string; trackId?: number | null }) => {
+    const result = await playbackAnalysis.ensureTableBars(
+      requirePath(payload?.path),
+      normalizeTrackId(payload?.trackId),
+    )
+    broadcastPlaybackCacheStats()
+    return result
+  })
+  ipcMain.handle('audio:playbackCache:stats', () => playbackAnalysis.stats())
+  ipcMain.handle('audio:playbackCache:setLimit', (_, payload: { maxBytes: number }) => {
+    const stats = playbackAnalysis.setMaxBytes(Number(payload?.maxBytes))
+    broadcast('audio:playback-cache-changed', stats)
+    return stats
+  })
+  ipcMain.handle('audio:playbackCache:clear', () => {
+    const stats = playbackAnalysis.clear()
+    broadcast('audio:playback-cache-changed', stats)
+    return stats
+  })
 
   ipcMain.handle('audio:preloadNext', (_, payload: { path: string }) => {
     getGapless().preloadNext(payload.path)

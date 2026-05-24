@@ -110,6 +110,7 @@ export function dbToUiTrack(t: DbTrack): Track {
   return {
     id: `t${t.id}`,
     dbId: t.id,
+    folderId: t.folder_id,
     path: t.path,
     filename: t.filename,
     t: t.title,

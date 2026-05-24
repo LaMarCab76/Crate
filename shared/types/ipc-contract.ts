@@ -2,6 +2,46 @@
 // electron/main/ipc/library-channel.ts and the bridge in electron/preload/index.ts.
 
 import type { DbAlbum, DbArtist, DbFolder, DbGenre, DbPlaylist, DbTrack } from './db'
+import type {
+  LyricsCandidate,
+  LyricsEmbedPreview,
+  LyricsEmbedResult,
+  LyricsSelectionProgress,
+  LyricsSelectionSummary,
+  LyricsSettingsState,
+  LyricsView,
+  LyricsWriteOptions,
+} from './lyrics'
+import type {
+  DeviceCandidate,
+  DeviceConnectPayload,
+  DeviceLibraryResult,
+  DevicePendingJournal,
+  DeviceRecord,
+  DeviceScanProgressEvent,
+  DeviceScanResult,
+  DeviceSettingsUpdate,
+  DeviceSyncApplyResult,
+  DeviceSyncPlan,
+  DeviceSyncPlanRequest,
+  DeviceSyncProgressEvent,
+  DeviceVolumeSnapshot,
+  RockboxThemeInstallResult,
+} from './device-sync'
+import type {
+  DownloadJob,
+  DownloadJobsChangedEvent,
+  DownloadProvider,
+  DownloadProgressEvent,
+  DownloadSearchRequest,
+  DownloadSettings,
+  EnqueueDownloadRequest,
+  HarImportPreview,
+  OnlineTrackResult,
+  ProviderAuthState,
+  ProviderCredentialsPayload,
+  ServiceTutorialState,
+} from './downloads'
 
 export interface ListTracksOpts {
   limit?: number
@@ -39,6 +79,41 @@ export interface ImportCompleteEvent {
   total: number
 }
 
+export type LibraryScanReason = 'startup' | 'watch' | 'background' | 'manual' | 'import'
+export type LibraryScanStatus = 'running' | 'completed' | 'failed'
+export type LibraryScanEventType = 'added' | 'updated' | 'removed' | 'missing_root' | 'skipped' | 'error'
+
+export interface LibraryScanRun {
+  id: number
+  folderId: number
+  reason: LibraryScanReason
+  status: LibraryScanStatus
+  startedAt: number
+  finishedAt: number | null
+  added: number
+  updated: number
+  removed: number
+  skipped: number
+  error: string | null
+}
+
+export interface LibraryScanEvent {
+  id: number
+  runId: number
+  folderId: number
+  type: LibraryScanEventType
+  path: string | null
+  title: string | null
+  detail: string | null
+  occurredAt: number
+}
+
+export interface LibraryScanLogPayload {
+  folders: DbFolder[]
+  runs: LibraryScanRun[]
+  events: LibraryScanEvent[]
+}
+
 export interface QueueSnapshotPayload {
   trackIds: number[]
   currentIndex: number
@@ -56,6 +131,103 @@ export interface TrackMetadataUpdatePayload {
   totalTracks?: number | null
   discNumber?: number | null
   totalDiscs?: number | null
+}
+
+export type MetadataCompletionField =
+  | 'title'
+  | 'artist'
+  | 'album'
+  | 'albumArtist'
+  | 'composer'
+  | 'genre'
+  | 'year'
+  | 'trackNumber'
+  | 'totalTracks'
+  | 'discNumber'
+  | 'totalDiscs'
+  | 'artwork'
+
+export type MetadataCompletionSource =
+  | 'filename'
+  | 'folder'
+  | 'musicbrainz'
+  | 'cover-art-archive'
+
+export interface MetadataCompletionTarget {
+  trackId: number
+  title: string
+  artist: string
+  album: string
+  path: string
+  missingFields: MetadataCompletionField[]
+}
+
+export interface MetadataCompletionTargetsPayload {
+  folderId: number | null
+  totalCandidates: number
+  targets: MetadataCompletionTarget[]
+}
+
+export interface MetadataCompletionFieldDiff {
+  field: MetadataCompletionField
+  current: string | null
+  proposed: string | null
+  source: MetadataCompletionSource
+  confidence: number
+  selected: boolean
+}
+
+export interface MetadataCompletionArtworkDiff {
+  currentArtworkPath: string | null
+  proposedDataUrl: string
+  mimeType: string
+  source: MetadataCompletionSource
+  confidence: number
+  selected: boolean
+}
+
+export interface MetadataCompletionCandidate {
+  trackId: number
+  title: string
+  artist: string
+  album: string
+  path: string
+  confidence: number
+  fields: MetadataCompletionFieldDiff[]
+  artwork: MetadataCompletionArtworkDiff | null
+  warnings: string[]
+}
+
+export interface MetadataCompletionPreview {
+  previewId: string
+  createdAt: number
+  candidates: MetadataCompletionCandidate[]
+}
+
+export interface MetadataCompletionSelection {
+  trackId: number
+  fields: MetadataCompletionField[]
+}
+
+export interface MetadataCompletionApplyRequest {
+  previewId: string
+  selections: MetadataCompletionSelection[]
+}
+
+export interface MetadataCompletionApplyTrackResult {
+  trackId: number
+  title: string
+  path: string
+  ok: boolean
+  appliedFields: MetadataCompletionField[]
+  backupPath: string | null
+  error: string | null
+}
+
+export interface MetadataCompletionApplyResult {
+  applied: number
+  failed: number
+  results: MetadataCompletionApplyTrackResult[]
 }
 
 export interface TrashTrackFailure {
@@ -95,6 +267,8 @@ export interface LibraryApi {
   pickFolder(): Promise<PickFolderResult>
   addFolder(path: string): Promise<AddFolderResult>
   removeFolder(id: number): Promise<void>
+  scanNow(folderId?: number): Promise<LibraryScanRun>
+  scanLog(folderId?: number, limit?: number): Promise<LibraryScanLogPayload>
 
   // Event subscriptions — handlers receive the payload and return an off() func.
   onImportProgress(h: (e: ImportProgressEvent) => void): EventOff
@@ -180,6 +354,28 @@ export interface WaveformResult {
   buckets: number
 }
 
+export interface PlaybackAnalysisResult extends WaveformResult {
+  analysisVersion: number
+  source: 'cache' | 'decoded'
+}
+
+export interface PlaybackTableBarsResult {
+  analysisVersion: number
+  source: 'cache' | 'decoded'
+  fps: 60
+  bands: 5
+  frames: number
+  durationSec: number
+  complete: true
+  values: number[]             // flattened frames × bands, display-scale values 0..1
+}
+
+export interface PlaybackCacheStats {
+  maxBytes: number
+  usedBytes: number
+  entries: number
+}
+
 export interface ArtistListMode {
   mode: 'manual' | 'topPlays'
   n?: number
@@ -194,7 +390,14 @@ export interface AudioApi {
   setVolume(value: number): Promise<void>
   setFftMode(mode: FftMode): Promise<void>
   setMeterEnabled(enabled: boolean): Promise<void>
-  getWaveform(path: string, buckets?: number): Promise<WaveformResult>
+  getWaveform(path: string, buckets?: number, trackId?: number | null): Promise<PlaybackAnalysisResult>
+  getCachedAnalysis(path: string, buckets?: number, trackId?: number | null): Promise<PlaybackAnalysisResult | null>
+  ensurePlaybackAnalysis(path: string, trackId?: number | null, buckets?: number): Promise<PlaybackAnalysisResult>
+  getCachedTableBars(path: string, trackId?: number | null): Promise<PlaybackTableBarsResult | null>
+  ensureTableBars(path: string, trackId?: number | null): Promise<PlaybackTableBarsResult>
+  getPlaybackCacheStats(): Promise<PlaybackCacheStats>
+  setPlaybackCacheLimit(maxBytes: number): Promise<PlaybackCacheStats>
+  clearPlaybackCache(): Promise<PlaybackCacheStats>
   preloadNext(path: string): Promise<void>
   clearNext(): Promise<void>
   swapNow(): Promise<boolean>
@@ -212,6 +415,7 @@ export interface AudioApi {
   onFft(h: (e: FftEvent) => void): EventOff
   onLevels(h: (e: LevelsEvent) => void): EventOff
   onExclusiveModeChanged(h: (e: ExclusiveModeState) => void): EventOff
+  onPlaybackCacheChanged(h: (e: PlaybackCacheStats) => void): EventOff
 }
 
 export interface EqApi {
@@ -230,6 +434,9 @@ export interface TracksApi {
   setFavorite(id: number, favorite: boolean): Promise<void>
   updateMetadata(trackId: number, payload: TrackMetadataUpdatePayload): Promise<void>
   refreshMetadata(trackId: number): Promise<void>
+  findMetadataCompletionTargets(folderId?: number, limit?: number): Promise<MetadataCompletionTargetsPayload>
+  previewMetadataCompletion(trackIds: number[]): Promise<MetadataCompletionPreview>
+  applyMetadataCompletions(payload: MetadataCompletionApplyRequest): Promise<MetadataCompletionApplyResult>
   trash(trackIds: number[]): Promise<TrashTracksResult>
 }
 
@@ -241,10 +448,75 @@ export interface ArtistsApi {
   setFavorite(id: number, favorite: boolean): Promise<void>
 }
 
+export interface LyricsApi {
+  get(trackId: number): Promise<LyricsView>
+  fetch(trackId: number, force?: boolean): Promise<LyricsView>
+  search(trackId: number): Promise<LyricsCandidate[]>
+  importCandidate(trackId: number, lrclibId: string): Promise<LyricsView>
+  importFile(trackId: number): Promise<LyricsView | null>
+  importLrc(trackId: number, lrcText: string): Promise<LyricsView>
+  save(trackId: number, plain: string | null, synced: string | null): Promise<LyricsView>
+  setOffset(trackId: number, offsetMs: number): Promise<LyricsView>
+  export(trackId: number): Promise<{ canceled: boolean; path: string | null }>
+  previewEmbed(trackId: number): Promise<LyricsEmbedPreview>
+  embedInFile(trackId: number, options?: Partial<LyricsWriteOptions>): Promise<LyricsEmbedResult>
+  remove(trackId: number, stripEmbedded?: boolean): Promise<void>
+  fetchForSelection(trackIds: number[]): Promise<LyricsSelectionSummary>
+
+  onChanged(h: (e: { trackId: number }) => void): EventOff
+  onSelectionProgress(h: (e: LyricsSelectionProgress) => void): EventOff
+}
+
 export interface SettingsApi {
   // Pushes the renderer-side preference into main so the LibraryBackup
   // service can short-circuit writes when the user has disabled the feature.
   setLibraryBackup(enabled: boolean): Promise<void>
+  setLibraryScanLogRetention(days: number | null): Promise<void>
+  // Pushes lyrics preferences into main so it knows caching / sidecar / embed /
+  // backup behavior before any lyrics action (mirrors setLibraryBackup).
+  setLyrics(patch: Partial<LyricsSettingsState>): Promise<void>
+}
+
+export interface DevicesApi {
+  detectCandidates(): Promise<DeviceCandidate[]>
+  volumes(): Promise<DeviceVolumeSnapshot>
+  ignoreVolume(rootPath: string): Promise<DeviceVolumeSnapshot>
+  pickRoot(): Promise<PickFolderResult>
+  connect(payload: DeviceConnectPayload): Promise<DeviceRecord>
+  updateSettings(deviceId: string, settings: DeviceSettingsUpdate): Promise<DeviceRecord>
+  list(): Promise<DeviceRecord[]>
+  scan(deviceId: string): Promise<DeviceScanResult>
+  library(deviceId: string): Promise<DeviceLibraryResult>
+  planSync(payload: DeviceSyncPlanRequest): Promise<DeviceSyncPlan>
+  applySync(planId: string): Promise<DeviceSyncApplyResult>
+  installRockboxThemesFromFiles(deviceId: string, files: unknown[]): Promise<RockboxThemeInstallResult>
+  listPendingJournals(): Promise<DevicePendingJournal[]>
+  resumeJournal(journalId: string): Promise<DeviceSyncApplyResult>
+  discardJournal(journalId: string): Promise<void>
+
+  onScanProgress(h: (e: DeviceScanProgressEvent) => void): EventOff
+  onSyncProgress(h: (e: DeviceSyncProgressEvent) => void): EventOff
+  onVolumesChanged(h: (e: DeviceVolumeSnapshot) => void): EventOff
+}
+
+export interface DownloadsApi {
+  getSettings(): Promise<DownloadSettings>
+  setSettings(patch: Partial<DownloadSettings>): Promise<DownloadSettings>
+  getAuthState(provider: DownloadProvider): Promise<ProviderAuthState>
+  saveCredentials(payload: ProviderCredentialsPayload): Promise<void>
+  clearCredentials(provider: DownloadProvider): Promise<void>
+  inspectHar(provider: DownloadProvider, files: unknown[]): Promise<HarImportPreview>
+  applyHarImport(provider: DownloadProvider, previewId: string): Promise<void>
+  getTutorialState(): Promise<ServiceTutorialState>
+  setTutorialState(patch: Partial<ServiceTutorialState>): Promise<ServiceTutorialState>
+  search(payload: DownloadSearchRequest): Promise<OnlineTrackResult[]>
+  enqueue(payload: EnqueueDownloadRequest): Promise<DownloadJob[]>
+  jobs(): Promise<DownloadJob[]>
+  cancel(jobId: string): Promise<void>
+  retry(jobId: string): Promise<DownloadJob | null>
+
+  onProgress(h: (e: DownloadProgressEvent) => void): EventOff
+  onJobsChanged(h: (e: DownloadJobsChangedEvent) => void): EventOff
 }
 
 export interface Api {
@@ -257,6 +529,9 @@ export interface Api {
   albums: AlbumsApi
   artists: ArtistsApi
   settings: SettingsApi
+  lyrics: LyricsApi
+  devices: DevicesApi
+  downloads: DownloadsApi
 }
 
 declare global {

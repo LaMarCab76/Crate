@@ -1,6 +1,9 @@
 import { create } from 'zustand'
 import { createListPrefsDefaults } from '@renderer/utils/listSort'
+import { DEVICE_ARTWORK_EDGE_DEFAULT, clampDeviceArtworkEdge } from '@shared/constants/device-sync'
+import { clampLyricsOffsetMs } from '@shared/lyrics/lrc'
 import type { ListPrefsMap, ListViewKind } from '@renderer/utils/listSort'
+import type { LyricsSettingsState } from '@shared/types/lyrics'
 
 export type Layout = 'classic' | 'editorial' | 'dense'
 export type Density = 'compact' | 'regular' | 'comfy'
@@ -19,6 +22,8 @@ export interface Tweak {
   artistsMode: ArtistsMode
   artistsTopN: number
   libraryBackup: boolean
+  libraryScanLogRetentionDays: number | null
+  deviceArtworkMaxEdge: number
   // Bypasses the macOS mixer (CoreAudio hog mode) so audio goes straight to
   // the output device. Persisted so the toggle restores on relaunch, but
   // reconciled against the engine's actual state on boot.
@@ -28,9 +33,25 @@ export interface Tweak {
   // Show the FFT bar visualizer in the player pane. Off skips the FFT
   // subscription so the engine can downshift its FFT mode and save work.
   showPlayerVisualizer: boolean
+  // Show the inline lyrics section in the player pane. The side lyrics pane can
+  // still be opened from the section header while this preview is collapsed.
+  showPlayerLyrics: boolean
   // Show the full-screen background spectrum in the fullscreen player. Off
   // keeps just the artwork; persisted so the toggle restores on reopen.
   fullPlayerVisualizer: boolean
+  // Show the fullscreen file/spec sheet below the artwork in visualizer mode.
+  fullPlayerFileDataVisible: boolean
+  // --- Lyrics. Mirror of LyricsSettingsState; pushed to main via setLyrics so
+  // it knows caching / sidecar / embed / backup behavior before any action.
+  lyricsAutoFetch: boolean
+  lyricsPreferSynced: boolean
+  lyricsCacheLocal: boolean
+  lyricsWriteSidecar: boolean
+  lyricsEmbedAuto: boolean
+  lyricsOverwrite: boolean
+  lyricsConfirmBeforeWrite: boolean
+  lyricsBackupBeforeWrite: boolean
+  lyricsGlobalOffsetMs: number
 }
 
 const TWEAK_DEFAULTS: Tweak = {
@@ -45,11 +66,38 @@ const TWEAK_DEFAULTS: Tweak = {
   artistsMode: 'manual',
   artistsTopN: 20,
   libraryBackup: true,
+  libraryScanLogRetentionDays: 30,
+  deviceArtworkMaxEdge: DEVICE_ARTWORK_EDGE_DEFAULT,
   exclusiveMode: false,
   playerTintSource: 'artwork',
   playerTintColor: '#0a84ff',
   showPlayerVisualizer: true,
+  showPlayerLyrics: true,
   fullPlayerVisualizer: false,
+  fullPlayerFileDataVisible: true,
+  lyricsAutoFetch: true,
+  lyricsPreferSynced: true,
+  lyricsCacheLocal: true,
+  lyricsWriteSidecar: true,
+  lyricsEmbedAuto: false,
+  lyricsOverwrite: false,
+  lyricsConfirmBeforeWrite: true,
+  lyricsBackupBeforeWrite: true,
+  lyricsGlobalOffsetMs: 0,
+}
+
+// Maps the renderer tweak keys onto the main-process LyricsSettingsState shape.
+function lyricsPrefsFromTweak(t: Tweak): LyricsSettingsState {
+  return {
+    autoFetch: t.lyricsAutoFetch,
+    preferSynced: t.lyricsPreferSynced,
+    cacheLocal: t.lyricsCacheLocal,
+    createSidecar: t.lyricsWriteSidecar,
+    embedInFlac: t.lyricsEmbedAuto,
+    overwriteExisting: t.lyricsOverwrite,
+    askBeforeModifying: t.lyricsConfirmBeforeWrite,
+    backupBeforeModifying: t.lyricsBackupBeforeWrite,
+  }
 }
 
 const STORAGE_KEY = 'crate.tweaks.v1'
@@ -66,6 +114,12 @@ function load(): Tweak {
     // The removed accent/bg color fields fall away on the next persist.
     if (parsed.bgSource === 'artwork' && merged.playerTintSource === 'default') {
       merged.playerTintSource = 'artwork'
+    }
+    merged.deviceArtworkMaxEdge = clampDeviceArtworkEdge(merged.deviceArtworkMaxEdge)
+    merged.lyricsGlobalOffsetMs = clampLyricsOffsetMs(merged.lyricsGlobalOffsetMs)
+    if (merged.libraryScanLogRetentionDays !== null) {
+      const days = Number(merged.libraryScanLogRetentionDays)
+      merged.libraryScanLogRetentionDays = Number.isFinite(days) && days > 0 ? Math.floor(days) : 30
     }
     return merged
   } catch {
@@ -167,7 +221,11 @@ export const useTweakStore = create<TweakStore>((set, get) => ({
       return
     }
     set(state => {
-      const next = { ...state.tweak, [k]: v }
+      const value =
+        k === 'deviceArtworkMaxEdge' ? clampDeviceArtworkEdge(v)
+        : k === 'lyricsGlobalOffsetMs' ? clampLyricsOffsetMs(v)
+        : v
+      const next = { ...state.tweak, [k]: value } as Tweak
       try {
         window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
       } catch {
@@ -175,6 +233,16 @@ export const useTweakStore = create<TweakStore>((set, get) => ({
       }
       if (k === 'libraryBackup') {
         void window.api?.settings?.setLibraryBackup(v as boolean).catch(() => {
+          // main not ready yet, ignore
+        })
+      }
+      if (k === 'libraryScanLogRetentionDays') {
+        void window.api?.settings?.setLibraryScanLogRetention(value as number | null).catch(() => {
+          // main not ready yet, ignore
+        })
+      }
+      if (String(k).startsWith('lyrics')) {
+        void window.api?.settings?.setLyrics(lyricsPrefsFromTweak(next)).catch(() => {
           // main not ready yet, ignore
         })
       }
@@ -188,6 +256,14 @@ export const useTweakStore = create<TweakStore>((set, get) => ({
 if (typeof window !== 'undefined') {
   const initial = load()
   void window.api?.settings?.setLibraryBackup(initial.libraryBackup).catch(() => {
+    /* main not ready yet, ignore */
+  })
+  void window.api?.settings?.setLibraryScanLogRetention(initial.libraryScanLogRetentionDays).catch(() => {
+    /* main not ready yet, ignore */
+  })
+  // Push lyrics prefs to main on boot so embed/sidecar/cache behavior is known
+  // before the user opens Settings.
+  void window.api?.settings?.setLyrics(lyricsPrefsFromTweak(initial)).catch(() => {
     /* main not ready yet, ignore */
   })
 

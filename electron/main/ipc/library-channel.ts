@@ -1,19 +1,24 @@
 import { dialog, ipcMain, shell } from 'electron'
+import { existsSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
 import { getRepos, type Repos } from '../db/repositories'
 import { getImportService } from '../library/ImportService'
 import { getFolderWatcher } from '../library/FolderWatcher'
+import { getLibraryReconciler } from '../library/LibraryReconciler'
 import { parseArtistName } from '../library/ArtistNameParser'
 import { readTrackMetadata } from '../library/MetadataExtractor'
+import { getMetadataCompletionService } from '../library/MetadataCompletionService'
 import { writeTrackMetadata } from '../library/MetadataWriter'
 import { getLibraryBackup } from '../services/LibraryBackup'
 import { broadcast } from './events'
+import { assertId, assertNonEmptyString, sanitizeIds } from './validation'
 import type { DbTrack } from '@shared/types/db'
 import type {
   AddFolderResult,
   ListTracksOpts,
   PickFolderResult,
   SearchResultsPayload,
+  MetadataCompletionApplyRequest,
   TrackMetadataUpdatePayload,
   TrashTracksResult,
 } from '@shared/types/ipc-contract'
@@ -127,6 +132,8 @@ export function registerLibraryChannel(): void {
   const repos = getRepos()
   const importer = getImportService()
   const watcher = getFolderWatcher()
+  const reconciler = getLibraryReconciler()
+  const metadataCompletion = getMetadataCompletionService()
 
   ipcMain.handle('library:tracks', (_, opts: ListTracksOpts = {}) => repos.tracks.getAll(opts))
   ipcMain.handle('library:track:byId', (_, id: number) => repos.tracks.getById(id) ?? null)
@@ -156,7 +163,10 @@ export function registerLibraryChannel(): void {
     broadcast('library:changed', { reason: 'playlist-delete' })
   })
   ipcMain.handle('library:playlist:addTracks', (_, p: { playlistId: number; trackIds: number[] }) => {
-    repos.playlists.addTracks(p.playlistId, p.trackIds)
+    const playlistId = assertId(p?.playlistId, 'playlistId')
+    const trackIds = sanitizeIds(p?.trackIds)
+    if (trackIds.length === 0) return
+    repos.playlists.addTracks(playlistId, trackIds)
     broadcast('library:changed', { reason: 'playlist-tracks' })
   })
 
@@ -184,10 +194,30 @@ export function registerLibraryChannel(): void {
   })
 
   ipcMain.handle('library:folders:add', async (_, path: string): Promise<AddFolderResult> => {
-    const result = await importer.addFolder(path)
+    // The renderer normally passes a path from the system folder picker, but the
+    // boundary is untrusted: require a real, existing directory before scanning.
+    const folderPath = resolve(assertNonEmptyString(path, 'folder path'))
+    if (!existsSync(folderPath)) throw new Error('Folder does not exist')
+    const result = await importer.addFolder(folderPath)
     watcher.start(result.folder.id, result.folder.path)
+    reconciler.scheduleFolderScan(result.folder.id, 'import', 0)
     broadcast('library:changed', { reason: 'folder-add' })
     return result
+  })
+
+  ipcMain.handle('library:scanNow', async (_, folderId?: number) => {
+    if (folderId != null) {
+      return reconciler.scanFolder(assertId(folderId, 'folderId'), 'manual')
+    }
+    const runs = await reconciler.scanAll('manual')
+    if (runs.length === 0) throw new Error('No library folders configured')
+    return runs[0]
+  })
+
+  ipcMain.handle('library:scanLog', (_, folderId?: number, limit?: number) => {
+    const safeFolderId = folderId == null ? null : assertId(folderId, 'folderId')
+    const safeLimit = Number.isInteger(limit) && (limit as number) > 0 ? (limit as number) : 200
+    return reconciler.scanLog(safeFolderId, safeLimit)
   })
 
   // Queue persistence
@@ -228,6 +258,30 @@ export function registerLibraryChannel(): void {
   ipcMain.handle('track:refreshMetadata', async (_, trackId: number) => {
     await refreshTrackMetadataInDb(repos, trackId)
     broadcast('library:changed', { reason: 'track-refresh' })
+  })
+
+  ipcMain.handle('track:metadataCompletion:targets', async (_, payload?: { folderId?: number; limit?: number }) => {
+    const folderId = payload?.folderId == null ? null : assertId(payload.folderId, 'folderId')
+    const limit = Number.isInteger(payload?.limit) && (payload?.limit as number) > 0 ? payload?.limit as number : 24
+    return metadataCompletion.findTargets(folderId, limit)
+  })
+
+  ipcMain.handle('track:metadataCompletion:preview', async (_, trackIds: number[]) => {
+    return metadataCompletion.preview(sanitizeIds(trackIds))
+  })
+
+  ipcMain.handle('track:metadataCompletion:apply', async (_, payload: MetadataCompletionApplyRequest) => {
+    const result = await metadataCompletion.apply({
+      previewId: assertNonEmptyString(payload?.previewId, 'previewId'),
+      selections: Array.isArray(payload?.selections)
+        ? payload.selections.map(selection => ({
+            trackId: assertId(selection.trackId, 'trackId'),
+            fields: Array.isArray(selection.fields) ? selection.fields : [],
+          }))
+        : [],
+    })
+    if (result.applied > 0) broadcast('library:changed', { reason: 'metadata-completion' })
+    return result
   })
 
   ipcMain.handle('track:trash', async (_, trackIds: number[]): Promise<TrashTracksResult> => {
@@ -286,5 +340,8 @@ export function registerLibraryChannel(): void {
   // whether to write.
   ipcMain.handle('settings:setLibraryBackup', (_, enabled: boolean) => {
     getLibraryBackup().setEnabled(enabled)
+  })
+  ipcMain.handle('settings:setLibraryScanLogRetention', (_, days: number | null) => {
+    reconciler.setRetentionDays(days)
   })
 }

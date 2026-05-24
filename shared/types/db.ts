@@ -150,9 +150,45 @@ export interface DbQueueEntry {
   position: number
 }
 
+export interface DbTrackLyrics {
+  id: number
+  track_id: number
+  plain_lyrics: string | null
+  synced_lyrics_lrc: string | null
+  source: string
+  source_id: string | null
+  source_url: string | null
+  confidence: number
+  instrumental: number
+  is_user_edited: number
+  embedded_in_file: number
+  sidecar_written: number
+  fetched_at: number | null
+  embedded_at: number | null
+  sidecar_path: string | null
+  created_at: number
+  updated_at: number
+}
+
+export interface DbLyricsFailure {
+  id: number
+  track_id: number
+  provider: string
+  reason: string
+  details: string | null
+  failed_at: number
+}
+
 // Input shapes for insert operations (omit auto-generated columns).
 export type DbTrackInsert = Omit<DbTrack, 'id'>
 export type DbFolderInsert = Omit<DbFolder, 'id' | 'track_count'> & { track_count?: number }
 export type DbAlbumInsert = Omit<DbAlbum, 'id' | 'track_count' | 'total_duration' | 'is_favorite' | 'state_updated_at'>
 export type DbArtistInsert = Omit<DbArtist, 'id' | 'track_count' | 'album_count'>
 export type DbGenreInsert = Omit<DbGenre, 'id' | 'track_count'>
+
+// Cache/provider lyrics save: the repo manages id, flags and timestamps.
+export type DbTrackLyricsUpsert = Pick<
+  DbTrackLyrics,
+  'track_id' | 'plain_lyrics' | 'synced_lyrics_lrc' | 'source'
+  | 'source_id' | 'source_url' | 'confidence' | 'instrumental'
+>

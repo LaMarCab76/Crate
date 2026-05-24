@@ -2,6 +2,7 @@ import { type CSSProperties, Fragment, type MouseEvent, useEffect, useMemo, useR
 import { Artwork } from './Artwork'
 import { CodecStrip } from './CodecStrip'
 import { Icon } from './Icon'
+import { LyricsPanel } from './LyricsPanel'
 import { EQBars } from './EQBars'
 import { SpectrumVisualizer } from './SpectrumVisualizer'
 import { UpNextToast } from './UpNextToast'
@@ -22,11 +23,21 @@ interface PlayerPaneProps {
   isOpen: boolean
   onExpand: () => void
   onCollapse: () => void
+  lyricsSidePaneOpen: boolean
+  onToggleLyricsSidePane: () => void
   onOpenAlbum?: (album: Album) => void
   onOpenArtist?: (artist: Artist) => void
 }
 
-export function PlayerPane({ isOpen, onExpand, onCollapse, onOpenAlbum, onOpenArtist }: PlayerPaneProps) {
+export function PlayerPane({
+  isOpen,
+  onExpand,
+  onCollapse,
+  lyricsSidePaneOpen,
+  onToggleLyricsSidePane,
+  onOpenAlbum,
+  onOpenArtist,
+}: PlayerPaneProps) {
   const currentTrack = usePlaybackStore(s => s.currentTrack)
   const [lastTrack, setLastTrack] = useState<Track | null>(() => currentTrack)
   const track = currentTrack ?? lastTrack
@@ -48,6 +59,7 @@ export function PlayerPane({ isOpen, onExpand, onCollapse, onOpenAlbum, onOpenAr
   const playerTintSource = useTweakStore(s => s.tweak.playerTintSource)
   const playerTintColor = useTweakStore(s => s.tweak.playerTintColor)
   const showVisualizer = useTweakStore(s => s.tweak.showPlayerVisualizer)
+  const showLyrics = useTweakStore(s => s.tweak.showPlayerLyrics)
   const setTweak = useTweakStore(s => s.setTweak)
   const artworkPath = track?.artworkPath ?? displayAlbum?.artworkPath ?? null
   const [artworkTint, setArtworkTint] = useState<string | null>(null)
@@ -206,6 +218,7 @@ export function PlayerPane({ isOpen, onExpand, onCollapse, onOpenAlbum, onOpenAr
 
   const canOpenAlbum = album != null && onOpenAlbum != null && !album.id.startsWith('a-unresolved-')
   const canOpenArtist = artist != null && onOpenArtist != null
+  const inlineLyricsVariant = lyricsSidePaneOpen || showVisualizer ? 'current' : 'inline'
 
   const selectOutputDevice = async (device: AudioOutputDevice) => {
     if (device.isCurrent) {
@@ -455,6 +468,41 @@ export function PlayerPane({ isOpen, onExpand, onCollapse, onOpenAlbum, onOpenAr
                   <Icon name={showVisualizer ? 'chevD' : 'chevR'} size={12} />
                 </button>
                 {showVisualizer && <SpectrumVisualizer mode="mini" />}
+              </div>
+              <div className={`pp-player-lyrics${showLyrics ? '' : ' collapsed'}${lyricsSidePaneOpen ? ' side-open' : ''}`}>
+                <div className="pp-player-lyrics-head">
+                  <button
+                    type="button"
+                    className="pp-player-lyrics-toggle"
+                    onClick={() => setTweak('showPlayerLyrics', !showLyrics)}
+                    aria-expanded={showLyrics}
+                    title={showLyrics ? 'Hide lyrics' : 'Show lyrics'}
+                  >
+                    <span>Lyrics</span>
+                    <Icon name={showLyrics ? 'chevD' : 'chevR'} size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    className={`tb-icon-btn pp-lyrics-side-toggle ${lyricsSidePaneOpen ? 'active' : ''}`}
+                    title={lyricsSidePaneOpen ? 'Close lyrics sidebar' : 'Open lyrics sidebar'}
+                    aria-label={lyricsSidePaneOpen ? 'Close lyrics sidebar' : 'Open lyrics sidebar'}
+                    aria-pressed={lyricsSidePaneOpen}
+                    onClick={onToggleLyricsSidePane}
+                  >
+                    <Icon name="sidebarRight" size={13} />
+                  </button>
+                </div>
+                {showLyrics && (
+                  <div className="pp-lyrics-preview">
+                    <LyricsPanel
+                      variant={inlineLyricsVariant}
+                      showActions={false}
+                      showInlineHeader={false}
+                      sidePaneOpen={lyricsSidePaneOpen}
+                      onToggleSidePane={onToggleLyricsSidePane}
+                    />
+                  </div>
+                )}
               </div>
             </div>
           </div>

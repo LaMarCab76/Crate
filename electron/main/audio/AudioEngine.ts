@@ -10,6 +10,7 @@
 //     hands an additional preloaded stream over via takeStream().
 
 import { broadcast } from '../ipc/events'
+import { statSync } from 'node:fs'
 import {
   BASS_ACTIVE_PAUSED, BASS_ACTIVE_PLAYING, BASS_ACTIVE_STOPPED,
   BASS_ATTRIB_VOL, BASS_DATA_FFT2048, BASS_DEVICE_DEFAULT, BASS_DEVICE_ENABLED,
@@ -25,7 +26,7 @@ import {
   type HSTREAM,
 } from './bass-ffi'
 import { loadAllPlugins } from './PluginLoader'
-import type { AudioOutputDevice, FftMode, WaveformResult } from '@shared/types/ipc-contract'
+import type { AudioOutputDevice, FftMode, PlaybackAnalysisResult, PlaybackTableBarsResult } from '@shared/types/ipc-contract'
 
 // FFT2048 returns 1024 complex bins as magnitudes (0..1).
 const FFT_BINS_RAW = 1024
@@ -54,10 +55,14 @@ const METER_WINDOW_SEC = 0.035
 
 // Waveform extraction: decode the whole file once and downsample to this many
 // max-abs buckets. Reads run in float chunks with event-loop yields so a long
-// FLAC doesn't block playback. Results are cached per path (bounded LRU-ish).
+// FLAC doesn't block playback. Results are cached per file fingerprint
+// (bounded LRU-ish) as a short-lived layer over the persistent DB cache.
 const WAVEFORM_DEFAULT_BUCKETS = 1200
 const WAVEFORM_READ_FLOATS = 65536
-const WAVEFORM_CACHE_MAX = 50
+const ANALYSIS_CACHE_MAX = 50
+const TABLE_BARS_FPS = 60
+const TABLE_BARS_BANDS = 5
+const TABLE_BARS_DISPLAY_GAIN = 2.8
 
 export type PlaybackStatus = 'stopped' | 'playing' | 'paused' | 'loading'
 
@@ -89,7 +94,8 @@ export class AudioEngine {
   private meterTimer: NodeJS.Timeout | null = null
   private meterEnabled = false
   private levelBuf: Float32Array = new Float32Array(2)
-  private waveformCache = new Map<string, WaveformResult>()
+  private analysisCache = new Map<string, PlaybackAnalysisResult>()
+  private tableBarsCache = new Map<string, PlaybackTableBarsResult>()
   private getInfo: ReturnType<typeof makeChannelGetInfo> | null = null
   // Optional listener invoked after setOutputDevice succeeds. Used by
   // ExclusiveModeManager to transfer hog ownership across device switches
@@ -574,13 +580,32 @@ export class AudioEngine {
     broadcast('audio:levels', { peakL, peakR, rmsL, rmsR })
   }
 
+  private analysisCacheKey(path: string, buckets: number): string {
+    try {
+      const st = statSync(path)
+      return `${path}:${buckets}:${st.size}:${Math.round(st.mtimeMs)}`
+    } catch {
+      return `${path}:${buckets}`
+    }
+  }
+
+  private tableBarsCacheKey(path: string): string {
+    try {
+      const st = statSync(path)
+      return `${path}:table-bars:${st.size}:${Math.round(st.mtimeMs)}`
+    } catch {
+      return `${path}:table-bars`
+    }
+  }
+
   // Decode the whole file once on a separate decode stream and downsample to a
   // max-abs envelope. Computes a crest-factor approximation of dynamic range and
   // the true peak in the same pass. Yields to the event loop between reads so a
-  // long file doesn't stall playback. Results are cached per path.
-  async getWaveform(path: string, buckets = WAVEFORM_DEFAULT_BUCKETS): Promise<WaveformResult> {
-    const cached = this.waveformCache.get(path)
-    if (cached && cached.buckets === buckets) return cached
+  // long file doesn't stall playback.
+  async decodePlaybackAnalysis(path: string, buckets = WAVEFORM_DEFAULT_BUCKETS): Promise<PlaybackAnalysisResult> {
+    const cacheKey = this.analysisCacheKey(path, buckets)
+    const cached = this.analysisCache.get(cacheKey)
+    if (cached && cached.buckets === buckets) return { ...cached, source: 'decoded' }
 
     this.ensureInit()
     const bass = loadBass()
@@ -630,13 +655,101 @@ export class AudioEngine {
       const rms = Math.sqrt(sumSq / Math.max(1, sampleCount))
       const peakDb = 20 * Math.log10(Math.max(1e-6, globalPeak))
       const drApprox = 20 * Math.log10(Math.max(1e-6, globalPeak) / Math.max(1e-6, rms))
-      const result: WaveformResult = { peaks, drApprox, peakDb, buckets }
 
-      if (this.waveformCache.size >= WAVEFORM_CACHE_MAX) {
-        const oldest = this.waveformCache.keys().next().value
-        if (oldest !== undefined) this.waveformCache.delete(oldest)
+      const result: PlaybackAnalysisResult = {
+        peaks,
+        drApprox,
+        peakDb,
+        buckets,
+        analysisVersion: 2,
+        source: 'decoded',
       }
-      this.waveformCache.set(path, result)
+
+      if (this.analysisCache.size >= ANALYSIS_CACHE_MAX) {
+        const oldest = this.analysisCache.keys().next().value
+        if (oldest !== undefined) this.analysisCache.delete(oldest)
+      }
+      this.analysisCache.set(cacheKey, result)
+      return result
+    } finally {
+      bass.StreamFree(handle)
+    }
+  }
+
+  async getWaveform(path: string, buckets = WAVEFORM_DEFAULT_BUCKETS): Promise<PlaybackAnalysisResult> {
+    return this.decodePlaybackAnalysis(path, buckets)
+  }
+
+  async decodeTableBars(path: string): Promise<PlaybackTableBarsResult> {
+    const cacheKey = this.tableBarsCacheKey(path)
+    const cached = this.tableBarsCache.get(cacheKey)
+    if (cached) return { ...cached, source: 'decoded' }
+
+    this.ensureInit()
+    const bass = loadBass()
+    const handle = bass.StreamCreateFile(0, path, 0n, 0n, BASS_STREAM_DECODE | BASS_STREAM_PRESCAN | BASS_SAMPLE_FLOAT)
+    if (handle === 0) {
+      const code = bass.ErrorGetCode()
+      throw new Error(`Table-bars decode failed for ${path}: ${bassErrorName(code)} (${code})`)
+    }
+
+    try {
+      const info = this.computeStreamInfo(handle)
+      const frames = Math.max(1, Math.ceil(info.duration * TABLE_BARS_FPS))
+      const values = new Array(frames * TABLE_BARS_BANDS).fill(0)
+      const fftBuffer = new Float32Array(FFT_BINS_RAW)
+      const sourceBins = new Float32Array(FFT_BINS_OUT)
+      const bands = new Float32Array(TABLE_BARS_BANDS)
+
+      for (let frame = 0; frame < frames; frame++) {
+        const seconds = Math.min(info.duration, frame / TABLE_BARS_FPS)
+        const bytes = BigInt(Math.floor(seconds * info.bytesPerSecond))
+        bass.ChannelSetPosition(handle, bytes, BASS_POS_BYTE)
+
+        const ret = bass.ChannelGetData(handle, fftBuffer, BASS_DATA_FFT2048)
+        if (ret !== 0xFFFFFFFF && ret !== 0) {
+          for (let i = 0; i < FFT_BINS_OUT; i++) {
+            const idx = FFT_LOG_INDEX[i]
+            const amp = fftBuffer[idx]
+            sourceBins[i] = Math.min(1, Math.sqrt(Math.max(0, amp)) * 1.6)
+          }
+
+          for (let b = 0; b < TABLE_BARS_BANDS; b++) {
+            const start = Math.floor((b * FFT_BINS_OUT) / TABLE_BARS_BANDS)
+            const end = Math.max(start + 1, Math.floor(((b + 1) * FFT_BINS_OUT) / TABLE_BARS_BANDS))
+            let sum = 0
+            for (let i = start; i < end; i++) sum += sourceBins[i] ?? 0
+            bands[b] = sum / (end - start)
+          }
+
+          const offset = frame * TABLE_BARS_BANDS
+          for (let b = 0; b < TABLE_BARS_BANDS; b++) {
+            const raw = Math.max(0, Math.min(1, bands[b] ?? 0))
+            values[offset + b] = Math.max(0, Math.min(1, Math.sqrt(raw * TABLE_BARS_DISPLAY_GAIN)))
+          }
+        }
+
+        if (frame % TABLE_BARS_FPS === 0) {
+          await new Promise(resolve => setImmediate(resolve))
+        }
+      }
+
+      const result: PlaybackTableBarsResult = {
+        analysisVersion: 2,
+        source: 'decoded',
+        fps: TABLE_BARS_FPS,
+        bands: TABLE_BARS_BANDS,
+        frames,
+        durationSec: info.duration,
+        complete: true,
+        values,
+      }
+
+      if (this.tableBarsCache.size >= ANALYSIS_CACHE_MAX) {
+        const oldest = this.tableBarsCache.keys().next().value
+        if (oldest !== undefined) this.tableBarsCache.delete(oldest)
+      }
+      this.tableBarsCache.set(cacheKey, result)
       return result
     } finally {
       bass.StreamFree(handle)

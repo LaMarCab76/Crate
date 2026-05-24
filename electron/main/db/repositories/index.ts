@@ -8,6 +8,10 @@ import { EntityTracksRepo } from './EntityTracksRepo'
 import { SearchRepo } from './SearchRepo'
 import { PlaylistRepo } from './PlaylistRepo'
 import { QueueRepo } from './QueueRepo'
+import { LyricsRepo } from './LyricsRepo'
+import { DownloadJobRepo } from './DownloadJobRepo'
+import { PlaybackAnalysisRepo } from './PlaybackAnalysisRepo'
+import { LibraryScanLogRepo } from './LibraryScanLogRepo'
 
 let cached: Repos | null = null
 
@@ -21,6 +25,10 @@ export interface Repos {
   search: SearchRepo
   playlists: PlaylistRepo
   queue: QueueRepo
+  lyrics: LyricsRepo
+  downloadJobs: DownloadJobRepo
+  playbackAnalysis: PlaybackAnalysisRepo
+  libraryScanLog: LibraryScanLogRepo
 }
 
 export function getRepos(): Repos {
@@ -36,6 +44,10 @@ export function getRepos(): Repos {
     search: new SearchRepo(db),
     playlists: new PlaylistRepo(db),
     queue: new QueueRepo(db),
+    lyrics: new LyricsRepo(db),
+    downloadJobs: new DownloadJobRepo(db),
+    playbackAnalysis: new PlaybackAnalysisRepo(db),
+    libraryScanLog: new LibraryScanLogRepo(db),
   }
   return cached
 }
@@ -50,4 +62,8 @@ export {
   SearchRepo,
   PlaylistRepo,
   QueueRepo,
+  LyricsRepo,
+  DownloadJobRepo,
+  PlaybackAnalysisRepo,
+  LibraryScanLogRepo,
 }

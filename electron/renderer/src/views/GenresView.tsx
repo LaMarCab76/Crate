@@ -4,7 +4,7 @@ import type { Album } from '@shared/types/library'
 import { Artwork } from '@renderer/components/Artwork'
 import { useAlbumActions } from '@renderer/components/MediaActions'
 import { ListPrefsMenu } from '@renderer/components/ListPrefsMenu'
-import { useAlbums } from '@renderer/stores/libraryStore'
+import { useVisibleAlbums } from '@renderer/stores/libraryStore'
 import { sortAlbums, sortGenreGroupsByNameOrCount } from '@renderer/utils/listSort'
 import { createListPrefsDefaults } from '@renderer/utils/listSort'
 import { useListPrefs } from '@renderer/stores/settingsStore'
@@ -30,7 +30,7 @@ function byAlbumLabel(sortBy: GenreAlbumSortBy): string {
 }
 
 export function GenresView({ onSelectAlbum }: { onSelectAlbum?: (al: Album) => void }) {
-  const albums = useAlbums()
+  const albums = useVisibleAlbums()
   const [prefs, setPrefs] = useListPrefs('genres')
   const albumActions = useAlbumActions()
   const defaults = useMemo(() => createListPrefsDefaults(), [])

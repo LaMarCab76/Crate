@@ -1,5 +1,5 @@
-// Portable library metadata file dropped at the root of every imported folder
-// as `.crate-library.json`. Carries user-modifiable state (favorites,
+// Portable library metadata file dropped under `.crate/library.yaml` inside
+// every imported folder. Carries user-modifiable state (favorites,
 // play counts, ratings) so it can travel with the audio files between
 // machines.
 //
@@ -10,12 +10,13 @@
 // import.
 //
 // All entries omit fields that are at their default value; this keeps the
-// JSON human-readable and small. `stateUpdatedAt` is the per-entry "last
+// YAML human-readable and small. `stateUpdatedAt` is the per-entry "last
 // modified" timestamp used by the merge logic to decide which side wins on
 // re-import.
 
 export const BACKUP_VERSION = 1
-export const BACKUP_FILENAME = '.crate-library.json'
+export const BACKUP_DIRNAME = '.crate'
+export const BACKUP_FILENAME = 'library.yaml'
 
 export interface BackupTrack {
   playCount?: number

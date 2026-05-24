@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type {
   AddFolderResult,
   Api,
@@ -10,18 +10,42 @@ import type {
   ImportCompleteEvent,
   ImportProgressEvent,
   LevelsEvent,
+  LibraryScanLogPayload,
+  LibraryScanRun,
   ListTracksOpts,
+  MetadataCompletionApplyRequest,
+  MetadataCompletionApplyResult,
+  MetadataCompletionPreview,
+  MetadataCompletionTargetsPayload,
   PickFolderResult,
+  PlaybackAnalysisResult,
+  PlaybackCacheStats,
   PlaybackStatePayload,
   PlaybackStatus,
+  PlaybackTableBarsResult,
   ProgressEvent,
   QueueSnapshotPayload,
   SearchResultsPayload,
   StreamInfoPayload,
   TrackMetadataUpdatePayload,
   TrashTracksResult,
-  WaveformResult,
 } from '@shared/types/ipc-contract'
+import type {
+  DeviceCandidate,
+  DeviceConnectPayload,
+  DeviceLibraryResult,
+  DevicePendingJournal,
+  DeviceRecord,
+  DeviceScanProgressEvent,
+  DeviceScanResult,
+  DeviceSettingsUpdate,
+  DeviceSyncApplyResult,
+  DeviceSyncPlan,
+  DeviceSyncPlanRequest,
+  DeviceSyncProgressEvent,
+  DeviceVolumeSnapshot,
+  RockboxThemeInstallResult,
+} from '@shared/types/device-sync'
 import type {
   DbAlbum,
   DbArtist,
@@ -30,6 +54,30 @@ import type {
   DbPlaylist,
   DbTrack,
 } from '@shared/types/db'
+import type {
+  LyricsCandidate,
+  LyricsEmbedPreview,
+  LyricsEmbedResult,
+  LyricsSelectionProgress,
+  LyricsSelectionSummary,
+  LyricsSettingsState,
+  LyricsView,
+  LyricsWriteOptions,
+} from '@shared/types/lyrics'
+import type {
+  DownloadJob,
+  DownloadJobsChangedEvent,
+  DownloadProvider,
+  DownloadProgressEvent,
+  DownloadSearchRequest,
+  DownloadSettings,
+  EnqueueDownloadRequest,
+  HarImportPreview,
+  OnlineTrackResult,
+  ProviderAuthState,
+  ProviderCredentialsPayload,
+  ServiceTutorialState,
+} from '@shared/types/downloads'
 
 function subscribe<T>(channel: string, handler: (payload: T) => void): EventOff {
   const listener = (_event: IpcRendererEvent, payload: T) => handler(payload)
@@ -80,6 +128,10 @@ const api: Api = {
       ipcRenderer.invoke('library:folders:add', path) as Promise<AddFolderResult>,
     removeFolder: (id: number) =>
       ipcRenderer.invoke('library:folders:remove', id) as Promise<void>,
+    scanNow: (folderId?: number) =>
+      ipcRenderer.invoke('library:scanNow', folderId) as Promise<LibraryScanRun>,
+    scanLog: (folderId?: number, limit?: number) =>
+      ipcRenderer.invoke('library:scanLog', folderId, limit) as Promise<LibraryScanLogPayload>,
 
     onImportProgress: (h) => subscribe<ImportProgressEvent>('library:import:progress', h),
     onImportComplete: (h) => subscribe<ImportCompleteEvent>('library:import:complete', h),
@@ -104,8 +156,22 @@ const api: Api = {
       ipcRenderer.invoke('audio:setFftMode', { mode }) as Promise<void>,
     setMeterEnabled: (enabled: boolean) =>
       ipcRenderer.invoke('audio:setMeterEnabled', { enabled }) as Promise<void>,
-    getWaveform: (path: string, buckets?: number) =>
-      ipcRenderer.invoke('audio:getWaveform', { path, buckets }) as Promise<WaveformResult>,
+    getWaveform: (path: string, buckets?: number, trackId?: number | null) =>
+      ipcRenderer.invoke('audio:getWaveform', { path, buckets, trackId: trackId ?? null }) as Promise<PlaybackAnalysisResult>,
+    getCachedAnalysis: (path: string, buckets?: number, trackId?: number | null) =>
+      ipcRenderer.invoke('audio:getCachedAnalysis', { path, buckets, trackId: trackId ?? null }) as Promise<PlaybackAnalysisResult | null>,
+    ensurePlaybackAnalysis: (path: string, trackId?: number | null, buckets?: number) =>
+      ipcRenderer.invoke('audio:ensurePlaybackAnalysis', { path, trackId: trackId ?? null, buckets }) as Promise<PlaybackAnalysisResult>,
+    getCachedTableBars: (path: string, trackId?: number | null) =>
+      ipcRenderer.invoke('audio:getCachedTableBars', { path, trackId: trackId ?? null }) as Promise<PlaybackTableBarsResult | null>,
+    ensureTableBars: (path: string, trackId?: number | null) =>
+      ipcRenderer.invoke('audio:ensureTableBars', { path, trackId: trackId ?? null }) as Promise<PlaybackTableBarsResult>,
+    getPlaybackCacheStats: () =>
+      ipcRenderer.invoke('audio:playbackCache:stats') as Promise<PlaybackCacheStats>,
+    setPlaybackCacheLimit: (maxBytes: number) =>
+      ipcRenderer.invoke('audio:playbackCache:setLimit', { maxBytes }) as Promise<PlaybackCacheStats>,
+    clearPlaybackCache: () =>
+      ipcRenderer.invoke('audio:playbackCache:clear') as Promise<PlaybackCacheStats>,
     preloadNext: (path: string) =>
       ipcRenderer.invoke('audio:preloadNext', { path }) as Promise<void>,
     clearNext: () => ipcRenderer.invoke('audio:clearNext') as Promise<void>,
@@ -126,6 +192,7 @@ const api: Api = {
     onFft: (h) => subscribe<FftEvent>('audio:fft', h),
     onLevels: (h) => subscribe<LevelsEvent>('audio:levels', h),
     onExclusiveModeChanged: (h) => subscribe<ExclusiveModeState>('audio:exclusive-changed', h),
+    onPlaybackCacheChanged: (h) => subscribe<PlaybackCacheStats>('audio:playback-cache-changed', h),
   },
   eq: {
     getState: () => ipcRenderer.invoke('eq:getState') as Promise<EqState>,
@@ -151,6 +218,12 @@ const api: Api = {
       ipcRenderer.invoke('track:updateMetadata', { trackId, metadata: payload }) as Promise<void>,
     refreshMetadata: (trackId: number) =>
       ipcRenderer.invoke('track:refreshMetadata', trackId) as Promise<void>,
+    findMetadataCompletionTargets: (folderId?: number, limit?: number) =>
+      ipcRenderer.invoke('track:metadataCompletion:targets', { folderId, limit }) as Promise<MetadataCompletionTargetsPayload>,
+    previewMetadataCompletion: (trackIds: number[]) =>
+      ipcRenderer.invoke('track:metadataCompletion:preview', trackIds) as Promise<MetadataCompletionPreview>,
+    applyMetadataCompletions: (payload: MetadataCompletionApplyRequest) =>
+      ipcRenderer.invoke('track:metadataCompletion:apply', payload) as Promise<MetadataCompletionApplyResult>,
     trash: (trackIds: number[]) =>
       ipcRenderer.invoke('track:trash', trackIds) as Promise<TrashTracksResult>,
   },
@@ -165,6 +238,127 @@ const api: Api = {
   settings: {
     setLibraryBackup: (enabled: boolean) =>
       ipcRenderer.invoke('settings:setLibraryBackup', enabled) as Promise<void>,
+    setLibraryScanLogRetention: (days: number | null) =>
+      ipcRenderer.invoke('settings:setLibraryScanLogRetention', days) as Promise<void>,
+    setLyrics: (patch: Partial<LyricsSettingsState>) =>
+      ipcRenderer.invoke('settings:setLyrics', patch) as Promise<void>,
+  },
+  lyrics: {
+    get: (trackId: number) =>
+      ipcRenderer.invoke('lyrics:get', trackId) as Promise<LyricsView>,
+    fetch: (trackId: number, force?: boolean) =>
+      ipcRenderer.invoke('lyrics:fetch', { trackId, force }) as Promise<LyricsView>,
+    search: (trackId: number) =>
+      ipcRenderer.invoke('lyrics:search', trackId) as Promise<LyricsCandidate[]>,
+    importCandidate: (trackId: number, lrclibId: string) =>
+      ipcRenderer.invoke('lyrics:importCandidate', { trackId, lrclibId }) as Promise<LyricsView>,
+    importFile: (trackId: number) =>
+      ipcRenderer.invoke('lyrics:importFile', trackId) as Promise<LyricsView | null>,
+    importLrc: (trackId: number, lrcText: string) =>
+      ipcRenderer.invoke('lyrics:import', { trackId, lrcText }) as Promise<LyricsView>,
+    save: (trackId: number, plain: string | null, synced: string | null) =>
+      ipcRenderer.invoke('lyrics:save', { trackId, plain, synced }) as Promise<LyricsView>,
+    setOffset: (trackId: number, offsetMs: number) =>
+      ipcRenderer.invoke('lyrics:setOffset', { trackId, offsetMs }) as Promise<LyricsView>,
+    export: (trackId: number) =>
+      ipcRenderer.invoke('lyrics:export', trackId) as Promise<{ canceled: boolean; path: string | null }>,
+    previewEmbed: (trackId: number) =>
+      ipcRenderer.invoke('lyrics:previewEmbed', trackId) as Promise<LyricsEmbedPreview>,
+    embedInFile: (trackId: number, options?: Partial<LyricsWriteOptions>) =>
+      ipcRenderer.invoke('lyrics:embedInFile', { trackId, options }) as Promise<LyricsEmbedResult>,
+    remove: (trackId: number, stripEmbedded?: boolean) =>
+      ipcRenderer.invoke('lyrics:remove', { trackId, stripEmbedded }) as Promise<void>,
+    fetchForSelection: (trackIds: number[]) =>
+      ipcRenderer.invoke('lyrics:fetchForSelection', trackIds) as Promise<LyricsSelectionSummary>,
+    onChanged: (h) => subscribe<{ trackId: number }>('lyrics:changed', h),
+    onSelectionProgress: (h) => subscribe<LyricsSelectionProgress>('lyrics:selection:progress', h),
+  },
+  devices: {
+    detectCandidates: () =>
+      ipcRenderer.invoke('devices:detectCandidates') as Promise<DeviceCandidate[]>,
+    volumes: () =>
+      ipcRenderer.invoke('devices:volumes') as Promise<DeviceVolumeSnapshot>,
+    ignoreVolume: (rootPath: string) =>
+      ipcRenderer.invoke('devices:volumes:ignore', rootPath) as Promise<DeviceVolumeSnapshot>,
+    pickRoot: () =>
+      ipcRenderer.invoke('devices:pickRoot') as Promise<PickFolderResult>,
+    connect: (payload: DeviceConnectPayload) =>
+      ipcRenderer.invoke('devices:connect', payload) as Promise<DeviceRecord>,
+    updateSettings: (deviceId: string, settings: DeviceSettingsUpdate) =>
+      ipcRenderer.invoke('devices:updateSettings', deviceId, settings) as Promise<DeviceRecord>,
+    list: () =>
+      ipcRenderer.invoke('devices:list') as Promise<DeviceRecord[]>,
+    scan: (deviceId: string) =>
+      ipcRenderer.invoke('devices:scan', deviceId) as Promise<DeviceScanResult>,
+    library: (deviceId: string) =>
+      ipcRenderer.invoke('devices:library', deviceId) as Promise<DeviceLibraryResult>,
+    planSync: (payload: DeviceSyncPlanRequest) =>
+      ipcRenderer.invoke('devices:planSync', payload) as Promise<DeviceSyncPlan>,
+    applySync: (planId: string) =>
+      ipcRenderer.invoke('devices:applySync', planId) as Promise<DeviceSyncApplyResult>,
+    installRockboxThemesFromFiles: (deviceId: string, files: unknown[]) => {
+      const paths = files
+        .map(file => {
+          try {
+            return webUtils.getPathForFile(file as Parameters<typeof webUtils.getPathForFile>[0])
+          } catch {
+            return ''
+          }
+        })
+        .filter(path => path.trim().length > 0)
+      return ipcRenderer.invoke('devices:rockboxThemes:install', deviceId, paths) as Promise<RockboxThemeInstallResult>
+    },
+    listPendingJournals: () =>
+      ipcRenderer.invoke('devices:listPendingJournals') as Promise<DevicePendingJournal[]>,
+    resumeJournal: (journalId: string) =>
+      ipcRenderer.invoke('devices:resumeJournal', journalId) as Promise<DeviceSyncApplyResult>,
+    discardJournal: (journalId: string) =>
+      ipcRenderer.invoke('devices:discardJournal', journalId) as Promise<void>,
+    onScanProgress: (h) => subscribe<DeviceScanProgressEvent>('devices:scan:progress', h),
+    onSyncProgress: (h) => subscribe<DeviceSyncProgressEvent>('devices:sync:progress', h),
+    onVolumesChanged: (h) => subscribe<DeviceVolumeSnapshot>('devices:volumes-changed', h),
+  },
+  downloads: {
+    getSettings: () =>
+      ipcRenderer.invoke('downloads:settings:get') as Promise<DownloadSettings>,
+    setSettings: (patch: Partial<DownloadSettings>) =>
+      ipcRenderer.invoke('downloads:settings:set', patch) as Promise<DownloadSettings>,
+    getAuthState: (provider: DownloadProvider) =>
+      ipcRenderer.invoke('downloads:auth:get', provider) as Promise<ProviderAuthState>,
+    saveCredentials: (payload: ProviderCredentialsPayload) =>
+      ipcRenderer.invoke('downloads:credentials:save', payload) as Promise<void>,
+    clearCredentials: (provider: DownloadProvider) =>
+      ipcRenderer.invoke('downloads:credentials:clear', provider) as Promise<void>,
+    inspectHar: (provider: DownloadProvider, files: unknown[]) => {
+      const paths = files
+        .map(file => {
+          try {
+            return webUtils.getPathForFile(file as Parameters<typeof webUtils.getPathForFile>[0])
+          } catch {
+            return ''
+          }
+        })
+        .filter(path => path.trim().length > 0)
+      return ipcRenderer.invoke('downloads:har:inspect', provider, paths) as Promise<HarImportPreview>
+    },
+    applyHarImport: (provider: DownloadProvider, previewId: string) =>
+      ipcRenderer.invoke('downloads:har:apply', provider, previewId) as Promise<void>,
+    getTutorialState: () =>
+      ipcRenderer.invoke('downloads:tutorial:get') as Promise<ServiceTutorialState>,
+    setTutorialState: (patch: Partial<ServiceTutorialState>) =>
+      ipcRenderer.invoke('downloads:tutorial:set', patch) as Promise<ServiceTutorialState>,
+    search: (payload: DownloadSearchRequest) =>
+      ipcRenderer.invoke('downloads:search', payload) as Promise<OnlineTrackResult[]>,
+    enqueue: (payload: EnqueueDownloadRequest) =>
+      ipcRenderer.invoke('downloads:enqueue', payload) as Promise<DownloadJob[]>,
+    jobs: () =>
+      ipcRenderer.invoke('downloads:jobs') as Promise<DownloadJob[]>,
+    cancel: (jobId: string) =>
+      ipcRenderer.invoke('downloads:cancel', jobId) as Promise<void>,
+    retry: (jobId: string) =>
+      ipcRenderer.invoke('downloads:retry', jobId) as Promise<DownloadJob | null>,
+    onProgress: (h) => subscribe<DownloadProgressEvent>('downloads:progress', h),
+    onJobsChanged: (h) => subscribe<DownloadJobsChangedEvent>('downloads:jobs-changed', h),
   },
 }
 

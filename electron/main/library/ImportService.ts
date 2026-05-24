@@ -9,13 +9,17 @@ import { broadcast } from '../ipc/events'
 import { getLibraryBackup } from '../services/LibraryBackup'
 import type { DbFolder, DbTrackInsert } from '@shared/types/db'
 
-const AUDIO_EXTENSIONS = new Set([
+export const AUDIO_EXTENSIONS = new Set([
   '.flac', '.m4a', '.mp3', '.wav', '.aiff', '.aif',
   '.ogg', '.opus', '.ape', '.wv', '.tta',
   '.dsf', '.dff', '.webm', '.mpc', '.spx',
 ])
 
-async function collectAudioFiles(root: string): Promise<string[]> {
+export function isAudioPath(path: string): boolean {
+  return AUDIO_EXTENSIONS.has(extname(path).toLowerCase())
+}
+
+export async function collectAudioFiles(root: string): Promise<string[]> {
   const out: string[] = []
   async function walk(dir: string): Promise<void> {
     let entries: Dirent[]
@@ -31,7 +35,7 @@ async function collectAudioFiles(root: string): Promise<string[]> {
       const full = join(dir, ent.name)
       if (ent.isDirectory()) {
         await walk(full)
-      } else if (ent.isFile() && AUDIO_EXTENSIONS.has(extname(ent.name).toLowerCase())) {
+      } else if (ent.isFile() && isAudioPath(ent.name)) {
         out.push(full)
       }
     }
@@ -40,7 +44,7 @@ async function collectAudioFiles(root: string): Promise<string[]> {
   return out
 }
 
-function buildTrackInsert(
+export function buildTrackInsert(
   md: TrackMetadata,
   path: string,
   folderId: number,
@@ -135,16 +139,7 @@ export class ImportService {
   async addFolder(path: string): Promise<AddFolderResult> {
     const name = basename(path) || path
     const folder = this.repos.folders.add(path, name)
-    if (this.scanning.has(folder.id)) {
-      return { folder, startedScan: false }
-    }
-    // Kick off the scan asynchronously so the IPC call returns immediately
-    // and the renderer can update its watched-folders list.
-    setImmediate(() => {
-      this.scan(folder.id, folder.path).catch(err => {
-        console.error(`[import] folder ${folder.id} scan failed:`, err)
-      })
-    })
+    if (this.scanning.has(folder.id)) return { folder, startedScan: false }
     return { folder, startedScan: true }
   }
 
@@ -218,7 +213,7 @@ export class ImportService {
       this.repos.folders.updateTrackCount(folderId, imported + (files.length - fresh.length))
 
       // After the scan is done, fold in any per-track state that lives in the
-      // folder's portable `.crate-library.json`, then refresh the file
+      // folder's portable `.crate/library.yaml`, then refresh the file
       // so it reflects the new ground truth.
       const backup = getLibraryBackup()
       const restore = backup.readForFolder(folderPath)
@@ -236,6 +231,24 @@ export class ImportService {
     } finally {
       this.scanning.delete(folderId)
     }
+  }
+
+  async importFile(folderId: number, filePath: string): Promise<number | null> {
+    if (this.repos.tracks.getByPath(filePath)) return null
+
+    const md = await readTrackMetadata(filePath)
+    const parsedArtist = parseArtistName(md.artist)
+    const artist = this.repos.artists.getOrCreate(parsedArtist.primary || md.artist)
+    const album = this.repos.albums.getOrCreate(md.album, md.albumArtist ?? null, md.year || null)
+    const genre = md.genre ? this.repos.genres.getOrCreate(md.genre) : null
+    const row = buildTrackInsert(md, filePath, folderId, album.id, artist.id, genre?.id ?? null)
+    const trackId = this.repos.tracks.insert(row)
+
+    this.repos.folders.updateTrackCount(folderId, this.repos.tracks.countByFolder(folderId))
+    getLibraryBackup().scheduleWriteForFolder(folderId)
+    broadcast('library:track:added', { path: filePath })
+    broadcast('library:changed', { reason: 'import-file' })
+    return trackId
   }
 
   async rescanAll(): Promise<void> {

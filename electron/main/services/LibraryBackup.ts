@@ -1,16 +1,17 @@
 // Portable library metadata. Each imported folder gets a hidden
-// `.crate-library.json` at its root that mirrors the user-modifiable
+// `.crate/library.yaml` file that mirrors the user-modifiable
 // pieces of state from the SQLite DB (plays, favorites, ratings, EQ
 // overrides). When the folder is reconnected on another machine the file is
 // read first and its values are merged into the freshly-scanned DB rows.
 //
-// Sync vs async: every DB call here is sync (better-sqlite3), and the JSON
+// Sync vs async: every DB call here is sync (better-sqlite3), and the YAML
 // payload is small (~tens of KB for thousands of tracks), so the writes are
 // also sync. That lets `flushAll()` run reliably from `app.on('before-quit')`.
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { join, relative, sep } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { dirname, join, relative, sep } from 'node:path'
 import type { Database as BetterSqliteDatabase } from 'better-sqlite3'
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import type { Repos } from '../db/repositories'
 import { getDatabase } from '../db/database'
 import { getRepos } from '../db/repositories'
@@ -20,13 +21,17 @@ import type {
   BackupFile,
   BackupTrack,
 } from '@shared/types/library-backup'
-import { BACKUP_FILENAME, BACKUP_VERSION } from '@shared/types/library-backup'
+import { BACKUP_DIRNAME, BACKUP_FILENAME, BACKUP_VERSION } from '@shared/types/library-backup'
 
 const DEBOUNCE_MS = 2000
 const APP_NAME = 'Crate'
 
 function toPosixRelative(folderPath: string, absPath: string): string {
   return relative(folderPath, absPath).split(sep).join('/')
+}
+
+function backupPathForFolder(folderPath: string): string {
+  return join(folderPath, BACKUP_DIRNAME, BACKUP_FILENAME)
 }
 
 // Lexicographic max of two ISO-8601 timestamps (or null). Used to merge
@@ -37,9 +42,10 @@ function pickMaxIso(a: string | null, b: string | null): string | null {
   return a > b ? a : b
 }
 
-function writeJsonAtomic(target: string, payload: BackupFile): void {
+function writeYamlAtomic(target: string, payload: BackupFile): void {
   const tmp = target + '.tmp'
-  writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8')
+  mkdirSync(dirname(target), { recursive: true })
+  writeFileSync(tmp, stringifyYaml(payload), 'utf8')
   renameSync(tmp, target)
 }
 
@@ -67,11 +73,11 @@ class LibraryBackupService {
   // ----- READ -----
 
   readForFolder(folderPath: string): BackupFile | null {
-    const target = join(folderPath, BACKUP_FILENAME)
+    const target = backupPathForFolder(folderPath)
     if (!existsSync(target)) return null
     try {
       const raw = readFileSync(target, 'utf8')
-      const parsed = JSON.parse(raw) as BackupFile
+      const parsed = parseYaml(raw) as BackupFile
       if (parsed.version !== BACKUP_VERSION) {
         console.warn(`[backup] ${target} has unsupported version ${parsed.version}, ignoring`)
         return null
@@ -106,23 +112,23 @@ class LibraryBackupService {
       const dbTrack = this.repos.tracks.getByPath(absPath)
       if (!dbTrack) continue
 
-      const jsonTs = jt.stateUpdatedAt ? Date.parse(jt.stateUpdatedAt) || 0 : 0
+      const backupTs = jt.stateUpdatedAt ? Date.parse(jt.stateUpdatedAt) || 0 : 0
       const dbTs = dbTrack.state_updated_at ?? 0
-      const jsonWins = jsonTs > dbTs
+      const backupWins = backupTs > dbTs
 
       const nextPlayCount = Math.max(dbTrack.play_count ?? 0, jt.playCount ?? 0)
       const nextLastPlayed = pickMaxIso(dbTrack.last_played_date, jt.lastPlayedAt ?? null)
       const nextFavorite =
-        jsonWins && jt.favorite !== undefined ? (jt.favorite ? 1 : 0) : dbTrack.is_favorite
+        backupWins && jt.favorite !== undefined ? (jt.favorite ? 1 : 0) : dbTrack.is_favorite
       const nextRating =
-        jsonWins && jt.rating !== undefined ? jt.rating : dbTrack.rating
+        backupWins && jt.rating !== undefined ? jt.rating : dbTrack.rating
 
       let nextExtMeta = dbTrack.extended_metadata
       // Keep existing extended_metadata untouched. Old eqOverride values are no
       // longer read anywhere, so we leave legacy values untouched for DB
       // compatibility.
 
-      const nextStateTs = Math.max(dbTs, jsonTs)
+      const nextStateTs = Math.max(dbTs, backupTs)
       update.run(
         nextPlayCount,
         nextLastPlayed,
@@ -147,11 +153,11 @@ class LibraryBackupService {
     for (const [name, ja] of Object.entries(artists)) {
       const row = findByName.get(name)
       if (!row) continue
-      const jsonTs = ja.stateUpdatedAt ? Date.parse(ja.stateUpdatedAt) || 0 : 0
+      const backupTs = ja.stateUpdatedAt ? Date.parse(ja.stateUpdatedAt) || 0 : 0
       const dbTs = row.state_updated_at ?? 0
-      const jsonWins = jsonTs > dbTs
-      if (jsonWins && ja.favorite !== undefined) {
-        update.run(ja.favorite ? 1 : 0, Math.max(dbTs, jsonTs), row.id)
+      const backupWins = backupTs > dbTs
+      if (backupWins && ja.favorite !== undefined) {
+        update.run(ja.favorite ? 1 : 0, Math.max(dbTs, backupTs), row.id)
       }
     }
   }
@@ -231,11 +237,11 @@ class LibraryBackupService {
       const row = findAlbum(album.title, album.artist, album.year)
       if (!row) continue
 
-      const jsonTs = ja.stateUpdatedAt ? Date.parse(ja.stateUpdatedAt) || 0 : 0
+      const backupTs = ja.stateUpdatedAt ? Date.parse(ja.stateUpdatedAt) || 0 : 0
       const dbTs = row.state_updated_at ?? 0
-      const jsonWins = jsonTs > dbTs
-      if (jsonWins && ja.favorite !== undefined) {
-        update.run(ja.favorite ? 1 : 0, Math.max(dbTs, jsonTs), row.id)
+      const backupWins = backupTs > dbTs
+      if (backupWins && ja.favorite !== undefined) {
+        update.run(ja.favorite ? 1 : 0, Math.max(dbTs, backupTs), row.id)
       }
     }
   }
@@ -296,7 +302,7 @@ class LibraryBackupService {
 
   flushAll(): void {
     // Drain any pending debounced writes. Runs even if the feature was
-    // disabled mid-session so that the on-disk JSON reflects the last good
+    // disabled mid-session so that the on-disk YAML reflects the last good
     // state before quit. If nothing is queued this is a no-op.
     for (const folderId of Array.from(this.timers.keys())) {
       const folder = this.repos.folders.getById(folderId)
@@ -323,8 +329,8 @@ class LibraryBackupService {
   private doWrite(folderId: number, folderPath: string): void {
     try {
       const payload = this.buildBackupFor(folderId, folderPath)
-      const target = join(folderPath, BACKUP_FILENAME)
-      writeJsonAtomic(target, payload)
+      const target = backupPathForFolder(folderPath)
+      writeYamlAtomic(target, payload)
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code
       if (code === 'EACCES' || code === 'EROFS' || code === 'EPERM') {
@@ -342,10 +348,10 @@ class LibraryBackupService {
   private buildBackupFor(folderId: number, folderPath: string): BackupFile {
     // Preserve createdAt across writes so the file remembers its first birth.
     let createdAt = new Date().toISOString()
-    const target = join(folderPath, BACKUP_FILENAME)
+    const target = backupPathForFolder(folderPath)
     if (existsSync(target)) {
       try {
-        const existing = JSON.parse(readFileSync(target, 'utf8')) as BackupFile
+        const existing = parseYaml(readFileSync(target, 'utf8')) as BackupFile
         if (existing.createdAt) createdAt = existing.createdAt
       } catch {
         /* fall back to fresh createdAt */

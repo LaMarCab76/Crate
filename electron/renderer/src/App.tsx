@@ -2,10 +2,13 @@ import { type CSSProperties, type PointerEvent as ReactPointerEvent, useEffect, 
 import type { Album, Artist, Playlist } from '@shared/types/library'
 import { Sidebar } from './components/Sidebar'
 import { Toolbar } from './components/Toolbar'
+import { Icon } from './components/Icon'
 import { PlayerPane } from './components/PlayerPane'
 import { PlayerBottomBar } from './components/PlayerBottomBar'
+import { LyricsSidePane } from './components/LyricsSidePane'
 import { UpNextToast } from './components/UpNextToast'
 import { NowPlayingFull } from './components/NowPlayingFull'
+import { LyricsCandidates } from './components/LyricsCandidates'
 import { LibraryView } from './views/LibraryView'
 import { AlbumsView } from './views/AlbumsView'
 import { AlbumView } from './views/AlbumView'
@@ -16,9 +19,12 @@ import { SearchView } from './views/SearchView'
 import { SettingsView } from './views/SettingsView'
 import { ImportView } from './views/ImportView'
 import { GenresView } from './views/GenresView'
+import { DevicesView } from './views/DevicesView'
+import { DeviceLibraryView, type DeviceLibrarySection } from './views/DeviceLibraryView'
 import { useTweaks } from './stores/settingsStore'
 import { useAlbumByUiId, useFavoriteTracks, useLibraryStore } from './stores/libraryStore'
 import { usePlaybackStore } from './stores/playbackStore'
+import { useDeviceStore } from './stores/deviceStore'
 import { installAutoHideScrollbars } from './utils/autoHideScrollbars'
 import { extractDominantColor } from './utils/colorExtract'
 
@@ -31,6 +37,8 @@ export type View =
   | { kind: 'search' }
   | { kind: 'settings' }
   | { kind: 'import' }
+  | { kind: 'devices' }
+  | { kind: 'device'; deviceId: string; section: 'dashboard' | DeviceLibrarySection }
   | { kind: 'album'; album: Album }
   | { kind: 'artist'; artist: Artist }
   | { kind: 'playlist'; playlist: Playlist }
@@ -40,6 +48,7 @@ const SIDEBAR_WIDTH_STORAGE_KEY = 'crate.layout.sidebarWidth.v1'
 const PLAYER_PANE_OPEN_STORAGE_KEY = 'crate.layout.playerPaneOpen.v1'
 const PLAYER_PANE_EXIT_MS = 280
 const PB_PLAYER_EXIT_MS = 190
+const LYRICS_SIDE_PANE_EXIT_MS = 220
 
 const SIDEBAR_WIDTH_DEFAULT = 240
 const SIDEBAR_WIDTH_MIN = 180
@@ -74,6 +83,122 @@ function loadPersistedBool(key: string, fallback: boolean): boolean {
   }
 }
 
+const DEVICE_SYNC_PHASE_LABELS: Record<string, string> = {
+  discovering: 'Buscando',
+  reading: 'Leyendo',
+  copying: 'Copiando',
+  deleting: 'Eliminando',
+  refreshing: 'Actualizando',
+  optimizing_artwork: 'Optimizando artwork',
+  writing_state: 'Guardando estado',
+  complete: 'Completado',
+}
+
+function DeviceSyncStatusBar({ withFloatingPlayer }: { withFloatingPlayer: boolean }) {
+  const devices = useDeviceStore(s => s.devices)
+  const scanProgress = useDeviceStore(s => s.scanProgress)
+  const syncProgress = useDeviceStore(s => s.syncProgress)
+  const progress = syncProgress ?? scanProgress
+  if (!progress) return null
+
+  const device = devices.find(item => item.id === progress.deviceId)
+  const total = Math.max(progress.total, 0)
+  const completed = syncProgress ? syncProgress.completed : scanProgress?.scanned ?? 0
+  const pct = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0
+  const phase = DEVICE_SYNC_PHASE_LABELS[progress.phase] ?? progress.phase
+  const currentPath = syncProgress?.currentPath
+
+  return (
+    <div className={`device-sync-status-bar ${withFloatingPlayer ? 'with-player' : ''}`}>
+      <Icon name="sync" size={15} />
+      <div className="device-sync-status-main">
+        <strong>{device?.name ?? 'Dispositivo'}</strong>
+        <span>{phase}{currentPath ? ` · ${currentPath}` : ''}</span>
+      </div>
+      <div className="device-sync-status-track" aria-hidden="true">
+        <i style={{ width: `${pct}%` }} />
+      </div>
+      <span className="mono">{total > 0 ? `${completed}/${total}` : '...'}</span>
+    </div>
+  )
+}
+
+function DeviceVolumePrompt({
+  defaultArtworkMaxEdge,
+  onOpenDevice,
+}: {
+  defaultArtworkMaxEdge: number
+  onOpenDevice: (deviceId: string) => void
+}) {
+  const unknownVolumes = useDeviceStore(s => s.unknownVolumes)
+  const connect = useDeviceStore(s => s.connect)
+  const ignoreVolume = useDeviceStore(s => s.ignoreVolume)
+  const addFolder = useLibraryStore(s => s.addFolder)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const volume = unknownVolumes[0]
+  if (!volume) return null
+
+  const run = async (action: () => Promise<void>) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await action()
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="device-volume-prompt">
+      <Icon name="folder" size={18} />
+      <div className="device-volume-prompt-main">
+        <strong>Nuevo volumen detectado</strong>
+        <span title={volume.rootPath}>{volume.name} · {volume.rootPath}</span>
+        {error && <em>{error}</em>}
+      </div>
+      <div className="device-volume-prompt-actions">
+        <button
+          className="btn primary"
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            void run(async () => {
+              const device = await connect({ rootPath: volume.rootPath, artworkMaxEdge: defaultArtworkMaxEdge })
+              onOpenDevice(device.id)
+            })
+          }}
+        >
+          DAP
+        </button>
+        <button
+          className="btn"
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            void run(async () => {
+              await addFolder(volume.rootPath)
+              await ignoreVolume(volume.rootPath)
+            })
+          }}
+        >
+          Biblioteca
+        </button>
+        <button
+          className="btn ghost"
+          type="button"
+          disabled={busy}
+          onClick={() => { void run(() => ignoreVolume(volume.rootPath)) }}
+        >
+          Ignorar
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
   const [tweak, setTweak] = useTweaks()
   const [history, setHistory] = useState<View[]>([{ kind: 'library' }])
@@ -84,6 +209,7 @@ export default function App() {
   const [playerPaneOpen, setPlayerPaneOpen] = useState(() =>
     loadPersistedBool(PLAYER_PANE_OPEN_STORAGE_KEY, true)
   )
+  const [lyricsSidePaneOpen, setLyricsSidePaneOpen] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(() =>
     loadPersistedWidth(SIDEBAR_WIDTH_STORAGE_KEY, SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX)
   )
@@ -101,6 +227,10 @@ export default function App() {
 
   const refresh = useLibraryStore(s => s.refresh)
   const loaded = useLibraryStore(s => s.loaded)
+  const loadPendingDeviceJournals = useDeviceStore(s => s.loadPendingJournals)
+  const refreshDeviceVolumes = useDeviceStore(s => s.refreshVolumes)
+  const scanProgress = useDeviceStore(s => s.scanProgress)
+  const syncProgress = useDeviceStore(s => s.syncProgress)
   const nowTrack = usePlaybackStore(s => s.currentTrack)
   const playbackStatus = usePlaybackStore(s => s.status)
   const nowAlbum = useAlbumByUiId(nowTrack?.albumId)
@@ -108,8 +238,11 @@ export default function App() {
   const favoriteTracks = useFavoriteTracks()
   const canShowPlayerPane = nowTrack != null && !expanded
   const isPlayerPaneOpen = playerPaneOpen && canShowPlayerPane
+  const showLyricsSidePane = lyricsSidePaneOpen && isPlayerPaneOpen
   const showBottomPlayer = !isPlayerPaneOpen && canShowPlayerPane
   const [playerPaneVisible, setPlayerPaneVisible] = useState(() => isPlayerPaneOpen)
+  const [lyricsSidePaneVisible, setLyricsSidePaneVisible] = useState(false)
+  const [lyricsSidePaneClosing, setLyricsSidePaneClosing] = useState(false)
   const [bottomPlayerVisible, setBottomPlayerVisible] = useState(false)
   const [bottomPlayerClosing, setBottomPlayerClosing] = useState(false)
   const isBottomPlayerClosing = bottomPlayerVisible && !showBottomPlayer
@@ -118,6 +251,7 @@ export default function App() {
   const playingArtworkPath = nowAlbum?.artworkPath ?? nowTrack?.artworkPath ?? null
   const isPlaying = playbackStatus === 'playing'
   const contentTint = viewAlbum ? (albumTint ?? viewAlbumFallbackTint) : null
+  const deviceProgressVisible = scanProgress != null || syncProgress != null
 
   useEffect(() => {
     sidebarWidthRef.current = sidebarWidth
@@ -162,10 +296,37 @@ export default function App() {
     return () => window.clearTimeout(timeout)
   }, [isPlayerPaneOpen, playerPaneVisible])
 
+  useEffect(() => {
+    if (showLyricsSidePane) {
+      setLyricsSidePaneVisible(true)
+      setLyricsSidePaneClosing(false)
+      return
+    }
+
+    if (!lyricsSidePaneVisible) return
+
+    setLyricsSidePaneClosing(true)
+    const timeout = window.setTimeout(() => {
+      setLyricsSidePaneVisible(false)
+      setLyricsSidePaneClosing(false)
+    }, LYRICS_SIDE_PANE_EXIT_MS)
+
+    return () => window.clearTimeout(timeout)
+  }, [showLyricsSidePane, lyricsSidePaneVisible])
+
+  useEffect(() => {
+    if (!isPlayerPaneOpen && lyricsSidePaneOpen) setLyricsSidePaneOpen(false)
+  }, [isPlayerPaneOpen, lyricsSidePaneOpen])
+
   // Kick off the first library load when the renderer is ready.
   useEffect(() => {
     if (!loaded) refresh()
   }, [loaded, refresh])
+
+  useEffect(() => {
+    void loadPendingDeviceJournals()
+    void refreshDeviceVolumes()
+  }, [loadPendingDeviceJournals, refreshDeviceVolumes])
 
   useEffect(() => installAutoHideScrollbars(), [])
 
@@ -305,6 +466,8 @@ export default function App() {
       case 'playlist':  return 'pl-' + view.playlist.id
       case 'artist':    return 'ar-' + view.artist.id
       case 'favoriteTracks': return 'pfavorites'
+      case 'devices': return 'devices'
+      case 'device': return `dev-${view.deviceId}-${view.section}`
       default:          return null
     }
   })()
@@ -387,6 +550,12 @@ export default function App() {
         return <SettingsView tweak={tweak} setTweak={setTweak} />
       case 'import':
         return <ImportView />
+      case 'devices':
+        return <DevicesView />
+      case 'device':
+        return view.section === 'dashboard'
+          ? <DevicesView deviceId={view.deviceId} />
+          : <DeviceLibraryView deviceId={view.deviceId} section={view.section} />
       case 'genres':
         return <GenresView onSelectAlbum={al => navigate({ kind: 'album', album: al })} />
       default:
@@ -423,7 +592,7 @@ export default function App() {
             />
           )}
 
-          <div className={`main-area ${sidebarOpen ? 'with-sidebar' : 'without-sidebar'} ${bottomPlayerVisible ? 'with-floating-player' : ''}`}>
+          <div className={`main-area ${sidebarOpen ? 'with-sidebar' : 'without-sidebar'} ${bottomPlayerVisible ? 'with-floating-player' : ''} ${deviceProgressVisible ? 'with-device-sync' : ''}`}>
             <Toolbar
               view={view}
               history={history}
@@ -446,15 +615,35 @@ export default function App() {
             >
               {renderContent()}
             </div>
+            <DeviceSyncStatusBar withFloatingPlayer={bottomPlayerVisible} />
+            <DeviceVolumePrompt
+              defaultArtworkMaxEdge={tweak.deviceArtworkMaxEdge}
+              onOpenDevice={deviceId => navigate({ kind: 'device', deviceId, section: 'dashboard' })}
+            />
           </div>
 
           {playerPaneVisible && (
             <PlayerPane
               isOpen={isPlayerPaneOpen}
-              onExpand={() => setExpanded(true)}
-              onCollapse={() => setPlayerPaneOpen(false)}
+              onExpand={() => {
+                setLyricsSidePaneOpen(false)
+                setExpanded(true)
+              }}
+              onCollapse={() => {
+                setLyricsSidePaneOpen(false)
+                setPlayerPaneOpen(false)
+              }}
+              lyricsSidePaneOpen={showLyricsSidePane}
+              onToggleLyricsSidePane={() => setLyricsSidePaneOpen(open => !open)}
               onOpenAlbum={album => navigate({ kind: 'album', album })}
               onOpenArtist={artist => navigate({ kind: 'artist', artist })}
+            />
+          )}
+
+          {lyricsSidePaneVisible && (
+            <LyricsSidePane
+              closing={lyricsSidePaneClosing || !showLyricsSidePane}
+              onClose={() => setLyricsSidePaneOpen(false)}
             />
           )}
 
@@ -474,6 +663,8 @@ export default function App() {
         {expanded && nowTrack && (
           <NowPlayingFull onCollapse={() => setExpanded(false)} />
         )}
+
+        <LyricsCandidates />
       </div>
     </div>
   )

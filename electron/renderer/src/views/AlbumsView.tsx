@@ -4,7 +4,7 @@ import type { Album } from '@shared/types/library'
 import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
 import { ListPrefsMenu } from '@renderer/components/ListPrefsMenu'
-import { useAlbums } from '@renderer/stores/libraryStore'
+import { useVisibleAlbums } from '@renderer/stores/libraryStore'
 import { useListPrefs } from '@renderer/stores/settingsStore'
 import { createListPrefsDefaults, albumMatchesQuery, sortAlbums } from '@renderer/utils/listSort'
 import { useQueueStore } from '@renderer/stores/queueStore'
@@ -30,7 +30,7 @@ export function AlbumsView({
   onSelect?: (al: Album) => void
   mode?: AlbumsViewMode
 }) {
-  const albums = useAlbums()
+  const albums = useVisibleAlbums()
   const [prefs, setPrefs] = useListPrefs('albums')
   const defaults = useMemo(() => createListPrefsDefaults(), [])
   const playNow = useQueueStore(s => s.playNow)

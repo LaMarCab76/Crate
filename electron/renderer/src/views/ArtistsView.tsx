@@ -6,7 +6,7 @@ import { Icon } from '@renderer/components/Icon'
 import { ListPrefsMenu } from '@renderer/components/ListPrefsMenu'
 import { useListPrefs } from '@renderer/stores/settingsStore'
 import { createListPrefsDefaults, sortArtists } from '@renderer/utils/listSort'
-import { toggleArtistFavorite, useArtists } from '@renderer/stores/libraryStore'
+import { toggleArtistFavorite, useVisibleArtists } from '@renderer/stores/libraryStore'
 
 const ARTISTS_SORT_OPTIONS: Array<{ value: ArtistsSortBy, label: string }> = [
   { value: 'name', label: 'Nombre' },
@@ -20,7 +20,7 @@ function sortArtistsLabel(sortBy: ArtistsSortBy): string {
 }
 
 export function ArtistsView({ onSelect }: { onSelect?: (ar: Artist) => void }) {
-  const all = useArtists()
+  const all = useVisibleArtists()
   const [prefs, setPrefs] = useListPrefs('artists')
   const defaults = useMemo(() => createListPrefsDefaults(), [])
 

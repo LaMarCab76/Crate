@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react'
 import { Icon } from '@renderer/components/Icon'
+import { MetadataCompletionModal } from '@renderer/components/MetadataCompletionModal'
 import { TrackTable } from '@renderer/components/TrackTable'
 import { ListPrefsMenu } from '@renderer/components/ListPrefsMenu'
 import { useListPrefs } from '@renderer/stores/settingsStore'
 import { createListPrefsDefaults, trackMatchesQuery, type LibraryTrackSortBy, sortTracks } from '@renderer/utils/listSort'
 import { fmtTotal } from '@renderer/utils/format'
-import { useLibraryStore, useTracks } from '@renderer/stores/libraryStore'
+import { useLibraryStore, useMetadataCompletionPrompt, useVisibleTracks } from '@renderer/stores/libraryStore'
 
 function EmptyState() {
   const pickFolder = useLibraryStore(s => s.pickFolder)
@@ -67,7 +68,10 @@ const libraryLabel = (sortBy: LibraryTrackSortBy): string =>
   LIBRARY_SORT_OPTIONS.find(o => o.value === sortBy)?.label ?? sortBy
 
 export function LibraryView() {
-  const tracks = useTracks()
+  const tracks = useVisibleTracks()
+  const metadataPrompt = useMetadataCompletionPrompt()
+  const dismissMetadataPrompt = useLibraryStore(s => s.dismissMetadataCompletionPrompt)
+  const [metadataModalOpen, setMetadataModalOpen] = useState(false)
   const [prefs, setPrefs] = useListPrefs('library')
   const [defaults] = useState(() => createListPrefsDefaults())
   const visibleTracks = useMemo(() => {
@@ -161,7 +165,28 @@ export function LibraryView() {
           </ListPrefsMenu>
         </div>
       </div>
+      {metadataPrompt && (
+        <div className="metadata-import-banner">
+          <div className="metadata-import-icon"><Icon name="sparkle" size={16} /></div>
+          <div className="metadata-import-main">
+            <strong>Metadatos incompletos detectados</strong>
+            <span>{metadataPrompt.trackIds.length} archivos recientes tienen campos faltantes.</span>
+          </div>
+          <button type="button" className="btn sm" onClick={() => setMetadataModalOpen(true)}>
+            Revisar
+          </button>
+          <button type="button" className="tb-icon-btn" title="Descartar" onClick={dismissMetadataPrompt}>
+            <Icon name="close" size={13} />
+          </button>
+        </div>
+      )}
       <TrackTable tracks={visibleTracks} showArt />
+      {metadataModalOpen && metadataPrompt && (
+        <MetadataCompletionModal
+          trackIds={metadataPrompt.trackIds}
+          onClose={() => setMetadataModalOpen(false)}
+        />
+      )}
     </>
   )
 }

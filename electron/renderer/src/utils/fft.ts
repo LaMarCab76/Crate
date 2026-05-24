@@ -93,7 +93,7 @@ function syncFftMode(): void {
 // source bins are already log-spaced over the original 1024 raw FFT bins, so
 // slicing them into N contiguous groups gives a roughly log-aligned mapping
 // onto the EQ band centers.
-export function binsToBands(bins: number[], bandCount: number = EQ_BAND_COUNT, out?: Float32Array): Float32Array {
+export function binsToBands(bins: ArrayLike<number>, bandCount: number = EQ_BAND_COUNT, out?: Float32Array): Float32Array {
   const target = out && out.length === bandCount ? out : new Float32Array(bandCount)
   const len = bins.length
   if (len === 0) {

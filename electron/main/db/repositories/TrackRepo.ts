@@ -24,8 +24,10 @@ export class TrackRepo {
   private db: BetterSqliteDatabase
   private stmtById: Statement
   private stmtByPath: Statement
+  private stmtByFolder: Statement
   private stmtDeleteByPath: Statement
   private stmtDeleteById: Statement
+  private stmtDeleteByFolder: Statement
   private stmtCountByFolder: Statement
   private stmtUpdatePlays: Statement
   private stmtSetFavorite: Statement
@@ -38,8 +40,14 @@ export class TrackRepo {
     this.db = db
     this.stmtById = db.prepare<[number], DbTrack>(`SELECT ${ALL_COLUMNS} FROM tracks WHERE id = ?`)
     this.stmtByPath = db.prepare<[string], DbTrack>(`SELECT ${ALL_COLUMNS} FROM tracks WHERE path = ?`)
+    this.stmtByFolder = db.prepare<[number], DbTrack>(`
+      SELECT ${ALL_COLUMNS} FROM tracks
+      WHERE folder_id = ?
+      ORDER BY path COLLATE NOCASE ASC
+    `)
     this.stmtDeleteByPath = db.prepare(`DELETE FROM tracks WHERE path = ?`)
     this.stmtDeleteById = db.prepare(`DELETE FROM tracks WHERE id = ?`)
+    this.stmtDeleteByFolder = db.prepare(`DELETE FROM tracks WHERE folder_id = ?`)
     this.stmtCountByFolder = db.prepare<[number], { c: number }>(`SELECT COUNT(*) as c FROM tracks WHERE folder_id = ?`)
     this.stmtUpdatePlays = db.prepare(`
       UPDATE tracks
@@ -123,12 +131,29 @@ export class TrackRepo {
     return this.stmtByPath.get(path) as DbTrack | undefined
   }
 
+  getByFolder(folderId: number): DbTrack[] {
+    return this.stmtByFolder.all(folderId) as DbTrack[]
+  }
+
   deleteByPath(path: string): void {
     this.stmtDeleteByPath.run(path)
   }
 
   deleteById(id: number): void {
     this.stmtDeleteById.run(id)
+  }
+
+  deleteByIds(ids: number[]): void {
+    const uniqueIds = [...new Set(ids.filter(id => Number.isInteger(id) && id > 0))]
+    if (uniqueIds.length === 0) return
+    const tx = this.db.transaction((batch: number[]) => {
+      for (const id of batch) this.stmtDeleteById.run(id)
+    })
+    tx(uniqueIds)
+  }
+
+  deleteByFolder(folderId: number): void {
+    this.stmtDeleteByFolder.run(folderId)
   }
 
   countByFolder(folderId: number): number {
@@ -227,7 +252,12 @@ export class TrackRepo {
   }
 
   getAll(opts: ListOpts = {}): DbTrack[] {
-    const { limit, offset = 0, orderBy = 'date_added_desc' } = opts
+    const { orderBy = 'date_added_desc' } = opts
+    // opts crosses the IPC boundary, so never trust limit/offset: coerce to safe
+    // integers. A non-positive/garbage limit becomes -1 (SQLite idiom for "no
+    // upper bound") so it behaves like the unlimited library view.
+    const limit = Number.isInteger(opts.limit) && (opts.limit as number) > 0 ? (opts.limit as number) : -1
+    const offset = Number.isInteger(opts.offset) && (opts.offset as number) > 0 ? (opts.offset as number) : 0
     const orderClause = (() => {
       switch (orderBy) {
         case 'date_added_asc':   return 'date_added ASC'
@@ -239,14 +269,15 @@ export class TrackRepo {
       }
     })()
 
-    const key = `${orderClause}|${limit ?? 'all'}|${offset}`
-    let stmt = this.listStmtCache.get(key)
+    // Cache one prepared statement per ORDER BY (5 max). limit/offset are bound at
+    // execution, so the cache can't grow unbounded and the values can't be injected
+    // into the SQL string.
+    let stmt = this.listStmtCache.get(orderClause)
     if (!stmt) {
-      const limitClause = limit != null ? `LIMIT ${limit} OFFSET ${offset}` : ''
-      stmt = this.db.prepare(`SELECT ${ALL_COLUMNS} FROM tracks ORDER BY ${orderClause} ${limitClause}`)
-      this.listStmtCache.set(key, stmt)
+      stmt = this.db.prepare(`SELECT ${ALL_COLUMNS} FROM tracks ORDER BY ${orderClause} LIMIT ? OFFSET ?`)
+      this.listStmtCache.set(orderClause, stmt)
     }
-    return stmt.all() as DbTrack[]
+    return stmt.all(limit, offset) as DbTrack[]
   }
 
   count(): number {

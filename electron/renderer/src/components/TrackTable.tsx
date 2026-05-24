@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
 import type { Track } from '@shared/types/library'
+import { useVirtualRows } from '@renderer/utils/useVirtualRows'
 import { Artwork } from './Artwork'
 import { CodecStrip } from './CodecStrip'
 import { Icon } from './Icon'
@@ -41,6 +42,12 @@ export function TrackTable({
   onRefreshMetadata,
 }: TrackTableProps) {
   const albums = useAlbums()
+  // O(1) album lookups instead of an albums.find() scan per rendered row.
+  const albumById = useMemo(() => {
+    const m = new Map<string, (typeof albums)[number]>()
+    for (const a of albums) m.set(a.id, a)
+    return m
+  }, [albums])
   const playNow = useQueueStore(s => s.playNow)
   const togglePlay = useQueueStore(s => s.togglePlay)
   const currentTrack = usePlaybackStore(s => s.currentTrack)
@@ -50,10 +57,7 @@ export function TrackTable({
   const playing = status === 'playing'
   const showRefreshAction = onRefreshMetadata != null
   const trackActions = useTrackActions()
-  const playingAlbum = useMemo(
-    () => albums.find(a => a.id === currentTrack?.albumId),
-    [albums, currentTrack?.albumId],
-  )
+  const playingAlbum = currentTrack ? albumById.get(currentTrack.albumId) : undefined
   const playingArtworkPath = currentTrack?.artworkPath ?? playingAlbum?.artworkPath ?? null
   const playingFallbackTint = playingAlbum?.palette[1] ?? 'var(--color-playing)'
   const [playingTint, setPlayingTint] = useState<string | null>(null)
@@ -74,6 +78,20 @@ export function TrackTable({
     return () => { cancelled = true }
   }, [playingArtworkPath])
 
+  // Row virtualization. table-layout is fixed and every row is the same height, so
+  // we measure one real row and replace off-screen rows with two spacer rows —
+  // keeping the scrollbar geometry and the sticky <thead> intact.
+  const [measuredRowH, setMeasuredRowH] = useState(0)
+  const rowHeight = measuredRowH || (compact ? 40 : 56)
+  const { setBody, window: vwin } = useVirtualRows(tracks.length, rowHeight)
+  const measureRow = useCallback((el: HTMLTableRowElement | null) => {
+    if (!el) return
+    const h = el.offsetHeight
+    if (h > 0) setMeasuredRowH(prev => (prev === h ? prev : h))
+  }, [])
+  const colCount =
+    3 + [showArt, showAlbum, showPath, showPlays, showFmt, showSize, showRefreshAction].filter(Boolean).length
+
   return (
     <>
       <table className={`tbl${compact ? ' compact' : ''}`}>
@@ -91,14 +109,21 @@ export function TrackTable({
             {showRefreshAction && <th className="actions" />}
           </tr>
         </thead>
-        <tbody>
-          {tracks.map((t, i) => {
+        <tbody ref={setBody}>
+          {vwin.padTop > 0 && (
+            <tr aria-hidden style={{ height: vwin.padTop, background: 'none' }}>
+              <td colSpan={colCount} style={{ height: vwin.padTop, padding: 0, border: 0 }} />
+            </tr>
+          )}
+          {tracks.slice(vwin.start, vwin.end).map((t, k) => {
+            const i = vwin.start + k
             const isP = t.id === playingId
-            const album = showArt ? albums.find(a => a.id === t.albumId) : undefined
+            const album = showArt ? albumById.get(t.albumId) : undefined
             const pathValue = t.path ?? ''
             const canRefresh = t.dbId != null
             return (
               <tr
+                ref={k === 0 ? measureRow : undefined}
                 key={t.id}
                 className={isP ? 'playing' : ''}
                 style={isP ? playingRowStyle : undefined}
@@ -186,6 +211,11 @@ export function TrackTable({
               </tr>
             )
           })}
+          {vwin.padBottom > 0 && (
+            <tr aria-hidden style={{ height: vwin.padBottom, background: 'none' }}>
+              <td colSpan={colCount} style={{ height: vwin.padBottom, padding: 0, border: 0 }} />
+            </tr>
+          )}
         </tbody>
       </table>
       {trackActions.elements}

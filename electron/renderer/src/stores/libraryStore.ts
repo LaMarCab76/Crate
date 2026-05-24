@@ -8,6 +8,10 @@ import type { Album, Artist, Pattern, Playlist, Track } from '@shared/types/libr
 import type { DbFolder, DbTrack } from '@shared/types/db'
 import type {
   ImportProgressEvent,
+  MetadataCompletionApplyRequest,
+  MetadataCompletionApplyResult,
+  MetadataCompletionPreview,
+  MetadataCompletionTargetsPayload,
   TrackMetadataUpdatePayload,
   TrashTracksResult,
 } from '@shared/types/ipc-contract'
@@ -120,6 +124,32 @@ function latestTrackAddedDateInAlbum(tracks: Track[]): string {
   }, '')
 }
 
+// The active library is the folder the user is scoping the views to (null = all
+// libraries). It's a UI preference, persisted locally so it sticks across reopen.
+const ACTIVE_LIBRARY_STORAGE_KEY = 'crate.activeLibraryId'
+
+function loadActiveLibraryId(): number | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(ACTIVE_LIBRARY_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = Number.parseInt(raw, 10)
+    return Number.isFinite(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function persistActiveLibraryId(id: number | null): void {
+  if (typeof window === 'undefined') return
+  try {
+    if (id == null) window.localStorage.removeItem(ACTIVE_LIBRARY_STORAGE_KEY)
+    else window.localStorage.setItem(ACTIVE_LIBRARY_STORAGE_KEY, String(id))
+  } catch {
+    /* ignore */
+  }
+}
+
 interface LibraryState {
   tracks: Track[]
   albums: Album[]
@@ -128,14 +158,22 @@ interface LibraryState {
   playlists: Playlist[]
   folders: DbFolder[]
   trackCount: number
+  activeLibraryId: number | null
   loaded: boolean
   loading: boolean
   error: string | null
   importing: ImportProgressEvent | null
+  metadataCompletionPrompt: {
+    folderId: number
+    totalCandidates: number
+    trackIds: number[]
+  } | null
   refresh(): Promise<void>
   addFolder(path: string): Promise<void>
   removeFolder(id: number): Promise<void>
   pickFolder(): Promise<string | null>
+  setActiveLibrary(id: number | null): void
+  dismissMetadataCompletionPrompt(): void
 }
 
 export const useLibraryStore = create<LibraryState>((set, get) => ({
@@ -146,10 +184,12 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   playlists: [],
   folders: [],
   trackCount: 0,
+  activeLibraryId: loadActiveLibraryId(),
   loaded: false,
   loading: false,
   error: null,
   importing: null,
+  metadataCompletionPrompt: null,
 
   async refresh() {
     if (get().loading) return
@@ -253,6 +293,14 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         return dbToUiPlaylist(p, playlistTracks)
       })
 
+      // Drop the active library scope if its folder was removed since last load.
+      const currentActive = get().activeLibraryId
+      const activeLibraryId =
+        currentActive != null && dbFolders.some(f => f.id === currentActive)
+          ? currentActive
+          : null
+      if (activeLibraryId !== currentActive) persistActiveLibraryId(activeLibraryId)
+
       set({
         tracks: orderedTracks,
         albums,
@@ -261,6 +309,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         playlists,
         folders: dbFolders,
         trackCount: count,
+        activeLibraryId,
         loaded: true,
         loading: false,
         error: null,
@@ -283,6 +332,15 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   async pickFolder() {
     const result = await window.api.library.pickFolder()
     return result.canceled ? null : result.path
+  },
+
+  setActiveLibrary(id) {
+    persistActiveLibraryId(id)
+    set({ activeLibraryId: id })
+  },
+
+  dismissMetadataCompletionPrompt() {
+    set({ metadataCompletionPrompt: null })
   },
 }))
 
@@ -354,6 +412,21 @@ export async function toggleTrackFavorite(trackDbId: number, favorite: boolean):
 
 export async function refreshTrackMetadata(trackDbId: number): Promise<void> {
   await window.api.tracks.refreshMetadata(trackDbId)
+}
+
+export async function findMetadataCompletionTargets(
+  folderId?: number,
+  limit?: number,
+): Promise<MetadataCompletionTargetsPayload> {
+  return window.api.tracks.findMetadataCompletionTargets(folderId, limit)
+}
+
+export async function previewMetadataCompletion(trackDbIds: number[]): Promise<MetadataCompletionPreview> {
+  const ids = uniqueTrackDbIds(trackDbIds)
+  if (ids.length === 0) {
+    return { previewId: '', createdAt: Date.now(), candidates: [] }
+  }
+  return window.api.tracks.previewMetadataCompletion(ids)
 }
 
 function uniqueTrackDbIds(trackDbIds: number[]): number[] {
@@ -447,6 +520,37 @@ export async function updateTracksMetadata(
   await useLibraryStore.getState().refresh()
 }
 
+export async function applyMetadataCompletions(
+  payload: MetadataCompletionApplyRequest,
+): Promise<MetadataCompletionApplyResult> {
+  const ids = uniqueTrackDbIds(payload.selections.map(selection => selection.trackId))
+  if (ids.length === 0) return { applied: 0, failed: 0, results: [] }
+  await stopPlaybackIfCurrentTrack(ids)
+  const result = await window.api.tracks.applyMetadataCompletions(payload)
+  await useLibraryStore.getState().refresh()
+  if (result.applied > 0) {
+    useLibraryStore.setState({ metadataCompletionPrompt: null })
+  }
+  return result
+}
+
+async function refreshMetadataCompletionPrompt(folderId: number): Promise<void> {
+  try {
+    const result = await window.api.tracks.findMetadataCompletionTargets(folderId, 24)
+    useLibraryStore.setState({
+      metadataCompletionPrompt: result.targets.length > 0
+        ? {
+            folderId,
+            totalCandidates: result.totalCandidates,
+            trackIds: result.targets.map(target => target.trackId),
+          }
+        : null,
+    })
+  } catch {
+    useLibraryStore.setState({ metadataCompletionPrompt: null })
+  }
+}
+
 export async function trashTracks(trackDbIds: number[]): Promise<TrashTracksResult> {
   const ids = uniqueTrackDbIds(trackDbIds)
   if (ids.length === 0) return { trashedTrackIds: [], failed: [] }
@@ -472,9 +576,10 @@ if (typeof window !== 'undefined' && window.api?.library) {
   window.api.library.onImportProgress(payload => {
     useLibraryStore.setState({ importing: payload })
   })
-  window.api.library.onImportComplete(() => {
+  window.api.library.onImportComplete(payload => {
     useLibraryStore.setState({ importing: null })
     scheduleRefresh()
+    void refreshMetadataCompletionPrompt(payload.folderId)
   })
   window.api.library.onLibraryChanged(scheduleRefresh)
 }
@@ -487,6 +592,41 @@ export function useAlbums(): Album[] {
 }
 export function useArtists(): Artist[] {
   return useLibraryStore(s => s.artists)
+}
+
+// Library-scoped views. When a library is active, only the tracks/albums/artists
+// whose tracks live in that folder are returned (null = every library).
+export function useActiveLibraryId(): number | null {
+  return useLibraryStore(s => s.activeLibraryId)
+}
+export function useVisibleTracks(): Track[] {
+  return useLibraryStore(
+    useShallow(s =>
+      s.activeLibraryId == null
+        ? s.tracks
+        : s.tracks.filter(t => t.folderId === s.activeLibraryId),
+    ),
+  )
+}
+export function useVisibleAlbums(): Album[] {
+  return useLibraryStore(
+    useShallow(s =>
+      s.activeLibraryId == null
+        ? s.albums
+        : s.albums.filter(a => a.tracks.some(t => t.folderId === s.activeLibraryId)),
+    ),
+  )
+}
+export function useVisibleArtists(): Artist[] {
+  return useLibraryStore(
+    useShallow(s =>
+      s.activeLibraryId == null
+        ? s.artists
+        : s.artists.filter(ar =>
+            ar.albums.some(al => al.tracks.some(t => t.folderId === s.activeLibraryId)),
+          ),
+    ),
+  )
 }
 
 export function useFavoriteArtists(): Artist[] {
@@ -516,6 +656,10 @@ export function useLibraryLoaded(): boolean {
 }
 export function useImporting(): ImportProgressEvent | null {
   return useLibraryStore(s => s.importing)
+}
+
+export function useMetadataCompletionPrompt(): LibraryState['metadataCompletionPrompt'] {
+  return useLibraryStore(s => s.metadataCompletionPrompt)
 }
 
 export function useAlbumByUiId(uiId: string | undefined): Album | undefined {

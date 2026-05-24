@@ -1,5 +1,20 @@
-import { File } from 'node-taglib-sharp'
+import { accessSync, constants as fsConstants, copyFileSync, existsSync } from 'node:fs'
+import { ByteVector, File, Picture, PictureType, type IPicture } from 'node-taglib-sharp'
 import type { TrackMetadataUpdatePayload } from '@shared/types/ipc-contract'
+
+export interface MetadataArtworkPayload {
+  data: Buffer
+  mimeType: string
+}
+
+export interface MetadataWriteOptions {
+  artwork?: MetadataArtworkPayload | null
+  createBackup?: boolean
+}
+
+export interface MetadataWriteResult {
+  backupPath: string | null
+}
 
 function cleanString(value: string | null | undefined): string | undefined {
   if (value == null) return undefined
@@ -36,7 +51,48 @@ function normalizedPosition(value: number | null | undefined, label: string): nu
   return value
 }
 
-export function writeTrackMetadata(filePath: string, payload: TrackMetadataUpdatePayload): void {
+function extensionForMime(mimeType: string): string {
+  const cleaned = mimeType.toLowerCase()
+  if (cleaned === 'image/png') return 'png'
+  if (cleaned === 'image/webp') return 'webp'
+  return 'jpg'
+}
+
+function backupOnce(path: string): string {
+  const backupPath = `${path}.cratebak`
+  if (!existsSync(backupPath)) copyFileSync(path, backupPath)
+  return backupPath
+}
+
+function ensureWritable(path: string): void {
+  accessSync(path, fsConstants.W_OK)
+}
+
+function artworkPicture(artwork: MetadataArtworkPayload): IPicture {
+  const extension = extensionForMime(artwork.mimeType)
+  const picture = Picture.fromFullData(
+    ByteVector.fromByteArray(artwork.data),
+    PictureType.FrontCover,
+    artwork.mimeType,
+    'cover',
+  )
+  picture.filename = `cover.${extension}`
+  return picture
+}
+
+function hasTextPayload(payload: TrackMetadataUpdatePayload): boolean {
+  return Object.values(payload).some(value => value !== undefined)
+}
+
+export function writeTrackMetadata(
+  filePath: string,
+  payload: TrackMetadataUpdatePayload,
+  options: MetadataWriteOptions = {},
+): MetadataWriteResult {
+  if (options.createBackup) ensureWritable(filePath)
+
+  const shouldMutate = hasTextPayload(payload) || options.artwork != null
+  const backupPath = shouldMutate && options.createBackup ? backupOnce(filePath) : null
   const file = File.createFromPath(filePath)
   try {
     if (file.isPossiblyCorrupt) {
@@ -70,9 +126,19 @@ export function writeTrackMetadata(filePath: string, payload: TrackMetadataUpdat
     if (trackCount !== undefined) tag.trackCount = trackCount
     if (disc !== undefined) tag.disc = disc
     if (discCount !== undefined) tag.discCount = discCount
+    if (options.artwork) {
+      const nextFront = artworkPicture(options.artwork)
+      const existing = tag.pictures ?? []
+      tag.pictures = [
+        nextFront,
+        ...existing.filter(picture => picture.type !== PictureType.FrontCover),
+      ]
+    }
 
-    file.save()
+    if (shouldMutate) file.save()
   } finally {
     file.dispose()
   }
+
+  return { backupPath }
 }

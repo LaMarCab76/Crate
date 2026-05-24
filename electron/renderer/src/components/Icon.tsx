@@ -27,6 +27,9 @@ const ICONS: Record<string, ReactNode> = {
   heartF: <path d="M10 16s-5.5-3-5.5-7.5A2.75 2.75 0 0110 6a2.75 2.75 0 015.5 2.5C15.5 13 10 16 10 16z" fill="currentColor" stroke="none" />,
   recent: <g><circle cx="10" cy="10" r="6.5" /><path d="M10 6v4l2.5 1.5" /></g>,
   download:<g><path d="M10 3v9" /><path d="M6 8l4 4 4-4" /><path d="M4 16h12" /></g>,
+  upload: <g><path d="M10 17V8" /><path d="M6 12l4-4 4 4" /><path d="M4 4h12" /></g>,
+  external:<g><path d="M8 5H5.5A1.5 1.5 0 004 6.5v8A1.5 1.5 0 005.5 16h8a1.5 1.5 0 001.5-1.5V12" /><path d="M11 4h5v5" /><path d="M16 4l-7 7" /></g>,
+  cloud:  <g><path d="M7 15H6a3 3 0 010-6 4.8 4.8 0 019.2-1.6A3.7 3.7 0 1115 15h-2" /><path d="M10 8v8M7 13l3 3 3-3" strokeLinecap="round" strokeLinejoin="round" /></g>,
   folder: <path d="M3 6a1 1 0 011-1h4l1.5 1.5H16a1 1 0 011 1V15a1 1 0 01-1 1H4a1 1 0 01-1-1V6z" />,
   computer: <g><rect x="3" y="4" width="14" height="9" rx="1.5" /><path d="M7 16h6M9 13v3M11 13v3" /></g>,
   airplay: <g><path d="M5 13a6 6 0 010-6m10 0a6 6 0 010 6" /><path d="M7 11a4 4 0 010-4m6 0a4 4 0 010 4" /><path d="M10 11l3 5H7l3-5z" fill="currentColor" stroke="none" /></g>,
@@ -57,6 +60,11 @@ const ICONS: Record<string, ReactNode> = {
   note:   <g><path d="M7 4v9.5" /><circle cx="5.5" cy="14" r="1.8" fill="currentColor" stroke="none" /><path d="M7 4l8-1.5v9.5" /><circle cx="13.5" cy="12.5" r="1.8" fill="currentColor" stroke="none" /></g>,
   check:  <path d="M4 10l4 4 8-9" strokeLinecap="round" strokeLinejoin="round" />,
   drop:   <g><path d="M10 17v-9M6 12l4 5 4-5M5 4h10" strokeLinecap="round" strokeLinejoin="round"/></g>,
+  lyrics: <g><rect x="3" y="4" width="14" height="12" rx="2" /><path d="M6 8h8M6 11h5" strokeLinecap="round" /></g>,
+  embed:  <g><rect x="4" y="3" width="12" height="14" rx="1.5" /><path d="M10 13V7M7.5 10.5L10 13l2.5-2.5" strokeLinecap="round" strokeLinejoin="round" /></g>,
+  save:   <g><path d="M4 4.5A1.5 1.5 0 015.5 3h8L17 6.5v9A1.5 1.5 0 0115.5 17h-11A1.5 1.5 0 013 15.5v-11z" /><rect x="6.5" y="3.5" width="5" height="3.5" rx="0.5" /><rect x="6" y="10" width="8" height="4" rx="0.5" /></g>,
+  device: <g><rect x="6" y="2.5" width="8" height="15" rx="1.6" /><path d="M8.5 5h3M9 15h2" strokeLinecap="round" /><circle cx="10" cy="10" r="2.3" /></g>,
+  sync:   <g><path d="M16 6V3M16 6h-3" strokeLinecap="round" /><path d="M16 6a6.8 6.8 0 00-11.3 2.7" /><path d="M4 14v3M4 14h3" strokeLinecap="round" /><path d="M4 14a6.8 6.8 0 0011.3-2.7" /></g>,
 }
 
 export type IconName = keyof typeof ICONS | string

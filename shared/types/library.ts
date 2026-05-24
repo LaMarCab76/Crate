@@ -11,6 +11,7 @@ export type Pattern = 'circles' | 'sun' | 'rays' | 'grid' | 'wave' | 'stripes' |
 export interface Track {
   id: string
   dbId?: number          // numeric primary key in the SQLite tracks table
+  folderId?: number      // source library (folders.id) this track belongs to
   path?: string          // filesystem path for the audio engine to load
   filename?: string
   t: string              // title

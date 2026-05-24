@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { Icon } from '@renderer/components/Icon'
-import { useFolders, useImporting, useLibraryStore } from '@renderer/stores/libraryStore'
+import { MetadataCompletionModal } from '@renderer/components/MetadataCompletionModal'
+import { useFolders, useImporting, useLibraryStore, useMetadataCompletionPrompt } from '@renderer/stores/libraryStore'
 
 function ProgressBar({ value, max }: { value: number; max: number }) {
   const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0
@@ -30,9 +32,12 @@ function ProgressBar({ value, max }: { value: number; max: number }) {
 export function ImportView() {
   const folders = useFolders()
   const importing = useImporting()
+  const metadataPrompt = useMetadataCompletionPrompt()
+  const dismissMetadataPrompt = useLibraryStore(s => s.dismissMetadataCompletionPrompt)
   const pickFolder = useLibraryStore(s => s.pickFolder)
   const addFolder = useLibraryStore(s => s.addFolder)
   const removeFolder = useLibraryStore(s => s.removeFolder)
+  const [metadataModalOpen, setMetadataModalOpen] = useState(false)
   const pickAndAdd = async () => {
     const picked = await pickFolder()
     if (picked) await addFolder(picked)
@@ -84,6 +89,22 @@ export function ImportView() {
               {importing.total > 0 ? `${Math.round((importing.scanned / importing.total) * 100)}%` : '…'}
             </span>
           </div>
+        </div>
+      )}
+
+      {metadataPrompt && (
+        <div className="metadata-import-banner">
+          <div className="metadata-import-icon"><Icon name="sparkle" size={16} /></div>
+          <div className="metadata-import-main">
+            <strong>Metadatos incompletos detectados</strong>
+            <span>{metadataPrompt.trackIds.length} archivos tienen campos faltantes después de la importación.</span>
+          </div>
+          <button type="button" className="btn sm" onClick={() => setMetadataModalOpen(true)}>
+            Revisar
+          </button>
+          <button type="button" className="tb-icon-btn" title="Descartar" onClick={dismissMetadataPrompt}>
+            <Icon name="close" size={13} />
+          </button>
         </div>
       )}
 
@@ -143,6 +164,13 @@ export function ImportView() {
           </div>
         </div>
       </div>
+
+      {metadataModalOpen && metadataPrompt && (
+        <MetadataCompletionModal
+          trackIds={metadataPrompt.trackIds}
+          onClose={() => setMetadataModalOpen(false)}
+        />
+      )}
     </div>
   )
 }

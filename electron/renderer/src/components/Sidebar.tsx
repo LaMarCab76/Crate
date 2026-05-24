@@ -1,9 +1,18 @@
-import type { CSSProperties } from 'react'
+import { useEffect, type CSSProperties } from 'react'
 import type { Artist, Playlist } from '@shared/types/library'
 import { Artwork } from './Artwork'
 import { Icon, type IconName } from './Icon'
 import type { View } from '@renderer/App'
-import { useFavoriteArtists, usePlaylists, useTrackCount } from '@renderer/stores/libraryStore'
+import { useDeviceStore } from '@renderer/stores/deviceStore'
+import {
+  useActiveLibraryId,
+  useFavoriteArtists,
+  useFolders,
+  useLibraryStore,
+  usePlaylists,
+  useTrackCount,
+} from '@renderer/stores/libraryStore'
+import { useTweakStore } from '@renderer/stores/settingsStore'
 import crateLogo from '@renderer/assets/crate-logo.png'
 
 interface SidebarProps {
@@ -43,6 +52,38 @@ export function Sidebar({
   const artists = useFavoriteArtists()
   const playlists = usePlaylists()
   const trackCount = useTrackCount()
+  const folders = useFolders()
+  const activeLibraryId = useActiveLibraryId()
+  const setActiveLibrary = useLibraryStore(s => s.setActiveLibrary)
+  const pickFolder = useLibraryStore(s => s.pickFolder)
+  const addFolder = useLibraryStore(s => s.addFolder)
+  const devices = useDeviceStore(s => s.devices)
+  const candidates = useDeviceStore(s => s.candidates)
+  const loadDevices = useDeviceStore(s => s.load)
+  const refreshVolumes = useDeviceStore(s => s.refreshVolumes)
+  const connectDevice = useDeviceStore(s => s.connect)
+  const defaultArtworkMaxEdge = useTweakStore(s => s.tweak.deviceArtworkMaxEdge)
+
+  useEffect(() => {
+    void loadDevices()
+    void refreshVolumes()
+  }, [loadDevices, refreshVolumes])
+
+  const addLibrary = async () => {
+    const picked = await pickFolder()
+    if (picked) await addFolder(picked)
+  }
+  const addDevice = () => setView({ kind: 'settings' })
+  // Selecting a library scopes every content view to it, then jumps to Songs so
+  // the change is visible immediately.
+  const selectLibrary = (id: number | null) => {
+    setActiveLibrary(id)
+    setView({ kind: 'library' })
+  }
+  const activeCount =
+    activeLibraryId == null
+      ? trackCount
+      : folders.find(f => f.id === activeLibraryId)?.track_count ?? 0
 
   const Item = ({ id, icon, label, badge, onClick }: { id: string; icon: IconName; label: string; badge?: string | number; onClick: () => void }) => (
     <div className={`sb-item ${selectedKey === id ? 'active' : ''}`} onClick={onClick} role="button" tabIndex={0}>
@@ -51,6 +92,15 @@ export function Sidebar({
       {badge != null && <span className="badge">{badge}</span>}
     </div>
   )
+  const DeviceItem = ({ id, icon, label, badge, section }: { id: string; icon: IconName; label: string; badge?: string | number; section: View & { kind: 'device' } }) => (
+    <div className={`sb-item sb-sub-item ${selectedKey === id ? 'active' : ''}`} onClick={() => setView(section)} role="button" tabIndex={0}>
+      <span className="ic"><Icon name={icon} size={13} /></span>
+      <span>{label}</span>
+      {badge != null && <span className="badge">{badge}</span>}
+    </div>
+  )
+  const connectedRoots = new Set(devices.map(device => device.rootPath))
+  const visibleCandidates = candidates.filter(candidate => !connectedRoots.has(candidate.rootPath))
 
   return (
     <div
@@ -74,12 +124,83 @@ export function Sidebar({
           </div>
         </div>
 
+        <SectionLabel label="Libraries" onAdd={addLibrary} title="Add library folder" />
+        <div
+          className={`sb-item ${activeLibraryId == null ? 'active' : ''}`}
+          onClick={() => selectLibrary(null)}
+          role="button"
+          tabIndex={0}
+        >
+          <span className="ic"><Icon name="library" size={14} /></span>
+          <span>Todas las bibliotecas</span>
+          {trackCount > 0 && <span className="badge">{trackCount}</span>}
+        </div>
+        {folders.map(f => (
+          <div
+            key={f.id}
+            className={`sb-item ${activeLibraryId === f.id ? 'active' : ''}`}
+            onClick={() => selectLibrary(f.id)}
+            role="button"
+            tabIndex={0}
+            title={f.path}
+          >
+            <span className="ic"><Icon name="folder" size={14} /></span>
+            <span>{f.name}</span>
+            <span className="badge">{f.track_count}</span>
+          </div>
+        ))}
+
         <SectionLabel label="Library" />
-        <Item id="songs"     icon="song"     label="Songs"           badge={trackCount > 0 ? trackCount : undefined} onClick={() => setView({ kind: 'library' })} />
+        <Item id="songs"     icon="song"     label="Songs"           badge={activeCount > 0 ? activeCount : undefined} onClick={() => setView({ kind: 'library' })} />
         <Item id="albums"    icon="album"    label="Albums"          onClick={() => setView({ kind: 'albums' })} />
         <Item id="artists"   icon="artist"   label="Artists"         onClick={() => setView({ kind: 'artists' })} />
         <Item id="genres"    icon="genre"    label="Genres"          onClick={() => setView({ kind: 'genres' })} />
         <Item id="recent"    icon="recent"   label="Recently Added"  onClick={() => setView({ kind: 'recent' })} />
+
+        <SectionLabel label="Devices" onAdd={addDevice} title="Administrar dispositivos" />
+        {devices.length === 0 && (
+          <Item id="devices" icon="device" label="Ajustes de dispositivos" onClick={() => setView({ kind: 'settings' })} />
+        )}
+        {devices.map(device => (
+          <div className="sb-device-group" key={device.id}>
+            <div
+              className={`sb-item ${selectedKey === `dev-${device.id}-dashboard` ? 'active' : ''}`}
+              onClick={() => setView({ kind: 'device', deviceId: device.id, section: 'dashboard' })}
+              role="button"
+              tabIndex={0}
+              title={device.rootPath}
+            >
+              <span className="ic"><Icon name="device" size={14} /></span>
+              <span>{device.name}</span>
+              <span className={`badge ${device.isAvailable ? 'online' : ''}`}>{device.isAvailable ? 'on' : 'off'}</span>
+            </div>
+            <DeviceItem id={`dev-${device.id}-tracks`} icon="song" label="Temas" badge={device.trackCount || undefined} section={{ kind: 'device', deviceId: device.id, section: 'tracks' }} />
+            <DeviceItem id={`dev-${device.id}-albums`} icon="album" label="Álbumes" section={{ kind: 'device', deviceId: device.id, section: 'albums' }} />
+            <DeviceItem id={`dev-${device.id}-artists`} icon="artist" label="Artistas" section={{ kind: 'device', deviceId: device.id, section: 'artists' }} />
+            <DeviceItem id={`dev-${device.id}-playlists`} icon="queue" label="Playlists" section={{ kind: 'device', deviceId: device.id, section: 'playlists' }} />
+            {device.hasRockbox && (
+              <DeviceItem id={`dev-${device.id}-rockboxThemes`} icon="sparkle" label="Rockbox Themes" section={{ kind: 'device', deviceId: device.id, section: 'rockboxThemes' }} />
+            )}
+          </div>
+        ))}
+        {visibleCandidates.map(candidate => (
+          <div
+            className="sb-item sb-candidate"
+            key={candidate.rootPath}
+            onClick={() => {
+              void connectDevice({ rootPath: candidate.rootPath, artworkMaxEdge: defaultArtworkMaxEdge })
+                .then(device => setView({ kind: 'device', deviceId: device.id, section: 'dashboard' }))
+                .catch(() => undefined)
+            }}
+            role="button"
+            tabIndex={0}
+            title={candidate.rootPath}
+          >
+            <span className="ic"><Icon name="plus" size={13} /></span>
+            <span>{candidate.name}</span>
+            <span className="badge">{candidate.hasRockbox ? 'RB' : 'Crate'}</span>
+          </div>
+        ))}
 
         <SectionLabel label="Playlists" onAdd={() => {}} title="New playlist" />
 

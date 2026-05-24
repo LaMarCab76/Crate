@@ -52,7 +52,14 @@ The UI is a port of the original Claude Design handoff:
 - Procedural SVG album artwork (palette + seed + pattern)
 - Animated equalizer indicator for the currently playing track
 - Full-screen Now Playing with synced lyrics + visualizer
+- Synced lyrics with global and per-track timing offset controls
+- Persistent playback visualization cache with configurable DB quota
+- Filesystem-backed library reconciliation with per-library scan history and
+  configurable retention.
 - Mini player popout
+- Device sync with automatic volume detection, sidebar navigation for mounted
+  DAPs, Rockbox theme listing, drag-and-drop Rockbox theme installs, per-device
+  dashboard/configuration, and global sync progress.
 
 ## Why Electron (this time)
 

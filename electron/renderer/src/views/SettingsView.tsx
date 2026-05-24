@@ -1,14 +1,247 @@
+import { useEffect, useMemo, useState } from 'react'
 import type { PlayerTintSource, Tweak } from '@renderer/stores/settingsStore'
 import { useEqStore } from '@renderer/stores/eqStore'
+import { Icon } from '@renderer/components/Icon'
+import { ModalShell } from '@renderer/components/ModalShell'
+import { useDeviceStore } from '@renderer/stores/deviceStore'
+import { useFolders, useLibraryStore } from '@renderer/stores/libraryStore'
+import { DEVICE_ARTWORK_EDGE_MAX, DEVICE_ARTWORK_EDGE_MIN } from '@shared/constants/device-sync'
 import { EQ_BAND_LABELS, EQ_GAIN_MAX, EQ_GAIN_MIN, EQ_GAIN_STEP } from '@shared/constants/equalizer'
+import { LYRICS_OFFSET_LIMIT_MS, clampLyricsOffsetMs } from '@shared/lyrics/lrc'
+import type { LibraryScanEvent, LibraryScanLogPayload, LibraryScanRun, PlaybackCacheStats } from '@shared/types/ipc-contract'
 import { COLOR_PRESETS } from '@renderer/utils/colorPresets'
+import { clearPlaybackTableBarsMemoryCache } from '@renderer/utils/playbackTableBars'
 
 interface Props {
   tweak: Tweak
   setTweak: <K extends keyof Tweak>(key: K, value: Tweak[K]) => void
 }
 
+function DeviceDetectionPanel({ tweak, setTweak }: Props) {
+  const devices = useDeviceStore(s => s.devices)
+  const candidates = useDeviceStore(s => s.candidates)
+  const unknownVolumes = useDeviceStore(s => s.unknownVolumes)
+  const loading = useDeviceStore(s => s.loading)
+  const error = useDeviceStore(s => s.error)
+  const refreshVolumes = useDeviceStore(s => s.refreshVolumes)
+  const pickAndConnect = useDeviceStore(s => s.pickAndConnect)
+  const connect = useDeviceStore(s => s.connect)
+  const ignoreVolume = useDeviceStore(s => s.ignoreVolume)
+  const addFolder = useLibraryStore(s => s.addFolder)
+  const folders = useFolders()
+  const [manualPath, setManualPath] = useState('')
+
+  useEffect(() => {
+    void refreshVolumes()
+  }, [refreshVolumes])
+
+  const connectedRoots = useMemo(() => new Set(devices.map(device => device.rootPath)), [devices])
+  const libraryRoots = useMemo(() => new Set(folders.map(folder => folder.path)), [folders])
+
+  const connectManual = async () => {
+    const rootPath = manualPath.trim()
+    if (!rootPath) return
+    await connect({ rootPath, artworkMaxEdge: tweak.deviceArtworkMaxEdge })
+    setManualPath('')
+  }
+
+  const addAsLibrary = async (rootPath: string) => {
+    await addFolder(rootPath)
+    await ignoreVolume(rootPath)
+  }
+
+  return (
+    <div className="set-card device-settings-panel">
+      <div className="set-row">
+        <div>
+          <div className="lbl">Default device artwork limit</div>
+          <div className="sub">Maximum embedded cover edge for newly connected MP3/DAP devices.</div>
+        </div>
+        <input
+          type="number"
+          className="number-input"
+          min={DEVICE_ARTWORK_EDGE_MIN}
+          max={DEVICE_ARTWORK_EDGE_MAX}
+          step={1}
+          value={tweak.deviceArtworkMaxEdge}
+          onChange={e => setTweak('deviceArtworkMaxEdge', Number(e.target.value))}
+          aria-label="Default device artwork limit"
+        />
+      </div>
+
+      <div className="device-settings-actions">
+        <button className="btn" type="button" disabled={loading} onClick={() => void refreshVolumes()}>
+          <Icon name="rotate" size={13} /> Detectar ahora
+        </button>
+        <button className="btn primary" type="button" disabled={loading} onClick={() => void pickAndConnect(tweak.deviceArtworkMaxEdge)}>
+          <Icon name="device" size={13} /> Elegir carpeta/unidad
+        </button>
+      </div>
+
+      <div className="device-settings-manual">
+        <input
+          value={manualPath}
+          onChange={event => setManualPath(event.target.value)}
+          placeholder="/Volumes/iPod"
+        />
+        <button className="btn" type="button" disabled={loading || !manualPath.trim()} onClick={() => void connectManual()}>
+          Agregar DAP
+        </button>
+      </div>
+
+      {error && <div className="device-error inline">{error}</div>}
+
+      <div className="device-settings-lists">
+        <div>
+          <h3>Conectados</h3>
+          {devices.length === 0 ? (
+            <div className="device-empty compact">No hay dispositivos vinculados.</div>
+          ) : (
+            <div className="device-settings-list">
+              {devices.map(device => (
+                <div className="device-settings-row" key={device.id}>
+                  <Icon name="device" size={15} />
+                  <span>
+                    <strong>{device.name}</strong>
+                    <em>{device.rootPath}</em>
+                  </span>
+                  <b className={device.isAvailable ? 'online' : ''}>{device.isAvailable ? 'Mounted' : 'Offline'}</b>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div>
+          <h3>Detectados</h3>
+          {candidates.length === 0 ? (
+            <div className="device-empty compact">No hay candidatos Rockbox/Crate.</div>
+          ) : (
+            <div className="device-settings-list">
+              {candidates.map(candidate => (
+                <div className="device-settings-row" key={candidate.rootPath}>
+                  <Icon name="plus" size={14} />
+                  <span>
+                    <strong>{candidate.name}</strong>
+                    <em>{candidate.rootPath}</em>
+                  </span>
+                  <button
+                    className="btn"
+                    type="button"
+                    disabled={loading || connectedRoots.has(candidate.rootPath)}
+                    onClick={() => void connect({ rootPath: candidate.rootPath, artworkMaxEdge: tweak.deviceArtworkMaxEdge })}
+                  >
+                    Conectar
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div>
+          <h3>Volúmenes sin clasificar</h3>
+          {unknownVolumes.length === 0 ? (
+            <div className="device-empty compact">No hay volúmenes nuevos pendientes.</div>
+          ) : (
+            <div className="device-settings-list">
+              {unknownVolumes.map(volume => (
+                <div className="device-settings-row unknown" key={volume.rootPath}>
+                  <Icon name="folder" size={14} />
+                  <span>
+                    <strong>{volume.name}</strong>
+                    <em>{volume.rootPath}</em>
+                  </span>
+                  <div className="device-settings-inline-actions">
+                    <button
+                      className="btn"
+                      type="button"
+                      disabled={loading}
+                      onClick={() => void connect({ rootPath: volume.rootPath, artworkMaxEdge: tweak.deviceArtworkMaxEdge })}
+                    >
+                      DAP
+                    </button>
+                    <button
+                      className="btn"
+                      type="button"
+                      disabled={libraryRoots.has(volume.rootPath)}
+                      onClick={() => void addAsLibrary(volume.rootPath)}
+                    >
+                      Biblioteca
+                    </button>
+                    <button className="btn ghost" type="button" onClick={() => void ignoreVolume(volume.rootPath)}>
+                      Ignorar
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function formatOffsetMs(value: number): string {
+  return `${value > 0 ? '+' : ''}${value} ms`
+}
+
+function LyricsGlobalOffsetSetting({ tweak, setTweak }: Props) {
+  const value = tweak.lyricsGlobalOffsetMs
+  const [draft, setDraft] = useState(String(value))
+
+  useEffect(() => {
+    setDraft(String(value))
+  }, [value])
+
+  const commit = (nextValue?: number) => {
+    if (nextValue == null && draft.trim() === '') {
+      setDraft(String(value))
+      return
+    }
+    const next = clampLyricsOffsetMs(nextValue ?? Number(draft))
+    setDraft(String(next))
+    setTweak('lyricsGlobalOffsetMs', next)
+  }
+
+  return (
+    <div className="set-row lyrics-global-offset-row">
+      <div>
+        <div className="lbl">Desfasaje global de letras</div>
+        <div className="sub">Positivo retrasa la letra; negativo la adelanta.</div>
+      </div>
+      <div className="lyrics-offset-setting">
+        <span className="lyrics-offset-value">{formatOffsetMs(value)}</span>
+        <button type="button" className="btn sm" title="Adelantar 250 ms" onClick={() => commit(value - 250)}>-250</button>
+        <input
+          type="number"
+          className="number-input lyrics-offset-number"
+          min={-LYRICS_OFFSET_LIMIT_MS}
+          max={LYRICS_OFFSET_LIMIT_MS}
+          step={50}
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onBlur={() => commit()}
+          onKeyDown={e => {
+            if (e.key === 'Enter') e.currentTarget.blur()
+            if (e.key === 'Escape') {
+              setDraft(String(value))
+              e.currentTarget.blur()
+            }
+          }}
+          aria-label="Desfasaje global de letras en milisegundos"
+        />
+        <button type="button" className="btn sm" title="Retrasar 250 ms" onClick={() => commit(value + 250)}>+250</button>
+        <button type="button" className="btn sm ghost" title="Resetear desfasaje global" onClick={() => commit(0)}>0</button>
+      </div>
+    </div>
+  )
+}
+
 export function SettingsView({ tweak, setTweak }: Props) {
+  const [libraryLogOpen, setLibraryLogOpen] = useState(false)
+
   return (
     <div className="settings">
       <h1>Preferences</h1>
@@ -181,6 +414,16 @@ export function SettingsView({ tweak, setTweak }: Props) {
       </div>
 
       <div className="set-section">
+        <h2>Playback Cache</h2>
+        <PlaybackCachePanel />
+      </div>
+
+      <div className="set-section">
+        <h2>Dispositivos</h2>
+        <DeviceDetectionPanel tweak={tweak} setTweak={setTweak} />
+      </div>
+
+      <div className="set-section">
         <h2>Library</h2>
         <div className="set-card">
           <div className="set-row">
@@ -188,8 +431,8 @@ export function SettingsView({ tweak, setTweak }: Props) {
               <div className="lbl">Keep portable backup in folder</div>
               <div className="sub">
                 Saves your plays, favorites, ratings and EQ settings into a hidden{' '}
-                <code style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>.crate-library.json</code>
-                {' '}at the root of each library folder. When you reconnect the folder elsewhere those
+                <code style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>.crate/library.yaml</code>
+                {' '}inside each library folder. When you reconnect the folder elsewhere those
                 are merged back automatically.
               </div>
             </div>
@@ -201,12 +444,360 @@ export function SettingsView({ tweak, setTweak }: Props) {
               tabIndex={0}
             />
           </div>
+          <div className="set-row">
+            <div>
+              <div className="lbl">Registro de análisis</div>
+              <div className="sub">Historial de análisis, cambios y archivos omitidos por biblioteca.</div>
+            </div>
+            <button className="btn" type="button" onClick={() => setLibraryLogOpen(true)}>
+              <Icon name="list" size={13} /> Ver registros
+            </button>
+          </div>
+        </div>
+        {libraryLogOpen && (
+          <ModalShell title="Registro de biblioteca" onClose={() => setLibraryLogOpen(false)}>
+            <div className="library-log-modal">
+              <LibraryScanLogPanel tweak={tweak} setTweak={setTweak} />
+            </div>
+          </ModalShell>
+        )}
+      </div>
+
+      <div className="set-section">
+        <h2>Lyrics</h2>
+        <div className="set-card">
+          <LyricsGlobalOffsetSetting tweak={tweak} setTweak={setTweak} />
+          {([
+            ['lyricsAutoFetch', 'Buscar letras automáticamente', 'Al reproducir, busca letras en línea (LRCLIB) si no hay en caché.'],
+            ['lyricsPreferSynced', 'Preferir letras sincronizadas', 'Usa la versión con tiempos cuando esté disponible.'],
+            ['lyricsCacheLocal', 'Guardar letras en caché local', 'Cachea los resultados en la base de datos.'],
+            ['lyricsWriteSidecar', 'Crear archivo .lrc externo', 'Guarda un .lrc junto a la canción cuando hay letra sincronizada.'],
+            ['lyricsEmbedAuto', 'Escribir letras dentro del FLAC automáticamente', 'Inyecta en el archivo sin pedir confirmación (no recomendado).'],
+            ['lyricsOverwrite', 'Sobrescribir letras existentes', 'Reemplaza letras ya presentes en el archivo al inyectar.'],
+            ['lyricsConfirmBeforeWrite', 'Preguntar antes de modificar archivos', 'Muestra una confirmación antes de inyectar en el archivo.'],
+            ['lyricsBackupBeforeWrite', 'Crear backup antes de modificar archivos', 'Guarda un .cratebak antes de escribir en el FLAC.'],
+          ] as const).map(([key, label, sub]) => (
+            <div className="set-row" key={key}>
+              <div>
+                <div className="lbl">{label}</div>
+                <div className="sub">{sub}</div>
+              </div>
+              <div
+                className={`toggle ${tweak[key] ? 'on' : ''}`}
+                onClick={() => setTweak(key, !tweak[key])}
+                role="switch"
+                aria-checked={tweak[key]}
+                tabIndex={0}
+              />
+            </div>
+          ))}
         </div>
       </div>
 
       <div className="set-section">
         <h2>Equalizer</h2>
         <EqPanel />
+      </div>
+    </div>
+  )
+}
+
+const RETENTION_OPTIONS: Array<{ label: string; value: number | null }> = [
+  { label: '7 días', value: 7 },
+  { label: '30 días', value: 30 },
+  { label: '90 días', value: 90 },
+  { label: '1 año', value: 365 },
+  { label: 'Sin límite', value: null },
+]
+
+const SCAN_EVENT_LABELS: Record<LibraryScanEvent['type'], string> = {
+  added: 'Agregado',
+  updated: 'Actualizado',
+  removed: 'Eliminado',
+  missing_root: 'Carpeta faltante',
+  skipped: 'Omitido',
+  error: 'Error',
+}
+
+const SCAN_REASON_LABELS: Record<LibraryScanRun['reason'], string> = {
+  startup: 'Inicio',
+  watch: 'Watcher',
+  background: 'Fondo',
+  manual: 'Manual',
+  import: 'Importación',
+}
+
+function formatScanDate(value: number | null): string {
+  if (!value) return 'En curso'
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(new Date(value))
+}
+
+function scanSummary(run: LibraryScanRun): string {
+  const parts = [
+    run.added > 0 ? `${run.added} agregados` : '',
+    run.updated > 0 ? `${run.updated} actualizados` : '',
+    run.removed > 0 ? `${run.removed} eliminados` : '',
+    run.skipped > 0 ? `${run.skipped} omitidos` : '',
+  ].filter(Boolean)
+  return parts.length > 0 ? parts.join(' · ') : 'Sin cambios'
+}
+
+function eventTitle(event: LibraryScanEvent): string {
+  return event.title || event.path?.split(/[\\/]/).pop() || 'Sin título'
+}
+
+function LibraryScanLogPanel({ tweak, setTweak }: Props) {
+  const [payload, setPayload] = useState<LibraryScanLogPayload | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [scanningId, setScanningId] = useState<number | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const loadLog = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      setPayload(await window.api.library.scanLog(undefined, 200))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void loadLog()
+  }, [])
+
+  const scanFolder = async (folderId: number) => {
+    setScanningId(folderId)
+    setError(null)
+    try {
+      await window.api.library.scanNow(folderId)
+      await loadLog()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setScanningId(null)
+    }
+  }
+
+  const folderName = (folderId: number): string => {
+    const folder = payload?.folders.find(item => item.id === folderId)
+    return folder?.name ?? `Biblioteca ${folderId}`
+  }
+
+  const selectedRetention = tweak.libraryScanLogRetentionDays == null
+    ? 'none'
+    : String(tweak.libraryScanLogRetentionDays)
+
+  return (
+    <div className="library-log-panel">
+      <div className="set-card">
+        <div className="set-row">
+          <div>
+            <div className="lbl">Retención del registro</div>
+            <div className="sub">Se aplica al historial de análisis y cambios por biblioteca.</div>
+          </div>
+          <select
+            className="settings-select"
+            value={selectedRetention}
+            onChange={e => {
+              const next = e.target.value === 'none' ? null : Number(e.target.value)
+              setTweak('libraryScanLogRetentionDays', next)
+              window.setTimeout(() => { void loadLog() }, 100)
+            }}
+            aria-label="Library scan log retention"
+          >
+            {RETENTION_OPTIONS.map(option => (
+              <option key={option.value ?? 'none'} value={option.value ?? 'none'}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        {error && (
+          <div className="set-row">
+            <div className="sub library-log-error">{error}</div>
+            <button className="btn ghost sm" type="button" onClick={() => { void loadLog() }}>
+              Reintentar
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="library-log-folders">
+        {(payload?.folders ?? []).map(folder => {
+          const latest = payload?.runs.find(run => run.folderId === folder.id)
+          return (
+            <div className="library-log-folder" key={folder.id}>
+              <div className="library-log-folder-main">
+                <strong>{folder.name}</strong>
+                <span>
+                  {folder.track_count} temas · {latest ? `${formatScanDate(latest.finishedAt ?? latest.startedAt)} · ${SCAN_REASON_LABELS[latest.reason]}` : 'Sin registro'}
+                </span>
+              </div>
+              <span className="library-log-summary">{latest ? scanSummary(latest) : 'Sin cambios'}</span>
+              <button
+                className="btn ghost sm"
+                type="button"
+                disabled={scanningId === folder.id}
+                onClick={() => { void scanFolder(folder.id) }}
+              >
+                {scanningId === folder.id ? 'Analizando' : 'Analizar ahora'}
+              </button>
+            </div>
+          )
+        })}
+        {!loading && (payload?.folders.length ?? 0) === 0 && (
+          <div className="library-log-empty">No hay bibliotecas configuradas.</div>
+        )}
+      </div>
+
+      <div className="library-log-events">
+        {(payload?.events ?? []).slice(0, 80).map(event => (
+          <div className={`library-log-event ${event.type}`} key={event.id}>
+            <span className="library-log-event-type">{SCAN_EVENT_LABELS[event.type]}</span>
+            <div className="library-log-event-main">
+              <strong>{eventTitle(event)}</strong>
+              <span>{folderName(event.folderId)} · {formatScanDate(event.occurredAt)}{event.detail ? ` · ${event.detail}` : ''}</span>
+            </div>
+          </div>
+        ))}
+        {loading && <div className="library-log-empty">Cargando registro...</div>}
+        {!loading && (payload?.events.length ?? 0) === 0 && (
+          <div className="library-log-empty">No hay eventos registrados.</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function formatCacheBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB'
+  const mb = bytes / 1024 / 1024
+  if (mb < 1024) return `${mb >= 10 ? Math.round(mb) : mb.toFixed(1)} MB`
+  const gb = mb / 1024
+  return `${gb >= 10 ? Math.round(gb) : gb.toFixed(1)} GB`
+}
+
+function cacheLimitMb(stats: PlaybackCacheStats | null): number {
+  return Math.round((stats?.maxBytes ?? 1024 * 1024 * 1024) / 1024 / 1024)
+}
+
+function PlaybackCachePanel() {
+  const [stats, setStats] = useState<PlaybackCacheStats | null>(null)
+  const [limitMb, setLimitMb] = useState('1024')
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState<string | null>(null)
+
+  const loadStats = async () => {
+    const next = await window.api.audio.getPlaybackCacheStats()
+    setStats(next)
+    setLimitMb(String(cacheLimitMb(next)))
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    void window.api.audio.getPlaybackCacheStats()
+      .then(next => {
+        if (cancelled) return
+        setStats(next)
+        setLimitMb(String(cacheLimitMb(next)))
+      })
+      .catch(() => { /* main not ready */ })
+
+    const off = window.api.audio.onPlaybackCacheChanged(next => {
+      if (cancelled) return
+      setStats(next)
+      setLimitMb(String(cacheLimitMb(next)))
+    })
+    return () => {
+      cancelled = true
+      off()
+    }
+  }, [])
+
+  const saveLimit = async () => {
+    const mb = Math.max(64, Math.floor(Number(limitMb) || 1024))
+    setBusy(true)
+    setStatus(null)
+    try {
+      const next = await window.api.audio.setPlaybackCacheLimit(mb * 1024 * 1024)
+      setStats(next)
+      setLimitMb(String(cacheLimitMb(next)))
+      setStatus('Límite actualizado')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const clearCache = async () => {
+    setBusy(true)
+    setStatus(null)
+    try {
+      const next = await window.api.audio.clearPlaybackCache()
+      clearPlaybackTableBarsMemoryCache()
+      setStats(next)
+      setLimitMb(String(cacheLimitMb(next)))
+      setStatus('Cache limpiado')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const used = stats?.usedBytes ?? 0
+  const max = stats?.maxBytes ?? 1024 * 1024 * 1024
+  const percent = max > 0 ? Math.min(100, Math.max(0, (used / max) * 100)) : 0
+
+  return (
+    <div className="set-card playback-cache-card">
+      <div className="set-row">
+        <div>
+          <div className="lbl">Cache de reproducción</div>
+          <div className="sub">
+            Guarda waveforms y barras compactas de la tabla; el visualizador visible usa FFT en vivo.
+          </div>
+        </div>
+        <div className="playback-cache-usage">
+          <strong>{formatCacheBytes(used)}</strong>
+          <span>{stats?.entries ?? 0} temas</span>
+        </div>
+      </div>
+      <div className="playback-cache-meter" aria-hidden="true">
+        <i style={{ width: `${percent}%` }} />
+      </div>
+      <div className="set-row">
+        <div>
+          <div className="lbl">Tamaño máximo</div>
+          <div className="sub">Cuando entra cache nuevo, se descartan primero los temas menos escuchados y menos recientes.</div>
+        </div>
+        <div className="cache-limit-controls">
+          <input
+            type="number"
+            className="number-input cache-limit-input"
+            min={64}
+            step={64}
+            value={limitMb}
+            disabled={busy}
+            onChange={e => setLimitMb(e.target.value)}
+            aria-label="Playback cache limit in MB"
+          />
+          <span>MB</span>
+          <button className="btn ghost" disabled={busy} onClick={saveLimit}>Guardar</button>
+        </div>
+      </div>
+      <div className="set-row">
+        <div>
+          <div className="lbl">Gestión</div>
+          <div className="sub">{status ?? `Límite actual: ${formatCacheBytes(max)}`}</div>
+        </div>
+        <div className="cache-limit-controls">
+          <button className="btn ghost" disabled={busy} onClick={() => { void loadStats() }}>Actualizar</button>
+          <button className="btn danger" disabled={busy || used <= 0} onClick={clearCache}>Limpiar cache</button>
+        </div>
       </div>
     </div>
   )

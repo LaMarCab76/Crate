@@ -36,11 +36,13 @@
   "dependencies": {
     "better-sqlite3": "^12.10.0",
     "chokidar": "^5.0.0",
+    "extract-zip": "^2.0.1",
     "koffi": "^3.0.0",
     "music-metadata": "^11.12.3",
     "node-taglib-sharp": "^6.0.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "yaml": "^2.9.0",
     "zustand": "^5.0.13"
   }
 }

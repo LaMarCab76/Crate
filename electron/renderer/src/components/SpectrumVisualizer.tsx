@@ -141,8 +141,8 @@ export function SpectrumVisualizer({ mode = 'mini' }: Props) {
       return
     }
 
-    // Both flavours drive the high-rate ('screen') feed so the segmented bars
-    // stay smooth — the lighter 'mini' feed (~11 Hz) is too choppy for these.
+    // Visible visualizers always use the live high-rate FFT feed. Cached
+    // analysis is reserved for compact table indicators.
     const stopDemand = subscribeFftDemand('full')
     // Force a write on the first frame even if the value didn't change.
     lastLitRef.current.fill(-1)

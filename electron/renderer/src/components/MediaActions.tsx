@@ -14,16 +14,19 @@ import {
 import { useQueueStore } from '@renderer/stores/queueStore'
 import { ContextMenu, type ContextMenuItem } from './ContextMenu'
 import { Icon } from './Icon'
+import { MetadataCompletionModal } from './MetadataCompletionModal'
 
 type TrackDialog =
   | { kind: 'playlist'; tracks: Track[] }
   | { kind: 'details'; track: Track }
   | { kind: 'edit'; track: Track }
+  | { kind: 'metadata'; tracks: Track[] }
   | { kind: 'trash'; tracks: Track[] }
 
 type AlbumDialog =
   | { kind: 'details'; album: Album }
   | { kind: 'edit'; album: Album }
+  | { kind: 'metadata'; album: Album }
   | { kind: 'trash'; album: Album }
 
 interface MenuState<T> {
@@ -500,6 +503,20 @@ export function useTrackActions() {
         disabled,
         onSelect: () => setDialog({ kind: 'edit', track }),
       },
+      {
+        id: 'complete-metadata',
+        label: 'Completar metadatos...',
+        icon: 'sparkle',
+        disabled,
+        onSelect: () => setDialog({ kind: 'metadata', tracks: [track] }),
+      },
+      {
+        id: 'lyrics',
+        label: 'Buscar letras',
+        icon: 'lyrics',
+        disabled,
+        onSelect: () => { if (track.dbId != null) void window.api.lyrics?.fetchForSelection([track.dbId]) },
+      },
       { id: 'sep-2', divider: true },
       {
         id: 'trash',
@@ -518,6 +535,9 @@ export function useTrackActions() {
       {dialog?.kind === 'playlist' && <PlaylistPickerModal tracks={dialog.tracks} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'details' && <TrackDetailsModal track={dialog.track} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'edit' && <TrackMetadataEditor track={dialog.track} onClose={() => setDialog(null)} />}
+      {dialog?.kind === 'metadata' && (
+        <MetadataCompletionModal trackIds={trackDbIds(dialog.tracks)} onClose={() => setDialog(null)} />
+      )}
       {dialog?.kind === 'trash' && (
         <ConfirmTrashModal
           title="Mover archivo a Papelera"
@@ -593,6 +613,13 @@ export function useAlbumActions() {
         disabled: !hasDbTracks,
         onSelect: () => setDialog({ kind: 'edit', album }),
       },
+      {
+        id: 'complete-metadata',
+        label: 'Completar metadatos...',
+        icon: 'sparkle',
+        disabled: !hasDbTracks,
+        onSelect: () => setDialog({ kind: 'metadata', album }),
+      },
       { id: 'sep-2', divider: true },
       {
         id: 'trash',
@@ -610,6 +637,9 @@ export function useAlbumActions() {
       {menu && <ContextMenu x={menu.x} y={menu.y} items={items} onClose={() => setMenu(null)} />}
       {dialog?.kind === 'details' && <AlbumDetailsModal album={dialog.album} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'edit' && <AlbumMetadataEditor album={dialog.album} onClose={() => setDialog(null)} />}
+      {dialog?.kind === 'metadata' && (
+        <MetadataCompletionModal trackIds={trackDbIds(dialog.album.tracks)} onClose={() => setDialog(null)} />
+      )}
       {dialog?.kind === 'trash' && (
         <ConfirmTrashModal
           title="Mover álbum a Papelera"
