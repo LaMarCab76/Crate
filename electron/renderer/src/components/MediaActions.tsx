@@ -470,6 +470,11 @@ export function useTrackActions() {
     setMenu({ x: event.clientX, y: event.clientY, target: track })
   }
 
+  const openPlaylistPicker = (track: Track) => {
+    if (track.dbId == null) return
+    setDialog({ kind: 'playlist', tracks: [track] })
+  }
+
   const items = useMemo<ContextMenuItem[]>(() => {
     if (!menu) return []
     const track = menu.target
@@ -549,7 +554,7 @@ export function useTrackActions() {
     </>
   )
 
-  return { openTrackMenu, elements }
+  return { openTrackMenu, openPlaylistPicker, elements }
 }
 
 export function useAlbumActions() {

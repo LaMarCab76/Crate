@@ -3,6 +3,10 @@
 > This is a frozen record of how time-synced lyrics worked in the legacy Swift app
 > (`old_swift/`, since deleted). The feature was **not** ported to the Electron app yet.
 > Use this as the spec to rebuild it in Electron/TypeScript.
+>
+> Current Electron policy: lyrics are written as mandatory `.lrc` sidecars next to
+> the audio file and are copied with device sync. The app may read embedded lyrics
+> for compatibility, but does not expose writing lyrics into audio files.
 
 ## Overview
 

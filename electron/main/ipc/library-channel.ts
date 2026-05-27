@@ -17,6 +17,7 @@ import type {
   AddFolderResult,
   ListTracksOpts,
   PickFolderResult,
+  RemoveFolderOptions,
   SearchResultsPayload,
   MetadataCompletionApplyRequest,
   TrackMetadataUpdatePayload,
@@ -175,10 +176,30 @@ export function registerLibraryChannel(): void {
   )
 
   ipcMain.handle('library:folders', () => repos.folders.list())
-  ipcMain.handle('library:folders:remove', (_, id: number) => {
-    watcher.stop(id)
-    getLibraryBackup().cancelForFolder(id)
-    repos.folders.remove(id)
+  ipcMain.handle('library:folders:remove', async (_, id: number, options?: RemoveFolderOptions) => {
+    const folderId = assertId(id, 'folderId')
+    const folder = repos.folders.getById(folderId)
+    if (!folder) throw new Error('La carpeta ya no existe en la biblioteca.')
+
+    const deleteMusic = options?.deleteMusic === true
+    const folderPath = resolve(folder.path)
+    if (deleteMusic) {
+      if (!existsSync(folderPath)) {
+        throw new Error('La carpeta ya no existe en disco. Se mantuvo la conexión en Crate.')
+      }
+      watcher.stop(folderId)
+      try {
+        await shell.trashItem(folderPath)
+      } catch (err) {
+        watcher.start(folderId, folder.path)
+        throw new Error(`No se pudo mover la carpeta a Papelera: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    } else {
+      watcher.stop(folderId)
+    }
+
+    getLibraryBackup().cancelForFolder(folderId)
+    repos.folders.remove(folderId)
     broadcast('library:changed', { reason: 'folder-remove' })
   })
 

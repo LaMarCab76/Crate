@@ -7,7 +7,8 @@ import { ModalShell } from './ModalShell'
 export function LyricsCandidates() {
   const candidates = useLyricsStore(s => s.candidates)
   const busy = useLyricsStore(s => s.busy)
-  if (!candidates) return null
+  const visibleConsumerCount = useLyricsStore(s => s.visibleConsumerCount)
+  if (!candidates || visibleConsumerCount === 0) return null
 
   return (
     <ModalShell title="Elegir letra" onClose={() => useLyricsStore.getState().dismissCandidates()}>

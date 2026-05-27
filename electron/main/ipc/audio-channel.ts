@@ -15,6 +15,12 @@ function getGapless(): GaplessController {
   return gapless
 }
 
+export function disposeGapless(): void {
+  if (!gapless) return
+  try { gapless.clear() } catch { /* best-effort cleanup */ }
+  gapless = null
+}
+
 // Convert main-process StreamInfo into a plain JSON-safe payload (BigInt
 // can't cross the IPC boundary).
 function serializeStreamInfo(info: StreamInfo | null) {
@@ -60,6 +66,16 @@ function requirePath(value: unknown): string {
   return value
 }
 
+function assertTrackPathMatches(path: string, trackId: unknown, channel: string): void {
+  const normalizedTrackId = normalizeTrackId(trackId)
+  if (normalizedTrackId == null) return
+
+  const track = getRepos().tracks.getById(normalizedTrackId)
+  if (!track || track.path !== path) {
+    throw new Error(`${channel}: path does not match the track record`)
+  }
+}
+
 export function registerAudioChannel(): void {
   const engine = getAudioEngine()
   const eq = getEQManager()
@@ -73,13 +89,10 @@ export function registerAudioChannel(): void {
   ipcMain.handle('audio:load', (_, payload: { path: string; trackId?: number | null }) => {
     // Defense in depth: when a trackId is supplied, the path must match that track's
     // DB record, so a compromised renderer can't point the engine at an arbitrary file.
-    if (payload?.trackId != null) {
-      const track = getRepos().tracks.getById(payload.trackId)
-      if (!track || track.path !== payload.path) {
-        throw new Error('audio:load: path does not match the track record')
-      }
-    }
-    const info = engine.load(payload.path)
+    const path = requirePath(payload?.path)
+    assertTrackPathMatches(path, payload?.trackId, 'audio:load')
+    const info = engine.load(path)
+    getGapless().bindCurrentTrackEnd()
     eq.reapply(engine.getCurrentStream())
     broadcastEqState()
     return serializeStreamInfo(info)
@@ -151,14 +164,20 @@ export function registerAudioChannel(): void {
     return stats
   })
 
-  ipcMain.handle('audio:preloadNext', (_, payload: { path: string }) => {
-    getGapless().preloadNext(payload.path)
+  ipcMain.handle('audio:preloadNext', (_, payload: { path: string; trackId?: number | null }) => {
+    const path = requirePath(payload?.path)
+    assertTrackPathMatches(path, payload?.trackId, 'audio:preloadNext')
+    return serializeStreamInfo(getGapless().preloadNext(path))
   })
   ipcMain.handle('audio:clearNext', () => getGapless().clearNext())
-  ipcMain.handle('audio:swapNow', () => {
-    const swapped = getGapless().swapToNext()
-    if (swapped) eq.reapply(engine.getCurrentStream())
-    return swapped
+  ipcMain.handle('audio:swapNow', (_, payload?: { expectedPath?: string | null }) => {
+    const expectedPath = typeof payload?.expectedPath === 'string' && payload.expectedPath.trim().length > 0
+      ? payload.expectedPath
+      : null
+    const info = getGapless().swapToNext(expectedPath)
+    getGapless().bindCurrentTrackEnd()
+    if (info) eq.reapply(engine.getCurrentStream())
+    return serializeStreamInfo(info)
   })
   ipcMain.handle('audio:getStatus', () => ({
     status: engine.getStatus(),

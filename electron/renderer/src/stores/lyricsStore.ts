@@ -7,11 +7,8 @@ import { create } from 'zustand'
 import { clampLyricsOffsetMs, currentLineIndex, parseLrc, plainTextLines, type ParsedLrc } from '@shared/lyrics/lrc'
 import type {
   LyricsCandidate,
-  LyricsEmbedResult,
-  LyricsFailureReason,
   LyricsStatus,
   LyricsView,
-  LyricsWriteOptions,
 } from '@shared/types/lyrics'
 import { usePlaybackStore } from './playbackStore'
 import { useTweakStore } from './settingsStore'
@@ -30,6 +27,7 @@ interface LyricsStoreState {
   error: string | null
   currentLineIndex: number
   candidates: LyricsCandidate[] | null
+  visibleConsumerCount: number
 
   loadForTrack(id: number | null, opts?: { allowAutoFetch?: boolean }): Promise<void>
   fetchOnline(force?: boolean): Promise<void>
@@ -40,7 +38,6 @@ interface LyricsStoreState {
   exportToFile(): Promise<void>
   saveEdited(plain: string | null, synced: string | null): Promise<void>
   setTrackOffset(offsetMs: number): Promise<void>
-  embedInFile(options?: Partial<LyricsWriteOptions>): Promise<LyricsEmbedResult>
   remove(): Promise<void>
   recomputeNow(): void
   clearError(): void
@@ -51,25 +48,45 @@ function msg(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-const EMBED_ERRORS: Record<LyricsFailureReason, string> = {
-  missing_metadata: 'No lyrics to embed.',
-  provider_timeout: 'The lyrics provider timed out.',
-  provider_rate_limited: 'Rate limited — try again later.',
-  provider_not_found: 'No lyrics found.',
-  low_confidence_match: 'No confident match found.',
-  file_not_writable: 'The file is read-only.',
-  file_locked: 'The file is in use by another process.',
-  file_not_found: 'The audio file no longer exists.',
-  not_flac: 'Embedding is only supported for FLAC files.',
-  existing_lyrics: 'The file already has lyrics. Enable "Overwrite existing" to replace them.',
-  write_failed: 'Failed to write tags into the file.',
-  verification_failed: 'Tags could not be verified after writing.',
-  backup_failed: 'Could not create a backup before writing.',
-  unknown: 'An unexpected error occurred.',
+const visibleLyricsConsumers = new Set<symbol>()
+
+function hiddenState(trackId: number | null): Pick<
+  LyricsStoreState,
+  'trackId' | 'view' | 'parsed' | 'plainLines' | 'status' | 'loading' | 'searching' | 'error' | 'currentLineIndex' | 'candidates'
+> {
+  return {
+    trackId,
+    view: null,
+    parsed: null,
+    plainLines: null,
+    status: 'idle',
+    loading: false,
+    searching: false,
+    error: null,
+    currentLineIndex: -1,
+    candidates: null,
+  }
 }
 
-export function embedErrorMessage(reason?: LyricsFailureReason): string {
-  return reason ? EMBED_ERRORS[reason] : EMBED_ERRORS.unknown
+export function hasVisibleLyricsConsumers(): boolean {
+  return visibleLyricsConsumers.size > 0
+}
+
+// Cache parseLrc results so rapid track changes (or repeats) don't re-parse
+// large LRC strings. Bounded so the renderer doesn't hold every LRC ever seen.
+const PARSE_LRC_CACHE_MAX = 32
+const parseLrcCache = new Map<string, ParsedLrc>()
+
+function parseLrcCached(text: string): ParsedLrc {
+  const cached = parseLrcCache.get(text)
+  if (cached) return cached
+  const parsed = parseLrc(text)
+  parseLrcCache.set(text, parsed)
+  if (parseLrcCache.size > PARSE_LRC_CACHE_MAX) {
+    const oldest = parseLrcCache.keys().next().value
+    if (oldest !== undefined) parseLrcCache.delete(oldest)
+  }
+  return parsed
 }
 
 // Map an authoritative LyricsView into the renderable derived state.
@@ -78,7 +95,7 @@ function derive(view: LyricsView): Pick<LyricsStoreState, 'parsed' | 'plainLines
   const low = view.status === 'low_confidence'
 
   if (view.syncedLyricsLrc) {
-    const parsed = parseLrc(view.syncedLyricsLrc)
+    const parsed = parseLrcCached(view.syncedLyricsLrc)
     if (parsed.hasTimestamps) {
       return { parsed, plainLines: null, status: low ? 'low_confidence' : 'found_synced' }
     }
@@ -102,9 +119,14 @@ export const useLyricsStore = create<LyricsStoreState>((set, get) => ({
   error: null,
   currentLineIndex: -1,
   candidates: null,
+  visibleConsumerCount: 0,
 
   async loadForTrack(id, opts) {
     if (!window.api?.lyrics) return
+    if (!hasVisibleLyricsConsumers()) {
+      set(hiddenState(id))
+      return
+    }
     if (id == null) {
       set({ trackId: null, view: null, parsed: null, plainLines: null, status: 'idle', loading: false, error: null, currentLineIndex: -1, candidates: null })
       return
@@ -113,15 +135,23 @@ export const useLyricsStore = create<LyricsStoreState>((set, get) => ({
     try {
       const view = await window.api.lyrics.get(id)
       if (get().trackId !== id) return
+      if (!hasVisibleLyricsConsumers()) {
+        set(hiddenState(id))
+        return
+      }
       const d = derive(view)
       set({ view, ...d, loading: false })
       get().recomputeNow()
       if (opts?.allowAutoFetch !== false && (d.status === 'none' || d.status === 'not_found')) {
         const auto = useTweakStore.getState().tweak.lyricsAutoFetch
-        if (auto) void get().fetchOnline(false)
+        if (auto && hasVisibleLyricsConsumers()) void get().fetchOnline(false)
       }
     } catch (e) {
       if (get().trackId !== id) return
+      if (!hasVisibleLyricsConsumers()) {
+        set(hiddenState(id))
+        return
+      }
       set({ loading: false, status: 'error', error: msg(e) })
     }
   },
@@ -129,24 +159,40 @@ export const useLyricsStore = create<LyricsStoreState>((set, get) => ({
   async fetchOnline(force = false) {
     const id = get().trackId
     if (id == null || !window.api?.lyrics) return
+    if (!hasVisibleLyricsConsumers()) return
     set({ loading: true, status: 'loading', error: null, candidates: null })
     try {
       const view = await window.api.lyrics.fetch(id, force)
       if (get().trackId !== id) return
+      if (!hasVisibleLyricsConsumers()) {
+        set(hiddenState(id))
+        return
+      }
       set({ view, ...derive(view), loading: false })
       get().recomputeNow()
     } catch (e) {
-      if (get().trackId === id) set({ loading: false, status: 'error', error: msg(e) })
+      if (get().trackId === id) {
+        if (!hasVisibleLyricsConsumers()) {
+          set(hiddenState(id))
+          return
+        }
+        set({ loading: false, status: 'error', error: msg(e) })
+      }
     }
   },
 
   async searchOnline() {
     const id = get().trackId
     if (id == null || !window.api?.lyrics) return
+    if (!hasVisibleLyricsConsumers()) return
     set({ searching: true, error: null })
     try {
       const candidates = await window.api.lyrics.search(id)
       if (get().trackId !== id) return
+      if (!hasVisibleLyricsConsumers()) {
+        set({ searching: false, candidates: null })
+        return
+      }
       if (candidates.length === 0) {
         const found = get().status === 'found_synced' || get().status === 'found_plain'
         set({ searching: false, status: found ? get().status : 'not_found' })
@@ -159,17 +205,28 @@ export const useLyricsStore = create<LyricsStoreState>((set, get) => ({
       }
       set({ candidates, searching: false })
     } catch (e) {
-      if (get().trackId === id) set({ searching: false, error: msg(e) })
+      if (get().trackId === id) {
+        if (!hasVisibleLyricsConsumers()) {
+          set({ searching: false, candidates: null })
+          return
+        }
+        set({ searching: false, error: msg(e) })
+      }
     }
   },
 
   async chooseCandidate(lrclibId) {
     const id = get().trackId
     if (id == null || !window.api?.lyrics) return
+    if (!hasVisibleLyricsConsumers()) return
     set({ busy: true, error: null })
     try {
       const view = await window.api.lyrics.importCandidate(id, lrclibId)
       if (get().trackId !== id) return
+      if (!hasVisibleLyricsConsumers()) {
+        set({ busy: false, candidates: null })
+        return
+      }
       set({ view, ...derive(view), busy: false, candidates: null })
       get().recomputeNow()
     } catch (e) {
@@ -250,20 +307,6 @@ export const useLyricsStore = create<LyricsStoreState>((set, get) => ({
     }
   },
 
-  async embedInFile(options) {
-    const id = get().trackId
-    if (id == null || !window.api?.lyrics) return { ok: false, verified: false }
-    set({ busy: true, error: null })
-    try {
-      const result = await window.api.lyrics.embedInFile(id, options)
-      set({ busy: false, error: result.ok ? null : embedErrorMessage(result.reason) })
-      return result
-    } catch (e) {
-      set({ busy: false, error: msg(e) })
-      return { ok: false, verified: false }
-    }
-  },
-
   async remove() {
     const id = get().trackId
     if (id == null || !window.api?.lyrics) return
@@ -277,6 +320,7 @@ export const useLyricsStore = create<LyricsStoreState>((set, get) => ({
   },
 
   recomputeNow() {
+    if (!hasVisibleLyricsConsumers()) return
     const s = get()
     if (!s.parsed) {
       if (s.currentLineIndex !== -1) set({ currentLineIndex: -1 })
@@ -292,33 +336,82 @@ export const useLyricsStore = create<LyricsStoreState>((set, get) => ({
   dismissCandidates() { set({ candidates: null }) },
 }))
 
-if (typeof window !== 'undefined' && window.api?.lyrics) {
-  // Load lyrics whenever the playing track changes.
-  usePlaybackStore.subscribe((state, prev) => {
+export function setLyricsPanelVisible(consumer: symbol, visible: boolean): void {
+  const before = visibleLyricsConsumers.size
+  if (visible) visibleLyricsConsumers.add(consumer)
+  else visibleLyricsConsumers.delete(consumer)
+
+  const after = visibleLyricsConsumers.size
+  if (before === after) return
+
+  useLyricsStore.setState({ visibleConsumerCount: after })
+
+  if (after === 0) {
+    useLyricsStore.setState(state => ({
+      ...hiddenState(state.trackId),
+      busy: false,
+      visibleConsumerCount: 0,
+    }))
+    return
+  }
+
+  if (before === 0) {
+    const id = usePlaybackStore.getState().currentTrack?.dbId ?? null
+    void useLyricsStore.getState().loadForTrack(id)
+  }
+}
+
+let lyricsListenerCleanups: Array<() => void> | null = null
+
+function initializeLyricsListeners(): void {
+  if (typeof window === 'undefined' || !window.api?.lyrics) return
+  if (lyricsListenerCleanups) {
+    for (const off of lyricsListenerCleanups) off()
+    lyricsListenerCleanups = null
+  }
+  const offTrackChange = usePlaybackStore.subscribe((state, prev) => {
     const id = state.currentTrack?.dbId ?? null
     if (id !== (prev.currentTrack?.dbId ?? null)) {
-      void useLyricsStore.getState().loadForTrack(id)
+      if (hasVisibleLyricsConsumers()) {
+        void useLyricsStore.getState().loadForTrack(id)
+      } else {
+        useLyricsStore.setState(hiddenState(id))
+      }
     }
   })
 
-  // Recompute the active line on each playhead tick (cheap; no re-parse).
-  usePlaybackStore.subscribe((state, prev) => {
+  const offPlayhead = usePlaybackStore.subscribe((state, prev) => {
     if (state.positionSec === prev.positionSec) return
+    if (!hasVisibleLyricsConsumers()) return
     useLyricsStore.getState().recomputeNow()
   })
 
-  useTweakStore.subscribe((state, prev) => {
+  const offTweak = useTweakStore.subscribe((state, prev) => {
     if (state.tweak.lyricsGlobalOffsetMs === prev.tweak.lyricsGlobalOffsetMs) return
+    if (!hasVisibleLyricsConsumers()) return
     useLyricsStore.getState().recomputeNow()
   })
 
-  // Authoritative refresh after any main-side mutation. allowAutoFetch:false
-  // here avoids a fetch -> broadcast -> reload -> fetch loop.
-  window.api.lyrics.onChanged(({ trackId }) => {
+  const offChanged = window.api.lyrics.onChanged(({ trackId }) => {
     const ls = useLyricsStore.getState()
+    if (!hasVisibleLyricsConsumers()) return
     if (trackId === ls.trackId) void ls.loadForTrack(trackId, { allowAutoFetch: false })
   })
 
-  // Initial load for whatever is already playing on boot.
-  void useLyricsStore.getState().loadForTrack(usePlaybackStore.getState().currentTrack?.dbId ?? null)
+  lyricsListenerCleanups = [offTrackChange, offPlayhead, offTweak, offChanged]
+
+  if (hasVisibleLyricsConsumers()) {
+    void useLyricsStore.getState().loadForTrack(usePlaybackStore.getState().currentTrack?.dbId ?? null)
+  }
+}
+
+initializeLyricsListeners()
+
+if (typeof import.meta !== 'undefined' && (import.meta as { hot?: { dispose: (cb: () => void) => void } }).hot) {
+  (import.meta as { hot: { dispose: (cb: () => void) => void } }).hot.dispose(() => {
+    if (lyricsListenerCleanups) {
+      for (const off of lyricsListenerCleanups) off()
+      lyricsListenerCleanups = null
+    }
+  })
 }

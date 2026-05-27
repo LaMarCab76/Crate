@@ -4,18 +4,17 @@ import { useVirtualRows } from '@renderer/utils/useVirtualRows'
 import { Artwork } from './Artwork'
 import { CodecStrip } from './CodecStrip'
 import { Icon } from './Icon'
-import { EQBars } from './EQBars'
 import { fmtFileSize, fmtTime } from '@renderer/utils/format'
 import { extractDominantColor } from '@renderer/utils/colorExtract'
 import { useAlbums } from '@renderer/stores/libraryStore'
 import { toggleTrackFavorite } from '@renderer/stores/libraryStore'
 import { useQueueStore } from '@renderer/stores/queueStore'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
-import { useTweakStore } from '@renderer/stores/settingsStore'
 import { useTrackActions } from './MediaActions'
 
-interface TrackTableProps {
+export interface TrackTableProps {
   tracks: Track[]
+  playbackTracks?: Track[]
   showArt?: boolean
   showAlbum?: boolean
   showFmt?: boolean
@@ -29,8 +28,69 @@ interface TrackTableProps {
   onRefreshMetadata?: (track: Track) => void
 }
 
+interface DiscTrackGroup {
+  key: string
+  label: string
+  discNumber: number | null
+  tracks: Track[]
+}
+
+function normalizedDiscNumber(track: Track): number | null {
+  return track.discNumber != null && track.discNumber > 0 ? track.discNumber : null
+}
+
+function buildDiscTrackGroups(tracks: Track[]): DiscTrackGroup[] {
+  const validDiscs = [...new Set(tracks.map(normalizedDiscNumber).filter((disc): disc is number => disc != null))]
+  if (validDiscs.length <= 1) return []
+
+  const groups = new Map<string, DiscTrackGroup>()
+  for (const track of tracks) {
+    const discNumber = normalizedDiscNumber(track)
+    const key = discNumber == null ? 'unknown' : String(discNumber)
+    let group = groups.get(key)
+    if (!group) {
+      group = {
+        key,
+        label: discNumber == null ? 'Sin disco' : `Disco ${discNumber}`,
+        discNumber,
+        tracks: [],
+      }
+      groups.set(key, group)
+    }
+    group.tracks.push(track)
+  }
+
+  return [...groups.values()].sort((a, b) => {
+    if (a.discNumber == null && b.discNumber == null) return 0
+    if (a.discNumber == null) return 1
+    if (b.discNumber == null) return -1
+    return a.discNumber - b.discNumber
+  })
+}
+
+export function DiscGroupedTrackTable({ tracks, ...props }: TrackTableProps) {
+  const groups = buildDiscTrackGroups(tracks)
+  if (groups.length === 0) return <TrackTable tracks={tracks} {...props} />
+
+  return (
+    <div className="disc-track-groups">
+      {groups.map(group => (
+        <section className="disc-track-section" key={group.key}>
+          <div className="disc-track-heading">{group.label}</div>
+          <TrackTable
+            {...props}
+            tracks={group.tracks}
+            playbackTracks={tracks}
+          />
+        </section>
+      ))}
+    </div>
+  )
+}
+
 export function TrackTable({
   tracks,
+  playbackTracks = tracks,
   showArt = false,
   showAlbum = true,
   showFmt = true,
@@ -52,7 +112,6 @@ export function TrackTable({
   const togglePlay = useQueueStore(s => s.togglePlay)
   const currentTrack = usePlaybackStore(s => s.currentTrack)
   const status = usePlaybackStore(s => s.status)
-  const showPlayerVisualizer = useTweakStore(s => s.tweak.showPlayerVisualizer)
   const playingId = currentTrack?.id
   const playing = status === 'playing'
   const showRefreshAction = onRefreshMetadata != null
@@ -121,6 +180,7 @@ export function TrackTable({
             const album = showArt ? albumById.get(t.albumId) : undefined
             const pathValue = t.path ?? ''
             const canRefresh = t.dbId != null
+            const displayTrackNumber = showTrackNo ? (t.no || i + 1) : null
             return (
               <tr
                 ref={k === 0 ? measureRow : undefined}
@@ -128,36 +188,32 @@ export function TrackTable({
                 className={isP ? 'playing' : ''}
                 style={isP ? playingRowStyle : undefined}
                 onContextMenu={e => trackActions.openTrackMenu(e, t)}
-                onDoubleClick={() => { void playNow(t, tracks) }}
+                onDoubleClick={() => { void playNow(t, playbackTracks) }}
               >
                 <td className={`num ${t.dbId != null ? 'has-like' : ''}`}>
                   <span className="track-index">
                     {isP ? (
-                      showPlayerVisualizer ? (
-                        <button
-                          type="button"
-                          className="tb-icon-btn"
-                          style={{
-                            width: '100%',
-                            height: 22,
-                            color: 'inherit',
-                            padding: 0,
-                            justifyContent: 'center',
-                          }}
-                          title={playing ? 'Pause' : 'Play'}
-                          aria-label={playing ? 'Pause' : 'Play'}
-                          onClick={e => {
-                            e.stopPropagation()
-                            void togglePlay()
-                          }}
-                          onDoubleClick={e => e.stopPropagation()}
-                        >
-                          <Icon name={playing ? 'pause' : 'play'} size={13} />
-                        </button>
-                      ) : (
-                        <EQBars />
-                      )
-                    ) : showTrackNo ? (t.no || i + 1) : null}
+                      <button
+                        type="button"
+                        className="tb-icon-btn"
+                        style={{
+                          width: '100%',
+                          height: 22,
+                          color: 'inherit',
+                          padding: 0,
+                          justifyContent: 'center',
+                        }}
+                        title={playing ? 'Pause' : 'Play'}
+                        aria-label={playing ? 'Pause' : 'Play'}
+                        onClick={e => {
+                          e.stopPropagation()
+                          void togglePlay()
+                        }}
+                        onDoubleClick={e => e.stopPropagation()}
+                      >
+                        <Icon name={playing ? 'pause' : 'play'} size={13} />
+                      </button>
+                    ) : displayTrackNumber}
                   </span>
                   {t.dbId != null && (
                     <button

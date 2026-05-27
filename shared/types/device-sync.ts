@@ -70,6 +70,12 @@ export interface DeviceVolumeSnapshot {
   unknownVolumes: DeviceUnknownVolume[]
 }
 
+export interface DeviceMusicRootPickResult {
+  canceled: boolean
+  absolutePath: string | null
+  musicRoot: string | null
+}
+
 export interface DeviceTrack {
   key: string
   relativePath: string
@@ -99,10 +105,22 @@ export interface DeviceScanSummary {
   errors: number
 }
 
+export interface DeviceStorageSummary {
+  totalBytes: number
+  usedBytes: number
+  freeBytes: number
+  musicBytes: number
+  rockboxBytes: number
+  otherBytes: number
+  scannedAt: string
+  error: string | null
+}
+
 export interface DeviceScanResult {
   device: DeviceRecord
   tracks: DeviceTrack[]
   summary: DeviceScanSummary
+  storage: DeviceStorageSummary
 }
 
 export interface DeviceAlbumSummary {
@@ -145,6 +163,21 @@ export interface RockboxThemeSummary {
   updatedAt: string | null
 }
 
+export type RockboxThemeScanStatus = 'ok' | 'no-rockbox' | 'no-themes-dir' | 'unreadable'
+
+export interface RockboxThemeScanDiagnostic {
+  status: RockboxThemeScanStatus
+  message: string | null
+  themesPath: string
+  misplacedConfigPaths: string[]
+}
+
+export interface RockboxThemeLibraryResult {
+  device: DeviceRecord
+  themes: RockboxThemeSummary[]
+  scan: RockboxThemeScanDiagnostic
+}
+
 export interface DeviceLibraryResult {
   device: DeviceRecord
   tracks: DeviceTrack[]
@@ -152,6 +185,8 @@ export interface DeviceLibraryResult {
   artists: DeviceArtistSummary[]
   playlists: DevicePlaylistSummary[]
   rockboxThemes: RockboxThemeSummary[]
+  rockboxThemeScan: RockboxThemeScanDiagnostic
+  storage: DeviceStorageSummary
   summary: {
     trackCount: number
     albumCount: number
@@ -175,6 +210,7 @@ export interface RockboxThemeInstallResult {
   failed: number
   sources: RockboxThemeInstallSourceResult[]
   themes: RockboxThemeSummary[]
+  scan: RockboxThemeScanDiagnostic
 }
 
 export interface DeviceScanProgressEvent {
@@ -191,10 +227,12 @@ export interface DeviceConnectPayload {
   defaultMode?: DeviceSyncMode
   pcTargetPath?: string
   artworkMaxEdge?: number
+  sourceLibraryIds?: number[]
 }
 
 export interface DeviceSettingsUpdate {
   artworkMaxEdge?: number
+  musicRoot?: string
   sourceLibraryIds?: number[]
   defaultMode?: DeviceSyncMode
   pcTargetPath?: string

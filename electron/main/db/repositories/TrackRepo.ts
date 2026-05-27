@@ -99,7 +99,7 @@ export class TrackRepo {
       WHERE id = @id
     `)
     this.stmtInsert = db.prepare(`
-      INSERT INTO tracks (
+      INSERT OR IGNORE INTO tracks (
         path, filename, title, artist, album, duration, format, folder_id,
         file_size, date_modified, album_artist, composer, genre, year,
         is_favorite, play_count, last_played_date, rating,
@@ -239,13 +239,19 @@ export class TrackRepo {
 
   insert(track: DbTrackInsert): number {
     const result = this.stmtInsert.run(track as unknown as Record<string, unknown>)
+    // INSERT OR IGNORE returns changes=0 when the row was a UNIQUE conflict —
+    // surface that to callers as id 0 so they can skip downstream broadcasts.
+    if (result.changes === 0) return 0
     return Number(result.lastInsertRowid)
   }
 
   insertBatch(tracks: DbTrackInsert[]): number[] {
     const ids: number[] = []
     const tx = this.db.transaction((batch: DbTrackInsert[]) => {
-      for (const t of batch) ids.push(this.insert(t))
+      for (const t of batch) {
+        const id = this.insert(t)
+        if (id !== 0) ids.push(id)
+      }
     })
     tx(tracks)
     return ids

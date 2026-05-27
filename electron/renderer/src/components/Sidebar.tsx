@@ -1,13 +1,12 @@
-import { useEffect, type CSSProperties } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import type { Artist, Playlist } from '@shared/types/library'
 import { Artwork } from './Artwork'
+import { DeviceConnectModal, type DeviceConnectTarget } from './DeviceConnectModal'
 import { Icon, type IconName } from './Icon'
 import type { View } from '@renderer/App'
 import { useDeviceStore } from '@renderer/stores/deviceStore'
 import {
-  useActiveLibraryId,
   useFavoriteArtists,
-  useFolders,
   useLibraryStore,
   usePlaylists,
   useTrackCount,
@@ -24,6 +23,30 @@ interface SidebarProps {
   onSelectArtist: (a: Artist) => void
   onSelectFavoriteTracks: () => void
   favoriteTracksCount: number
+}
+
+const COLLAPSED_DEVICE_DETAILS_KEY = 'crate.sidebar.collapsedDeviceDetails'
+
+function loadCollapsedDeviceDetails(): Set<string> {
+  if (typeof window === 'undefined') return new Set()
+  try {
+    const raw = window.localStorage.getItem(COLLAPSED_DEVICE_DETAILS_KEY)
+    if (!raw) return new Set()
+    const parsed = JSON.parse(raw)
+    return new Set(Array.isArray(parsed) ? parsed.filter(item => typeof item === 'string') : [])
+  } catch {
+    return new Set()
+  }
+}
+
+function persistCollapsedDeviceDetails(ids: Set<string>): void {
+  if (typeof window === 'undefined') return
+  try {
+    if (ids.size === 0) window.localStorage.removeItem(COLLAPSED_DEVICE_DETAILS_KEY)
+    else window.localStorage.setItem(COLLAPSED_DEVICE_DETAILS_KEY, JSON.stringify([...ids]))
+  } catch {
+    /* ignore */
+  }
 }
 
 function SectionLabel({ label, onAdd, title }: { label: string; onAdd?: () => void; title?: string }) {
@@ -52,17 +75,15 @@ export function Sidebar({
   const artists = useFavoriteArtists()
   const playlists = usePlaylists()
   const trackCount = useTrackCount()
-  const folders = useFolders()
-  const activeLibraryId = useActiveLibraryId()
-  const setActiveLibrary = useLibraryStore(s => s.setActiveLibrary)
   const pickFolder = useLibraryStore(s => s.pickFolder)
   const addFolder = useLibraryStore(s => s.addFolder)
   const devices = useDeviceStore(s => s.devices)
   const candidates = useDeviceStore(s => s.candidates)
   const loadDevices = useDeviceStore(s => s.load)
   const refreshVolumes = useDeviceStore(s => s.refreshVolumes)
-  const connectDevice = useDeviceStore(s => s.connect)
   const defaultArtworkMaxEdge = useTweakStore(s => s.tweak.deviceArtworkMaxEdge)
+  const [collapsedDeviceDetails, setCollapsedDeviceDetails] = useState<Set<string>>(() => loadCollapsedDeviceDetails())
+  const [connectTarget, setConnectTarget] = useState<DeviceConnectTarget | null>(null)
 
   useEffect(() => {
     void loadDevices()
@@ -74,16 +95,15 @@ export function Sidebar({
     if (picked) await addFolder(picked)
   }
   const addDevice = () => setView({ kind: 'settings' })
-  // Selecting a library scopes every content view to it, then jumps to Songs so
-  // the change is visible immediately.
-  const selectLibrary = (id: number | null) => {
-    setActiveLibrary(id)
-    setView({ kind: 'library' })
+  const toggleDeviceDetails = (deviceId: string) => {
+    setCollapsedDeviceDetails(current => {
+      const next = new Set(current)
+      if (next.has(deviceId)) next.delete(deviceId)
+      else next.add(deviceId)
+      persistCollapsedDeviceDetails(next)
+      return next
+    })
   }
-  const activeCount =
-    activeLibraryId == null
-      ? trackCount
-      : folders.find(f => f.id === activeLibraryId)?.track_count ?? 0
 
   const Item = ({ id, icon, label, badge, onClick }: { id: string; icon: IconName; label: string; badge?: string | number; onClick: () => void }) => (
     <div className={`sb-item ${selectedKey === id ? 'active' : ''}`} onClick={onClick} role="button" tabIndex={0}>
@@ -124,34 +144,8 @@ export function Sidebar({
           </div>
         </div>
 
-        <SectionLabel label="Libraries" onAdd={addLibrary} title="Add library folder" />
-        <div
-          className={`sb-item ${activeLibraryId == null ? 'active' : ''}`}
-          onClick={() => selectLibrary(null)}
-          role="button"
-          tabIndex={0}
-        >
-          <span className="ic"><Icon name="library" size={14} /></span>
-          <span>Todas las bibliotecas</span>
-          {trackCount > 0 && <span className="badge">{trackCount}</span>}
-        </div>
-        {folders.map(f => (
-          <div
-            key={f.id}
-            className={`sb-item ${activeLibraryId === f.id ? 'active' : ''}`}
-            onClick={() => selectLibrary(f.id)}
-            role="button"
-            tabIndex={0}
-            title={f.path}
-          >
-            <span className="ic"><Icon name="folder" size={14} /></span>
-            <span>{f.name}</span>
-            <span className="badge">{f.track_count}</span>
-          </div>
-        ))}
-
-        <SectionLabel label="Library" />
-        <Item id="songs"     icon="song"     label="Songs"           badge={activeCount > 0 ? activeCount : undefined} onClick={() => setView({ kind: 'library' })} />
+        <SectionLabel label="Library" onAdd={addLibrary} title="Add library folder" />
+        <Item id="songs"     icon="song"     label="Songs"           badge={trackCount > 0 ? trackCount : undefined} onClick={() => setView({ kind: 'library' })} />
         <Item id="albums"    icon="album"    label="Albums"          onClick={() => setView({ kind: 'albums' })} />
         <Item id="artists"   icon="artist"   label="Artists"         onClick={() => setView({ kind: 'artists' })} />
         <Item id="genres"    icon="genre"    label="Genres"          onClick={() => setView({ kind: 'genres' })} />
@@ -161,37 +155,64 @@ export function Sidebar({
         {devices.length === 0 && (
           <Item id="devices" icon="device" label="Ajustes de dispositivos" onClick={() => setView({ kind: 'settings' })} />
         )}
-        {devices.map(device => (
-          <div className="sb-device-group" key={device.id}>
-            <div
-              className={`sb-item ${selectedKey === `dev-${device.id}-dashboard` ? 'active' : ''}`}
-              onClick={() => setView({ kind: 'device', deviceId: device.id, section: 'dashboard' })}
-              role="button"
-              tabIndex={0}
-              title={device.rootPath}
-            >
-              <span className="ic"><Icon name="device" size={14} /></span>
-              <span>{device.name}</span>
-              <span className={`badge ${device.isAvailable ? 'online' : ''}`}>{device.isAvailable ? 'on' : 'off'}</span>
+        {devices.map(device => {
+          const collapsed = collapsedDeviceDetails.has(device.id)
+          const deviceKeyPrefix = `dev-${device.id}-`
+          const selectedDeviceChild = selectedKey?.startsWith(deviceKeyPrefix) ?? false
+          const headerActive = selectedKey === `${deviceKeyPrefix}dashboard` || (collapsed && selectedDeviceChild)
+          return (
+            <div className="sb-device-group" key={device.id}>
+              <div
+                className={`sb-item sb-device-row ${headerActive ? 'active' : ''}`}
+                onClick={() => setView({ kind: 'device', deviceId: device.id, section: 'dashboard' })}
+                role="button"
+                tabIndex={0}
+                title={device.rootPath}
+              >
+                <span
+                  className="sb-device-toggle"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={collapsed ? `Mostrar detalles de ${device.name}` : `Ocultar detalles de ${device.name}`}
+                  aria-expanded={!collapsed}
+                  title={collapsed ? 'Mostrar detalles' : 'Ocultar detalles'}
+                  onClick={event => {
+                    event.stopPropagation()
+                    toggleDeviceDetails(device.id)
+                  }}
+                  onKeyDown={event => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      toggleDeviceDetails(device.id)
+                    }
+                  }}
+                >
+                  <Icon name={collapsed ? 'chevR' : 'chevD'} size={12} stroke={1.8} />
+                </span>
+                <span className="ic"><Icon name="device" size={14} /></span>
+                <span>{device.name}</span>
+                <span className={`badge ${device.isAvailable ? 'online' : ''}`}>{device.isAvailable ? 'on' : 'off'}</span>
+              </div>
+              {!collapsed && (
+                <>
+                  <DeviceItem id={`dev-${device.id}-tracks`} icon="song" label="Temas" badge={device.trackCount || undefined} section={{ kind: 'device', deviceId: device.id, section: 'tracks' }} />
+                  <DeviceItem id={`dev-${device.id}-albums`} icon="album" label="Álbumes" section={{ kind: 'device', deviceId: device.id, section: 'albums' }} />
+                  <DeviceItem id={`dev-${device.id}-artists`} icon="artist" label="Artistas" section={{ kind: 'device', deviceId: device.id, section: 'artists' }} />
+                  <DeviceItem id={`dev-${device.id}-playlists`} icon="queue" label="Playlists" section={{ kind: 'device', deviceId: device.id, section: 'playlists' }} />
+                  {device.hasRockbox && (
+                    <DeviceItem id={`dev-${device.id}-rockboxThemes`} icon="sparkle" label="Rockbox Themes" section={{ kind: 'device', deviceId: device.id, section: 'rockboxThemes' }} />
+                  )}
+                </>
+              )}
             </div>
-            <DeviceItem id={`dev-${device.id}-tracks`} icon="song" label="Temas" badge={device.trackCount || undefined} section={{ kind: 'device', deviceId: device.id, section: 'tracks' }} />
-            <DeviceItem id={`dev-${device.id}-albums`} icon="album" label="Álbumes" section={{ kind: 'device', deviceId: device.id, section: 'albums' }} />
-            <DeviceItem id={`dev-${device.id}-artists`} icon="artist" label="Artistas" section={{ kind: 'device', deviceId: device.id, section: 'artists' }} />
-            <DeviceItem id={`dev-${device.id}-playlists`} icon="queue" label="Playlists" section={{ kind: 'device', deviceId: device.id, section: 'playlists' }} />
-            {device.hasRockbox && (
-              <DeviceItem id={`dev-${device.id}-rockboxThemes`} icon="sparkle" label="Rockbox Themes" section={{ kind: 'device', deviceId: device.id, section: 'rockboxThemes' }} />
-            )}
-          </div>
-        ))}
+          )
+        })}
         {visibleCandidates.map(candidate => (
           <div
             className="sb-item sb-candidate"
             key={candidate.rootPath}
-            onClick={() => {
-              void connectDevice({ rootPath: candidate.rootPath, artworkMaxEdge: defaultArtworkMaxEdge })
-                .then(device => setView({ kind: 'device', deviceId: device.id, section: 'dashboard' }))
-                .catch(() => undefined)
-            }}
+            onClick={() => setConnectTarget({ rootPath: candidate.rootPath, name: candidate.name })}
             role="button"
             tabIndex={0}
             title={candidate.rootPath}
@@ -259,6 +280,14 @@ export function Sidebar({
           ))
         )}
       </div>
+      {connectTarget && (
+        <DeviceConnectModal
+          target={connectTarget}
+          artworkMaxEdge={defaultArtworkMaxEdge}
+          onConnected={device => setView({ kind: 'device', deviceId: device.id, section: 'dashboard' })}
+          onClose={() => setConnectTarget(null)}
+        />
+      )}
     </div>
   )
 }

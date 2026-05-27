@@ -1,15 +1,61 @@
 import { ipcMain } from 'electron'
+import { isAbsolute } from 'node:path'
 import { getDeviceSyncService } from '../devices/DeviceSyncService'
 import { assertNonEmptyString } from './validation'
+import {
+  DEVICE_ARTWORK_EDGE_MAX,
+  DEVICE_ARTWORK_EDGE_MIN,
+} from '@shared/constants/device-sync'
 import type {
   DeviceConnectPayload,
   DeviceSettingsUpdate,
   DeviceSyncPlanRequest,
 } from '@shared/types/device-sync'
 
+function assertSafePath(value: unknown, label: string): string {
+  const str = assertNonEmptyString(value, label)
+  if (!isAbsolute(str)) throw new Error(`Invalid ${label}: must be absolute`)
+  const segments = str.split(/[\\/]/)
+  if (segments.some(seg => seg === '..')) {
+    throw new Error(`Invalid ${label}: path traversal not allowed`)
+  }
+  return str
+}
+
+function assertArtworkEdge(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    throw new Error('Invalid artwork limit')
+  }
+  if (value < DEVICE_ARTWORK_EDGE_MIN || value > DEVICE_ARTWORK_EDGE_MAX) {
+    throw new Error(
+      `Invalid artwork limit: must be between ${DEVICE_ARTWORK_EDGE_MIN} and ${DEVICE_ARTWORK_EDGE_MAX}`,
+    )
+  }
+  return value
+}
+
 function assertConnectPayload(value: unknown): DeviceConnectPayload {
   if (!value || typeof value !== 'object') throw new Error('Invalid device payload')
   const payload = value as DeviceConnectPayload
+  if (payload.musicRoot !== undefined && typeof payload.musicRoot !== 'string') {
+    throw new Error('Invalid device music root')
+  }
+  if (payload.pcTargetPath !== undefined) {
+    if (typeof payload.pcTargetPath !== 'string') {
+      throw new Error('Invalid PC target path')
+    }
+    if (payload.pcTargetPath.length > 0) {
+      assertSafePath(payload.pcTargetPath, 'PC target path')
+    }
+  }
+  if (payload.sourceLibraryIds !== undefined) {
+    if (
+      !Array.isArray(payload.sourceLibraryIds) ||
+      payload.sourceLibraryIds.some(id => typeof id !== 'number')
+    ) {
+      throw new Error('Invalid source libraries')
+    }
+  }
   return {
     ...payload,
     rootPath: assertNonEmptyString(payload.rootPath, 'device root path'),
@@ -28,8 +74,11 @@ function assertPlanRequest(value: unknown): DeviceSyncPlanRequest {
 function assertSettingsUpdate(value: unknown): DeviceSettingsUpdate {
   if (!value || typeof value !== 'object') throw new Error('Invalid device settings')
   const payload = value as DeviceSettingsUpdate
-  if (payload.artworkMaxEdge !== undefined && typeof payload.artworkMaxEdge !== 'number') {
-    throw new Error('Invalid artwork limit')
+  if (payload.artworkMaxEdge !== undefined) {
+    assertArtworkEdge(payload.artworkMaxEdge)
+  }
+  if (payload.musicRoot !== undefined && typeof payload.musicRoot !== 'string') {
+    throw new Error('Invalid device music root')
   }
   if (payload.defaultMode !== undefined) {
     if (
@@ -40,8 +89,13 @@ function assertSettingsUpdate(value: unknown): DeviceSettingsUpdate {
       throw new Error('Invalid sync mode')
     }
   }
-  if (payload.pcTargetPath !== undefined && typeof payload.pcTargetPath !== 'string') {
-    throw new Error('Invalid PC target path')
+  if (payload.pcTargetPath !== undefined) {
+    if (typeof payload.pcTargetPath !== 'string') {
+      throw new Error('Invalid PC target path')
+    }
+    if (payload.pcTargetPath.length > 0) {
+      assertSafePath(payload.pcTargetPath, 'PC target path')
+    }
   }
   if (payload.sourceLibraryIds !== undefined) {
     if (
@@ -68,6 +122,12 @@ export function registerDevicesChannel(): void {
     service.ignoreVolume(assertNonEmptyString(rootPath, 'volume root path')),
   )
   ipcMain.handle('devices:pickRoot', () => service.pickRoot())
+  ipcMain.handle('devices:pickMusicRoot', (_, rootPath: unknown, currentMusicRoot: unknown) =>
+    service.pickMusicRoot(
+      assertNonEmptyString(rootPath, 'device root path'),
+      currentMusicRoot === undefined ? undefined : assertNonEmptyString(currentMusicRoot, 'device music root'),
+    ),
+  )
   ipcMain.handle('devices:connect', (_, payload: unknown) => service.connect(assertConnectPayload(payload)))
   ipcMain.handle('devices:updateSettings', (_, deviceId: unknown, settings: unknown) =>
     service.updateSettings(
@@ -81,6 +141,9 @@ export function registerDevicesChannel(): void {
   )
   ipcMain.handle('devices:library', (_, deviceId: unknown) =>
     service.deviceLibrary(assertNonEmptyString(deviceId, 'device id')),
+  )
+  ipcMain.handle('devices:rockboxThemes', (_, deviceId: unknown) =>
+    service.rockboxThemes(assertNonEmptyString(deviceId, 'device id')),
   )
   ipcMain.handle('devices:planSync', (_, payload: unknown) =>
     service.planSync(assertPlanRequest(payload)),

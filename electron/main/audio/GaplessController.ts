@@ -16,12 +16,14 @@ const koffi = require('koffi') as typeof import('koffi')
 
 import { BASS_SYNC_END, BASS_SYNC_ONETIME } from './bass-constants'
 import { loadBass, SYNCPROC, type HSTREAM, type HSYNC } from './bass-ffi'
-import type { AudioEngine } from './AudioEngine'
+import type { AudioEngine, StreamInfo } from './AudioEngine'
+import type { StreamInfoPayload } from '@shared/types/ipc-contract'
 
 interface PreloadedStream {
   path: string
   handle: HSTREAM
-  duration: number
+  info: StreamInfo
+  memoryBuffer: Buffer | null
 }
 
 // Module-level retention of native callbacks. We can't put these on the
@@ -57,59 +59,112 @@ function releaseCallback(entry: RegisteredCallback): void {
   try { koffi.unregister(entry.cb) } catch { /* already unregistered */ }
 }
 
+function serializeStreamInfo(info: StreamInfo): StreamInfoPayload {
+  return {
+    freq: info.freq,
+    chans: info.chans,
+    ctype: info.ctype,
+    duration: info.duration,
+    durationBytes: Number(info.durationBytes),
+    bytesPerSecond: info.bytesPerSecond,
+  }
+}
+
 export class GaplessController {
   private next: PreloadedStream | null = null
-  private nextRegistration: RegisteredCallback | null = null
+  // One callback attached to the *currently playing* stream. It performs the
+  // gapless swap when a preloaded track exists, otherwise it emits the generic
+  // track-ended event used by queueStore as fallback.
+  private currentTrackEndRegistration: RegisteredCallback | null = null
 
   constructor(private engine: AudioEngine) {}
+
+  bindCurrentTrackEnd(): void {
+    const currentStream = this.engine.getCurrentStream()
+    if (currentStream === 0) return
+
+    if (this.currentTrackEndRegistration && this.currentTrackEndRegistration.channel === currentStream) return
+
+    if (this.currentTrackEndRegistration) {
+      releaseCallback(this.currentTrackEndRegistration)
+      this.currentTrackEndRegistration = null
+    }
+
+    this.currentTrackEndRegistration = registerEndSync(currentStream, () => {
+      // Keep the callback for the ending track fresh: if this handler is
+      // invoked via BASS's synchronous callback path, releasing/reattaching
+      // the sync inside the callback itself can cause races.
+      const endedRegistration = this.currentTrackEndRegistration
+      this.currentTrackEndRegistration = null
+      if (endedRegistration) queueMicrotask(() => releaseCallback(endedRegistration))
+
+      if (!this.next) {
+        broadcast('audio:track-ended')
+        return
+      }
+
+      try {
+        const info = this.swapToNext()
+        if (!info) broadcast('audio:track-ended')
+      } catch {
+        broadcast('audio:track-ended')
+      }
+    })
+  }
+
+  private clearCurrentTrackEndRegistration(): void {
+    if (!this.currentTrackEndRegistration) return
+    const reg = this.currentTrackEndRegistration
+    this.currentTrackEndRegistration = null
+    releaseCallback(reg)
+  }
 
   // Preload a track. Idempotent for the same path. The end-of-stream sync is
   // attached to the CURRENT stream so that when it finishes we swap to the
   // preloaded one and start playback in the same audio thread tick.
-  preloadNext(path: string): void {
-    if (this.next && this.next.path === path) return
+  preloadNext(path: string): StreamInfo | null {
+    if (this.next && this.next.path === path) return this.next.info
     this.clearNext()
 
-    const created = this.engine.createStream(path)
+    const created = this.engine.createStream(path, { memoryOnly: true })
+    if (!created) return null
     this.next = {
       path,
       handle: created.handle,
-      duration: created.info.duration,
+      info: created.info,
+      memoryBuffer: created.memoryBuffer,
     }
 
-    const currentStream = this.engine.getCurrentStream()
-    if (currentStream === 0) {
+    this.bindCurrentTrackEnd()
+
+    if (this.engine.getCurrentStream() === 0) {
       // Nothing playing yet — we'll just hold onto the preload. The caller
       // can promote it via swapToNext() whenever it's ready.
-      return
+      return created.info
     }
-    this.nextRegistration = registerEndSync(currentStream, () => this.swapToNext())
+    return created.info
   }
 
   // Forcibly swap to the preloaded stream right now (used when the user hits
   // "Next" before the current track ends, OR fired automatically by the
   // BASS_SYNC_END callback above).
-  swapToNext(): boolean {
-    if (!this.next) return false
+  swapToNext(expectedPath?: string | null): StreamInfo | null {
+    if (!this.next) return null
+    if (expectedPath && this.next.path !== expectedPath) return null
     const preloaded = this.next
     this.next = null
-
-    // We no longer need the end-sync — the current stream is about to be freed.
-    if (this.nextRegistration) {
-      // Mark for release on a microtask so we don't unregister inside the
-      // callback that triggered us (which would leave dangling state).
-      const reg = this.nextRegistration
-      this.nextRegistration = null
-      queueMicrotask(() => releaseCallback(reg))
-    }
+    const endedRegistration = this.currentTrackEndRegistration
+    this.currentTrackEndRegistration = null
+    if (endedRegistration) queueMicrotask(() => releaseCallback(endedRegistration))
 
     const old = this.engine.releaseCurrent()
     if (old.handle !== 0) this.engine.freeStream(old.handle)
     // adoptStream() starts playback itself (so the FFT timer re-syncs against a
     // live channel), so we don't call ChannelPlay here.
-    this.engine.adoptStream(preloaded.handle, preloaded.path)
-    broadcast('audio:gapless-fired', { path: preloaded.path })
-    return true
+    const info = this.engine.adoptStream(preloaded.handle, preloaded.path, preloaded.memoryBuffer)
+    this.bindCurrentTrackEnd()
+    broadcast('audio:gapless-fired', { path: preloaded.path, streamInfo: serializeStreamInfo(info) })
+    return info
   }
 
   // Drop the preloaded stream without playing it (e.g. queue was modified).
@@ -117,11 +172,11 @@ export class GaplessController {
     if (!this.next) return
     this.engine.freeStream(this.next.handle)
     this.next = null
-    if (this.nextRegistration) {
-      const reg = this.nextRegistration
-      this.nextRegistration = null
-      releaseCallback(reg)
-    }
+  }
+
+  clear(): void {
+    this.clearNext()
+    this.clearCurrentTrackEndRegistration()
   }
 
   movePreloadedToOutputDevice(deviceId: number): boolean {

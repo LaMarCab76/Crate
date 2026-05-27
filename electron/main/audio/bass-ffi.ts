@@ -78,7 +78,8 @@ interface BassBindings {
   PluginLoad: (file: string, flags: number) => number
   SetConfig: (option: number, value: number) => number
   GetConfig: (option: number) => number
-  StreamCreateFile: (mem: number, file: string, offset: bigint, length: bigint, flags: number) => number
+  StreamCreateFile: (filetype: number, file: string, offset: bigint, length: bigint, flags: number) => number
+  StreamCreateFileMemory: (filetype: number, file: Buffer, offset: bigint, length: bigint, flags: number) => number
   StreamFree: (handle: number) => number
   ChannelPlay: (handle: number, restart: number) => number
   ChannelPause: (handle: number) => number
@@ -119,6 +120,7 @@ export function loadBass(): BassBindings {
     SetConfig:          lib.func('int32_t BASS_SetConfig(uint32_t, uint32_t)'),
     GetConfig:          lib.func('uint32_t BASS_GetConfig(uint32_t)'),
     StreamCreateFile:   lib.func('uint32_t BASS_StreamCreateFile(int32_t, const char *, uint64_t, uint64_t, uint32_t)'),
+    StreamCreateFileMemory: lib.func('BASS_StreamCreateFile', 'uint32_t', ['int32_t', 'const void *', 'uint64_t', 'uint64_t', 'uint32_t']),
     StreamFree:         lib.func('int32_t BASS_StreamFree(uint32_t)'),
     ChannelPlay:        lib.func('int32_t BASS_ChannelPlay(uint32_t, int32_t)'),
     ChannelPause:       lib.func('int32_t BASS_ChannelPause(uint32_t)'),

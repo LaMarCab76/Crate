@@ -3,7 +3,7 @@ import { LYRICS_SETTINGS_DEFAULTS, type LyricsSettingsState } from '@shared/type
 // In-memory holder for the lyrics preferences. Mirrors the LibraryBackup model:
 // the renderer owns persistence (localStorage) and pushes values here via the
 // settings:setLyrics IPC handler (plus a boot-time push). Main reads these to
-// decide caching, sidecar writes and FLAC embed/backup behavior.
+// decide cache/fetch behavior. Sidecar writes are mandatory.
 class LyricsSettings {
   private state: LyricsSettingsState = { ...LYRICS_SETTINGS_DEFAULTS }
 

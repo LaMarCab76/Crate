@@ -15,7 +15,7 @@ export function LyricsSidePane({ closing = false, onClose }: LyricsSidePaneProps
           <Icon name="close" size={13} />
         </button>
       </div>
-      <LyricsPanel variant="side" />
+      <LyricsPanel variant="side" active={!closing} />
     </aside>
   )
 }

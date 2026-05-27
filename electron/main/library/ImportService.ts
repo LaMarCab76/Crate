@@ -6,6 +6,7 @@ import { getRepos } from '../db/repositories'
 import { readTrackMetadata, type TrackMetadata } from './MetadataExtractor'
 import { parseArtistName } from './ArtistNameParser'
 import { broadcast } from '../ipc/events'
+import { createThrottledBroadcaster } from '../ipc/throttle'
 import { getLibraryBackup } from '../services/LibraryBackup'
 import type { DbFolder, DbTrackInsert } from '@shared/types/db'
 
@@ -32,6 +33,9 @@ export async function collectAudioFiles(root: string): Promise<string[]> {
     for (const ent of entries) {
       // Skip dotfiles and macOS resource forks.
       if (ent.name.startsWith('.')) continue
+      // Reject symlinks to avoid cycles and accidental escapes from the
+      // library root — matches the device-sync collectAudioFiles behavior.
+      if (ent.isSymbolicLink()) continue
       const full = join(dir, ent.name)
       if (ent.isDirectory()) {
         await walk(full)
@@ -131,6 +135,7 @@ export interface AddFolderResult {
 export class ImportService {
   private repos: Repos
   private scanning = new Set<number>()
+  private throttle = createThrottledBroadcaster(120)
 
   constructor() {
     this.repos = getRepos()
@@ -148,7 +153,7 @@ export class ImportService {
     this.scanning.add(folderId)
 
     try {
-      broadcast('library:import:progress', {
+      this.throttle.emit('library:import:progress', true, {
         folderId, scanned: 0, imported: 0, total: 0, phase: 'discovering',
       })
 
@@ -192,7 +197,7 @@ export class ImportService {
           }
         },
         scanned => {
-          broadcast('library:import:progress', {
+          this.throttle.emit('library:import:progress', false, {
             folderId, scanned, imported, total, phase: 'scanning',
           })
         },
@@ -203,7 +208,7 @@ export class ImportService {
         imported = imported + 1
         if (batchInserts.length >= 100) {
           flush()
-          broadcast('library:import:progress', {
+          this.throttle.emit('library:import:progress', false, {
             folderId, scanned: fresh.length, imported, total, phase: 'writing',
           })
         }
@@ -226,6 +231,7 @@ export class ImportService {
       }
       backup.writeForFolderImmediate(folderId)
 
+      this.throttle.reset('library:import:progress')
       broadcast('library:import:complete', { folderId, totalImported: imported, total })
       broadcast('library:changed', { reason: 'import' })
     } finally {
@@ -242,7 +248,13 @@ export class ImportService {
     const album = this.repos.albums.getOrCreate(md.album, md.albumArtist ?? null, md.year || null)
     const genre = md.genre ? this.repos.genres.getOrCreate(md.genre) : null
     const row = buildTrackInsert(md, filePath, folderId, album.id, artist.id, genre?.id ?? null)
+
+    // Re-check inside the insert path: between getByPath above and here a
+    // concurrent scan could have inserted the same row.
+    const existing = this.repos.tracks.getByPath(filePath)
+    if (existing) return null
     const trackId = this.repos.tracks.insert(row)
+    if (trackId === 0) return null
 
     this.repos.folders.updateTrackCount(folderId, this.repos.tracks.countByFolder(folderId))
     getLibraryBackup().scheduleWriteForFolder(folderId)

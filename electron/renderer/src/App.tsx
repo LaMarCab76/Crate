@@ -5,6 +5,7 @@ import { Toolbar } from './components/Toolbar'
 import { Icon } from './components/Icon'
 import { PlayerPane } from './components/PlayerPane'
 import { PlayerBottomBar } from './components/PlayerBottomBar'
+import { DeviceConnectModal, type DeviceConnectTarget } from './components/DeviceConnectModal'
 import { LyricsSidePane } from './components/LyricsSidePane'
 import { UpNextToast } from './components/UpNextToast'
 import { NowPlayingFull } from './components/NowPlayingFull'
@@ -48,7 +49,7 @@ const SIDEBAR_WIDTH_STORAGE_KEY = 'crate.layout.sidebarWidth.v1'
 const PLAYER_PANE_OPEN_STORAGE_KEY = 'crate.layout.playerPaneOpen.v1'
 const PLAYER_PANE_EXIT_MS = 280
 const PB_PLAYER_EXIT_MS = 190
-const LYRICS_SIDE_PANE_EXIT_MS = 220
+const LYRICS_SIDE_PANE_EXIT_MS = 340
 
 const SIDEBAR_WIDTH_DEFAULT = 240
 const SIDEBAR_WIDTH_MIN = 180
@@ -131,11 +132,11 @@ function DeviceVolumePrompt({
   onOpenDevice: (deviceId: string) => void
 }) {
   const unknownVolumes = useDeviceStore(s => s.unknownVolumes)
-  const connect = useDeviceStore(s => s.connect)
   const ignoreVolume = useDeviceStore(s => s.ignoreVolume)
   const addFolder = useLibraryStore(s => s.addFolder)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [connectTarget, setConnectTarget] = useState<DeviceConnectTarget | null>(null)
   const volume = unknownVolumes[0]
   if (!volume) return null
 
@@ -164,12 +165,7 @@ function DeviceVolumePrompt({
           className="btn primary"
           type="button"
           disabled={busy}
-          onClick={() => {
-            void run(async () => {
-              const device = await connect({ rootPath: volume.rootPath, artworkMaxEdge: defaultArtworkMaxEdge })
-              onOpenDevice(device.id)
-            })
-          }}
+          onClick={() => setConnectTarget({ rootPath: volume.rootPath, name: volume.name })}
         >
           DAP
         </button>
@@ -195,6 +191,14 @@ function DeviceVolumePrompt({
           Ignorar
         </button>
       </div>
+      {connectTarget && (
+        <DeviceConnectModal
+          target={connectTarget}
+          artworkMaxEdge={defaultArtworkMaxEdge}
+          onConnected={device => onOpenDevice(device.id)}
+          onClose={() => setConnectTarget(null)}
+        />
+      )}
     </div>
   )
 }
@@ -238,7 +242,7 @@ export default function App() {
   const favoriteTracks = useFavoriteTracks()
   const canShowPlayerPane = nowTrack != null && !expanded
   const isPlayerPaneOpen = playerPaneOpen && canShowPlayerPane
-  const showLyricsSidePane = lyricsSidePaneOpen && isPlayerPaneOpen
+  const showLyricsSidePane = lyricsSidePaneOpen && canShowPlayerPane
   const showBottomPlayer = !isPlayerPaneOpen && canShowPlayerPane
   const [playerPaneVisible, setPlayerPaneVisible] = useState(() => isPlayerPaneOpen)
   const [lyricsSidePaneVisible, setLyricsSidePaneVisible] = useState(false)
@@ -315,8 +319,8 @@ export default function App() {
   }, [showLyricsSidePane, lyricsSidePaneVisible])
 
   useEffect(() => {
-    if (!isPlayerPaneOpen && lyricsSidePaneOpen) setLyricsSidePaneOpen(false)
-  }, [isPlayerPaneOpen, lyricsSidePaneOpen])
+    if (nowTrack == null && lyricsSidePaneOpen) setLyricsSidePaneOpen(false)
+  }, [nowTrack, lyricsSidePaneOpen])
 
   // Kick off the first library load when the renderer is ready.
   useEffect(() => {
@@ -630,10 +634,9 @@ export default function App() {
                 setExpanded(true)
               }}
               onCollapse={() => {
-                setLyricsSidePaneOpen(false)
                 setPlayerPaneOpen(false)
               }}
-              lyricsSidePaneOpen={showLyricsSidePane}
+              lyricsSidePaneOpen={lyricsSidePaneOpen && canShowPlayerPane}
               onToggleLyricsSidePane={() => setLyricsSidePaneOpen(open => !open)}
               onOpenAlbum={album => navigate({ kind: 'album', album })}
               onOpenArtist={artist => navigate({ kind: 'artist', artist })}
@@ -652,8 +655,13 @@ export default function App() {
           {bottomPlayerVisible && (
             <PlayerBottomBar
               closing={isBottomPlayerClosing || bottomPlayerClosing}
-              onExpand={() => setExpanded(true)}
+              onExpand={() => {
+                setLyricsSidePaneOpen(false)
+                setExpanded(true)
+              }}
               onShowPanel={() => setPlayerPaneOpen(true)}
+              lyricsSidePaneOpen={lyricsSidePaneOpen && canShowPlayerPane}
+              onToggleLyricsSidePane={() => setLyricsSidePaneOpen(open => !open)}
               onOpenAlbum={album => navigate({ kind: 'album', album })}
               onOpenArtist={artist => navigate({ kind: 'artist', artist })}
             />

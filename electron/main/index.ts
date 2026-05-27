@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { closeDatabase, getDatabase } from './db/database'
 import { registerLibraryChannel } from './ipc/library-channel'
-import { registerAudioChannel } from './ipc/audio-channel'
+import { disposeGapless, registerAudioChannel } from './ipc/audio-channel'
 import { registerLyricsChannel } from './ipc/lyrics-channel'
 import { registerDevicesChannel } from './ipc/devices-channel'
 import { registerDownloadsChannel } from './ipc/downloads-channel'
@@ -170,6 +170,7 @@ app.on('will-quit', () => {
   // hog-locked the OS keeps it claimed for this process and no other app
   // can play sound until reboot.
   try { getExclusiveModeManager().dispose() } catch { /* manager may not have initialized */ }
+  try { disposeGapless() } catch { /* gapless may not have initialized */ }
   try { getAudioEngine().dispose() } catch { /* engine may not have initialized */ }
   closeDatabase()
 })

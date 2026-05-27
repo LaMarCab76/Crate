@@ -3,6 +3,8 @@
 
 // ---------------- Streams / channels ----------------
 
+export const BASS_FILE_NAME       = 0
+export const BASS_FILE_MEM        = 1
 export const BASS_STREAM_PRESCAN  = 0x20000
 export const BASS_STREAM_DECODE   = 0x200000
 export const BASS_STREAM_AUTOFREE = 0x40000

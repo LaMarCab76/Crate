@@ -12,6 +12,7 @@ import type {
   MetadataCompletionApplyResult,
   MetadataCompletionPreview,
   MetadataCompletionTargetsPayload,
+  RemoveFolderOptions,
   TrackMetadataUpdatePayload,
   TrashTracksResult,
 } from '@shared/types/ipc-contract'
@@ -26,6 +27,7 @@ import { usePlaybackStore } from './playbackStore'
 import { useQueueStore } from './queueStore'
 
 const TRACK_NO_WITHOUT = Number.MAX_SAFE_INTEGER
+const DISC_NO_WITHOUT = Number.MAX_SAFE_INTEGER
 const UNRESOLVED_ALBUM_PREFIX = 'a-unresolved'
 const UNRESOLVED_ALBUM_LABEL = 'Sin álbum detectado'
 const SYNTH_PATTERNS: Pattern[] = ['circles', 'sun', 'rays', 'grid', 'wave', 'stripes', 'rings', 'half', 'diag', 'lines']
@@ -102,6 +104,10 @@ function buildUnresolvedAlbum(albumId: string, tracks: Track[]): Album {
 }
 
 function compareTrackNumberAsc(a: Track, b: Track): number {
+  const aDisc = a.discNumber != null && a.discNumber > 0 ? a.discNumber : DISC_NO_WITHOUT
+  const bDisc = b.discNumber != null && b.discNumber > 0 ? b.discNumber : DISC_NO_WITHOUT
+  if (aDisc !== bDisc) return aDisc - bDisc
+
   const aNo = a.no > 0 ? a.no : TRACK_NO_WITHOUT
   const bNo = b.no > 0 ? b.no : TRACK_NO_WITHOUT
   if (aNo !== bNo) return aNo - bNo
@@ -124,31 +130,18 @@ function latestTrackAddedDateInAlbum(tracks: Track[]): string {
   }, '')
 }
 
-// The active library is the folder the user is scoping the views to (null = all
-// libraries). It's a UI preference, persisted locally so it sticks across reopen.
-const ACTIVE_LIBRARY_STORAGE_KEY = 'crate.activeLibraryId'
+const LEGACY_ACTIVE_LIBRARY_STORAGE_KEY = 'crate.activeLibraryId'
 
-function loadActiveLibraryId(): number | null {
-  if (typeof window === 'undefined') return null
-  try {
-    const raw = window.localStorage.getItem(ACTIVE_LIBRARY_STORAGE_KEY)
-    if (!raw) return null
-    const parsed = Number.parseInt(raw, 10)
-    return Number.isFinite(parsed) ? parsed : null
-  } catch {
-    return null
-  }
-}
-
-function persistActiveLibraryId(id: number | null): void {
+function clearLegacyActiveLibraryScope(): void {
   if (typeof window === 'undefined') return
   try {
-    if (id == null) window.localStorage.removeItem(ACTIVE_LIBRARY_STORAGE_KEY)
-    else window.localStorage.setItem(ACTIVE_LIBRARY_STORAGE_KEY, String(id))
+    window.localStorage.removeItem(LEGACY_ACTIVE_LIBRARY_STORAGE_KEY)
   } catch {
     /* ignore */
   }
 }
+
+clearLegacyActiveLibraryScope()
 
 interface LibraryState {
   tracks: Track[]
@@ -158,7 +151,6 @@ interface LibraryState {
   playlists: Playlist[]
   folders: DbFolder[]
   trackCount: number
-  activeLibraryId: number | null
   loaded: boolean
   loading: boolean
   error: string | null
@@ -170,9 +162,8 @@ interface LibraryState {
   } | null
   refresh(): Promise<void>
   addFolder(path: string): Promise<void>
-  removeFolder(id: number): Promise<void>
+  removeFolder(id: number, options?: RemoveFolderOptions): Promise<void>
   pickFolder(): Promise<string | null>
-  setActiveLibrary(id: number | null): void
   dismissMetadataCompletionPrompt(): void
 }
 
@@ -184,7 +175,6 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   playlists: [],
   folders: [],
   trackCount: 0,
-  activeLibraryId: loadActiveLibraryId(),
   loaded: false,
   loading: false,
   error: null,
@@ -293,14 +283,6 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         return dbToUiPlaylist(p, playlistTracks)
       })
 
-      // Drop the active library scope if its folder was removed since last load.
-      const currentActive = get().activeLibraryId
-      const activeLibraryId =
-        currentActive != null && dbFolders.some(f => f.id === currentActive)
-          ? currentActive
-          : null
-      if (activeLibraryId !== currentActive) persistActiveLibraryId(activeLibraryId)
-
       set({
         tracks: orderedTracks,
         albums,
@@ -309,7 +291,6 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         playlists,
         folders: dbFolders,
         trackCount: count,
-        activeLibraryId,
         loaded: true,
         loading: false,
         error: null,
@@ -324,19 +305,14 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     await get().refresh()
   },
 
-  async removeFolder(id) {
-    await window.api.library.removeFolder(id)
+  async removeFolder(id, options) {
+    await window.api.library.removeFolder(id, options)
     await get().refresh()
   },
 
   async pickFolder() {
     const result = await window.api.library.pickFolder()
     return result.canceled ? null : result.path
-  },
-
-  setActiveLibrary(id) {
-    persistActiveLibraryId(id)
-    set({ activeLibraryId: id })
   },
 
   dismissMetadataCompletionPrompt() {
@@ -562,9 +538,14 @@ export async function trashTracks(trackDbIds: number[]): Promise<TrashTracksResu
   return result
 }
 
-// Subscribe once, on module load, to main-process push events so the store
-// stays fresh without each component wiring its own listener.
-if (typeof window !== 'undefined' && window.api?.library) {
+let libraryListenerCleanups: Array<() => void> | null = null
+
+function initializeLibraryListeners(): void {
+  if (typeof window === 'undefined' || !window.api?.library) return
+  if (libraryListenerCleanups) {
+    for (const off of libraryListenerCleanups) off()
+    libraryListenerCleanups = null
+  }
   let refreshDebounce: number | undefined
   const scheduleRefresh = () => {
     if (refreshDebounce) window.clearTimeout(refreshDebounce)
@@ -573,15 +554,34 @@ if (typeof window !== 'undefined' && window.api?.library) {
     }, 200)
   }
 
-  window.api.library.onImportProgress(payload => {
+  const offProgress = window.api.library.onImportProgress(payload => {
     useLibraryStore.setState({ importing: payload })
   })
-  window.api.library.onImportComplete(payload => {
+  const offComplete = window.api.library.onImportComplete(payload => {
     useLibraryStore.setState({ importing: null })
     scheduleRefresh()
     void refreshMetadataCompletionPrompt(payload.folderId)
   })
-  window.api.library.onLibraryChanged(scheduleRefresh)
+  const offChanged = window.api.library.onLibraryChanged(scheduleRefresh)
+  libraryListenerCleanups = [
+    offProgress,
+    offComplete,
+    offChanged,
+    () => {
+      if (refreshDebounce) window.clearTimeout(refreshDebounce)
+    },
+  ]
+}
+
+initializeLibraryListeners()
+
+if (typeof import.meta !== 'undefined' && (import.meta as { hot?: { dispose: (cb: () => void) => void } }).hot) {
+  (import.meta as { hot: { dispose: (cb: () => void) => void } }).hot.dispose(() => {
+    if (libraryListenerCleanups) {
+      for (const off of libraryListenerCleanups) off()
+      libraryListenerCleanups = null
+    }
+  })
 }
 
 export function useTracks(): Track[] {
@@ -594,49 +594,42 @@ export function useArtists(): Artist[] {
   return useLibraryStore(s => s.artists)
 }
 
-// Library-scoped views. When a library is active, only the tracks/albums/artists
-// whose tracks live in that folder are returned (null = every library).
-export function useActiveLibraryId(): number | null {
-  return useLibraryStore(s => s.activeLibraryId)
-}
+// Visible library views always represent the full local library. Source-folder
+// management stays in Preferences and device sync settings, not the sidebar.
 export function useVisibleTracks(): Track[] {
-  return useLibraryStore(
-    useShallow(s =>
-      s.activeLibraryId == null
-        ? s.tracks
-        : s.tracks.filter(t => t.folderId === s.activeLibraryId),
-    ),
-  )
+  return useLibraryStore(s => s.tracks)
 }
 export function useVisibleAlbums(): Album[] {
-  return useLibraryStore(
-    useShallow(s =>
-      s.activeLibraryId == null
-        ? s.albums
-        : s.albums.filter(a => a.tracks.some(t => t.folderId === s.activeLibraryId)),
-    ),
-  )
+  return useLibraryStore(s => s.albums)
 }
 export function useVisibleArtists(): Artist[] {
-  return useLibraryStore(
-    useShallow(s =>
-      s.activeLibraryId == null
-        ? s.artists
-        : s.artists.filter(ar =>
-            ar.albums.some(al => al.tracks.some(t => t.folderId === s.activeLibraryId)),
-          ),
-    ),
-  )
+  return useLibraryStore(s => s.artists)
 }
 
+// Memoize filtered favorites by source-array identity so subscribers don't
+// re-run `filter` on every store notification — the lists only need to be
+// recomputed when the underlying artists/tracks array reference changes.
+const favoriteArtistsCache = new WeakMap<Artist[], Artist[]>()
+const favoriteTracksCache = new WeakMap<Track[], Track[]>()
+
 export function useFavoriteArtists(): Artist[] {
-  // useShallow keeps the React tree stable when the filtered list happens to
-  // be the same set even though the array reference changed.
-  return useLibraryStore(useShallow(s => s.artists.filter(ar => ar.favorite)))
+  return useLibraryStore(useShallow(s => {
+    const cached = favoriteArtistsCache.get(s.artists)
+    if (cached) return cached
+    const computed = s.artists.filter(ar => ar.favorite)
+    favoriteArtistsCache.set(s.artists, computed)
+    return computed
+  }))
 }
 
 export function useFavoriteTracks(): Track[] {
-  return useLibraryStore(useShallow(s => s.tracks.filter(t => t.loved)))
+  return useLibraryStore(useShallow(s => {
+    const cached = favoriteTracksCache.get(s.tracks)
+    if (cached) return cached
+    const computed = s.tracks.filter(t => t.loved)
+    favoriteTracksCache.set(s.tracks, computed)
+    return computed
+  }))
 }
 
 export function useGenres(): UiGenre[] {

@@ -5,13 +5,14 @@ import { useQueueUpNext } from '@renderer/stores/queueStore'
 
 interface UpNextToastProps {
   variant: 'bottom' | 'side'
+  enabled?: boolean
 }
 
-const NEXT_TOAST_SEC = 30
-// El cartel del panel lateral se oculta ~1s antes de que arranque el próximo tema.
-const SIDE_HIDE_LEAD_SEC = 1
+const BOTTOM_TOAST_START_SEC = 30
+const SIDE_TOAST_START_SEC = 15
+const SIDE_HIDE_LEAD_SEC = 3
 
-export function UpNextToast({ variant }: UpNextToastProps) {
+export function UpNextToast({ variant, enabled = true }: UpNextToastProps) {
   const track = usePlaybackStore(s => s.currentTrack)
   const status = usePlaybackStore(s => s.status)
   const positionSec = usePlaybackStore(s => s.positionSec)
@@ -23,11 +24,11 @@ export function UpNextToast({ variant }: UpNextToastProps) {
 
   if (variant === 'side') {
     if (!upNext) return null
-    // Render persistente: alternamos la clase .show para animar entrada/salida en el flujo.
     const show =
+      enabled &&
       track != null &&
       status === 'playing' &&
-      remainingSec <= NEXT_TOAST_SEC &&
+      remainingSec <= SIDE_TOAST_START_SEC &&
       remainingSec > SIDE_HIDE_LEAD_SEC
     return (
       <div className={`up-next-inline${show ? ' show' : ''}`} aria-hidden={!show}>
@@ -43,7 +44,7 @@ export function UpNextToast({ variant }: UpNextToastProps) {
     )
   }
 
-  const show = track != null && status === 'playing' && upNext != null && remainingSec <= NEXT_TOAST_SEC && remainingSec >= 1
+  const show = enabled && track != null && status === 'playing' && upNext != null && remainingSec <= BOTTOM_TOAST_START_SEC && remainingSec >= 1
 
   if (!show || !upNext) return null
 

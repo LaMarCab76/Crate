@@ -2,12 +2,19 @@ import { useEffect, useRef, type CSSProperties } from 'react'
 import { binsToBands, subscribeFft } from '@renderer/utils/fft'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
 import { usePlaybackTableBars } from '@renderer/utils/playbackTableBars'
+import { startCappedRafLoop, type CappedRafHandle } from '@renderer/utils/rafLoop'
 
 const BAR_COUNT = 5
 const FLOOR = 0.14
 const DISPLAY_GAIN = 2.8
 const ATTACK = 0.58
 const RELEASE = 0.24
+// Once the bars have settled this close to their target while paused, there's
+// nothing left to animate, so the live loop parks itself until new audio.
+const CONVERGE_EPS = 0.002
+// Skip a transform write when the scale barely moved (≈0.4% of full height),
+// so a near-idle feed doesn't churn DOM style writes every frame.
+const SCALE_EPSILON = 0.004
 
 function clampUnit(value: number): number {
   return Math.max(0, Math.min(1, value))
@@ -19,17 +26,18 @@ function toDisplayScale(value: number): number {
 
 // 5 mini bars that pulse with the actual audio of the playing track. They map
 // directly onto low / low-mid / mid / high-mid / high bands from the 64-bin FFT.
-export function EQBars({ style }: { style?: CSSProperties }) {
+export function EQBars({ style, active = true }: { style?: CSSProperties; active?: boolean }) {
   const currentTrack = usePlaybackStore(s => s.currentTrack)
   const status = usePlaybackStore(s => s.status)
   const positionSec = usePlaybackStore(s => s.positionSec)
   const durationSec = usePlaybackStore(s => s.durationSec)
-  const tableBars = usePlaybackTableBars(currentTrack)
+  const tableBars = usePlaybackTableBars(active ? currentTrack : null)
   const currentTrackKey = currentTrack?.id ?? null
   const barRefs = useRef<Array<HTMLElement | null>>([])
   const bandBuffer = useRef(new Float32Array(BAR_COUNT))
   const target = useRef<number[]>(new Array(BAR_COUNT).fill(0.3))
   const current = useRef<number[]>(new Array(BAR_COUNT).fill(0.3))
+  const lastScaleRef = useRef<number[]>(new Array(BAR_COUNT).fill(-1))
   const positionRef = useRef(positionSec)
   const durationRef = useRef(durationSec)
   const positionUpdatedAtRef = useRef(typeof performance === 'undefined' ? Date.now() : performance.now())
@@ -53,6 +61,17 @@ export function EQBars({ style }: { style?: CSSProperties }) {
   }, [currentTrackKey])
 
   useEffect(() => {
+    if (!active) {
+      target.current.fill(FLOOR)
+      current.current.fill(FLOOR)
+      for (let i = 0; i < BAR_COUNT; i++) {
+        const el = barRefs.current[i]
+        if (el) el.style.transform = `scaleY(${FLOOR})`
+        lastScaleRef.current[i] = FLOOR
+      }
+      return
+    }
+
     const cached =
       tableBars &&
       tableBars.complete &&
@@ -63,12 +82,15 @@ export function EQBars({ style }: { style?: CSSProperties }) {
         ? tableBars
         : null
 
-    const stopFft = cached ? null : subscribeFft(bins => {
-      const bands = binsToBands(bins, BAR_COUNT, bandBuffer.current)
-      for (let i = 0; i < BAR_COUNT; i++) target.current[i] = toDisplayScale(bands[i] ?? 0)
-    }, 'mini')
+    let running = false
+    let handle: CappedRafHandle | null = null
 
-    let frame = 0
+    const stop = () => {
+      running = false
+      handle?.stop()
+      handle = null
+    }
+
     const tick = () => {
       if (cached) {
         const now = typeof performance === 'undefined' ? Date.now() : performance.now()
@@ -90,26 +112,64 @@ export function EQBars({ style }: { style?: CSSProperties }) {
         }
       }
 
+      let maxDiff = 0
       for (let i = 0; i < BAR_COUNT; i++) {
         const diff = target.current[i] - current.current[i]
+        const adiff = Math.abs(diff)
+        if (adiff > maxDiff) maxDiff = adiff
         const weight = diff > 0 ? ATTACK : RELEASE
         const next = current.current[i] + diff * weight
         current.current[i] = next
         const el = barRefs.current[i]
         if (el) {
           const scale = Math.max(FLOOR, Math.min(1, next))
-          el.style.transform = `scaleY(${scale})`
+          if (Math.abs(scale - lastScaleRef.current[i]) >= SCALE_EPSILON) {
+            lastScaleRef.current[i] = scale
+            el.style.transform = `scaleY(${scale})`
+          }
         }
       }
-      frame = requestAnimationFrame(tick)
+
+      // Live + paused: the FFT feed has stopped, so once the bars settle there's
+      // nothing left to animate. Snap to the target, write it, and park the loop.
+      // New audio (subscribeFft callback) or a status change (re-runs this effect)
+      // revives it. The cached path is left running so progress scrubbing still
+      // moves the bars while paused — the FPS cap + epsilon keep that near-free.
+      if (!cached && status !== 'playing' && maxDiff < CONVERGE_EPS) {
+        for (let i = 0; i < BAR_COUNT; i++) {
+          current.current[i] = target.current[i]
+          const el = barRefs.current[i]
+          if (el) {
+            const scale = Math.max(FLOOR, Math.min(1, target.current[i]))
+            lastScaleRef.current[i] = scale
+            el.style.transform = `scaleY(${scale})`
+          }
+        }
+        stop()
+      }
     }
 
-    frame = requestAnimationFrame(tick)
+    const start = () => {
+      if (running) return
+      running = true
+      // Force a write on the first frame even if the value didn't change.
+      lastScaleRef.current.fill(-1)
+      handle = startCappedRafLoop(tick)
+    }
+
+    const stopFft = cached ? null : subscribeFft(bins => {
+      const bands = binsToBands(bins, BAR_COUNT, bandBuffer.current)
+      for (let i = 0; i < BAR_COUNT; i++) target.current[i] = toDisplayScale(bands[i] ?? 0)
+      // New audio arrived — revive the loop if it parked itself while paused.
+      if (!running) start()
+    }, 'mini')
+
+    start()
     return () => {
       if (stopFft) stopFft()
-      cancelAnimationFrame(frame)
+      stop()
     }
-  }, [tableBars, status])
+  }, [active, tableBars, status])
 
   return (
     <span className="eq-bars" style={style}>

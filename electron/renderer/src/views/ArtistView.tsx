@@ -12,7 +12,7 @@ import {
   type ArtistAlbumSortBy,
   type ArtistTrackSortBy,
 } from '@renderer/utils/listSort'
-import { TrackTable } from '@renderer/components/TrackTable'
+import { DiscGroupedTrackTable } from '@renderer/components/TrackTable'
 import { fmtFileSize, fmtTotal } from '@renderer/utils/format'
 import { toggleArtistFavorite, useArtistByUiId } from '@renderer/stores/libraryStore'
 import { extractDominantColor } from '@renderer/utils/colorExtract'
@@ -108,7 +108,7 @@ function ArtistAlbumBlock({
           </button>
         </div>
       </div>
-      <TrackTable tracks={tracks} showArt={false} showAlbum={false} showPlays={false} showSize showTrackNo compact />
+      <DiscGroupedTrackTable tracks={tracks} showArt={false} showAlbum={false} showPlays={false} showSize showTrackNo compact />
     </div>
   )
 }

@@ -5,7 +5,7 @@ import { getLyricsSettings } from '../lyrics/LyricsSettings'
 import { broadcast } from './events'
 import { assertId, assertNonEmptyString, sanitizeIds } from './validation'
 import { MAX_LYRICS_CHARS, clampLyricsOffsetMs, isLyricsSizeOk } from '@shared/lyrics/lrc'
-import type { LyricsSettingsState, LyricsView, LyricsWriteOptions } from '@shared/types/lyrics'
+import type { LyricsSettingsState, LyricsView } from '@shared/types/lyrics'
 
 // Lyrics text can arrive from disk, the renderer, or a remote provider. Reject
 // anything past the shared cap before it reaches the parser/DB.
@@ -90,18 +90,9 @@ export function registerLyricsChannel(): void {
 
   ipcMain.handle('lyrics:export', (_, trackId: number) => svc.exportLrc(assertId(trackId, 'trackId')))
 
-  ipcMain.handle('lyrics:previewEmbed', (_, trackId: number) => svc.previewEmbed(assertId(trackId, 'trackId')))
-
-  ipcMain.handle('lyrics:embedInFile', (_, p: { trackId: number; options?: Partial<LyricsWriteOptions> }) => {
+  ipcMain.handle('lyrics:remove', (_, p: { trackId: number }) => {
     const trackId = assertId(p?.trackId, 'trackId')
-    const result = svc.embedInFile(trackId, p.options)
-    if (result.ok) broadcast('lyrics:changed', { trackId })
-    return result
-  })
-
-  ipcMain.handle('lyrics:remove', (_, p: { trackId: number; stripEmbedded?: boolean }) => {
-    const trackId = assertId(p?.trackId, 'trackId')
-    svc.remove(trackId, { stripEmbedded: p.stripEmbedded === true })
+    svc.remove(trackId)
     broadcast('lyrics:changed', { trackId })
   })
 
@@ -112,7 +103,7 @@ export function registerLyricsChannel(): void {
   })
 
   // Renderer-side preference push (mirrors settings:setLibraryBackup). Main reads
-  // these to decide caching, sidecar writes and embed/backup behavior.
+  // these to decide cache/fetch behavior. Sidecar writes are mandatory.
   ipcMain.handle('settings:setLyrics', (_, patch: Partial<LyricsSettingsState>) => {
     getLyricsSettings().set(patch)
   })

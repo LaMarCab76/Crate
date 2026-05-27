@@ -3,7 +3,7 @@ import type { Album } from '@shared/types/library'
 import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
 import { useAlbumActions } from '@renderer/components/MediaActions'
-import { TrackTable } from '@renderer/components/TrackTable'
+import { DiscGroupedTrackTable } from '@renderer/components/TrackTable'
 import { fmtFileSize, fmtTime } from '@renderer/utils/format'
 import {
   refreshTrackMetadata,
@@ -117,7 +117,7 @@ export function AlbumView({ album }: Props) {
           </div>
         </div>
       </div>
-      <TrackTable
+      <DiscGroupedTrackTable
         tracks={a.tracks}
         showArt={false}
         showAlbum={false}

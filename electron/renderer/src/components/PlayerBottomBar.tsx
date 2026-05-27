@@ -2,6 +2,7 @@ import { type CSSProperties, Fragment, type MouseEvent, useEffect, useRef, useSt
 import { Artwork } from './Artwork'
 import { CodecStrip } from './CodecStrip'
 import { Icon } from './Icon'
+import { TrackLoadingOverlay } from './TrackLoadingOverlay'
 import { fmtTime } from '@renderer/utils/format'
 import {
   toggleTrackFavorite,
@@ -19,11 +20,21 @@ interface PlayerBottomBarProps {
   closing?: boolean
   onExpand: () => void
   onShowPanel: () => void
+  lyricsSidePaneOpen: boolean
+  onToggleLyricsSidePane: () => void
   onOpenAlbum?: (album: Album) => void
   onOpenArtist?: (artist: Artist) => void
 }
 
-export function PlayerBottomBar({ closing = false, onExpand, onShowPanel, onOpenAlbum, onOpenArtist }: PlayerBottomBarProps) {
+export function PlayerBottomBar({
+  closing = false,
+  onExpand,
+  onShowPanel,
+  lyricsSidePaneOpen,
+  onToggleLyricsSidePane,
+  onOpenAlbum,
+  onOpenArtist,
+}: PlayerBottomBarProps) {
   const currentTrack = usePlaybackStore(s => s.currentTrack)
   const [lastTrack, setLastTrack] = useState<Track | null>(() => currentTrack)
   const track = currentTrack ?? lastTrack
@@ -36,6 +47,7 @@ export function PlayerBottomBar({ closing = false, onExpand, onShowPanel, onOpen
   const next = useQueueStore(s => s.next)
   const previous = useQueueStore(s => s.previous)
   const setVolume = useQueueStore(s => s.setVolume)
+  const isTrackTransitioning = useQueueStore(s => s.isTrackTransitioning)
   const shuffle = useQueueStore(s => s.shuffle)
   const repeat = useQueueStore(s => s.repeat)
   const toggleShuffle = useQueueStore(s => s.toggleShuffle)
@@ -248,6 +260,7 @@ export function PlayerBottomBar({ closing = false, onExpand, onShowPanel, onOpen
         <div className="pb-now">
           <button type="button" className="pb-art" onClick={onExpand} title="Expand player">
             <Artwork album={displayAlbum} radius={7} objectFit="cover" />
+            <TrackLoadingOverlay />
           </button>
           <div className="pb-meta">
             {canOpenAlbum ? (
@@ -329,7 +342,7 @@ export function PlayerBottomBar({ closing = false, onExpand, onShowPanel, onOpen
             <button className="play" onClick={() => { void togglePlay() }} title={playing ? 'Pause' : 'Play'}>
               <Icon name={playing ? 'pause' : 'play'} size={15} />
             </button>
-            <button title="Next" onClick={() => { void next() }}><Icon name="next" size={18} /></button>
+            <button title="Next" disabled={isTrackTransitioning} onClick={() => { void next() }}><Icon name="next" size={18} /></button>
             <button
               className={`sub ${repeat !== 'off' ? 'active' : ''}`}
               title={repeat === 'one' ? 'Repeat One' : repeat === 'all' ? 'Repeat All' : 'Repeat'}
@@ -402,6 +415,15 @@ export function PlayerBottomBar({ closing = false, onExpand, onShowPanel, onOpen
               </div>
             )}
           </div>
+          <button
+            className={`tb-icon-btn pb-lyrics-side-btn ${lyricsSidePaneOpen ? 'active' : ''}`}
+            title={lyricsSidePaneOpen ? 'Close lyrics sidebar' : 'Open lyrics sidebar'}
+            aria-label={lyricsSidePaneOpen ? 'Close lyrics sidebar' : 'Open lyrics sidebar'}
+            aria-pressed={lyricsSidePaneOpen}
+            onClick={onToggleLyricsSidePane}
+          >
+            <Icon name="sidebarRight" size={13} />
+          </button>
           <button className="tb-icon-btn" title="Expand" onClick={onExpand}>
             <Icon name="expand" size={13} />
           </button>

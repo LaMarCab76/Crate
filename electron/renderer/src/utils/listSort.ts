@@ -156,6 +156,11 @@ export function sortTracks(
         result = compareNumber(a.d, b.d, direction)
         break
       case 'trackNo': {
+        const aDisc = a.discNumber != null && a.discNumber > 0 ? a.discNumber : Number.MAX_SAFE_INTEGER
+        const bDisc = b.discNumber != null && b.discNumber > 0 ? b.discNumber : Number.MAX_SAFE_INTEGER
+        result = compareNumber(aDisc, bDisc, direction)
+        if (result !== 0) break
+
         const an = a.no || Number.MAX_SAFE_INTEGER
         const bn = b.no || Number.MAX_SAFE_INTEGER
         result = compareNumber(an, bn, direction)

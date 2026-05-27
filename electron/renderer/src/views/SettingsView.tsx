@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { PlayerTintSource, Tweak } from '@renderer/stores/settingsStore'
+import type { DbFolder } from '@shared/types/db'
 import { useEqStore } from '@renderer/stores/eqStore'
 import { Icon } from '@renderer/components/Icon'
 import { ModalShell } from '@renderer/components/ModalShell'
+import { FolderRemovalConfirmModal } from '@renderer/components/FolderRemovalConfirmModal'
+import { DeviceConnectModal, type DeviceConnectTarget } from '@renderer/components/DeviceConnectModal'
 import { useDeviceStore } from '@renderer/stores/deviceStore'
 import { useFolders, useLibraryStore } from '@renderer/stores/libraryStore'
 import { DEVICE_ARTWORK_EDGE_MAX, DEVICE_ARTWORK_EDGE_MIN } from '@shared/constants/device-sync'
@@ -11,6 +14,7 @@ import { LYRICS_OFFSET_LIMIT_MS, clampLyricsOffsetMs } from '@shared/lyrics/lrc'
 import type { LibraryScanEvent, LibraryScanLogPayload, LibraryScanRun, PlaybackCacheStats } from '@shared/types/ipc-contract'
 import { COLOR_PRESETS } from '@renderer/utils/colorPresets'
 import { clearPlaybackTableBarsMemoryCache } from '@renderer/utils/playbackTableBars'
+import { basenameForPath } from '@renderer/utils/devicePaths'
 
 interface Props {
   tweak: Tweak
@@ -24,12 +28,11 @@ function DeviceDetectionPanel({ tweak, setTweak }: Props) {
   const loading = useDeviceStore(s => s.loading)
   const error = useDeviceStore(s => s.error)
   const refreshVolumes = useDeviceStore(s => s.refreshVolumes)
-  const pickAndConnect = useDeviceStore(s => s.pickAndConnect)
-  const connect = useDeviceStore(s => s.connect)
   const ignoreVolume = useDeviceStore(s => s.ignoreVolume)
   const addFolder = useLibraryStore(s => s.addFolder)
   const folders = useFolders()
   const [manualPath, setManualPath] = useState('')
+  const [connectTarget, setConnectTarget] = useState<DeviceConnectTarget | null>(null)
 
   useEffect(() => {
     void refreshVolumes()
@@ -41,8 +44,16 @@ function DeviceDetectionPanel({ tweak, setTweak }: Props) {
   const connectManual = async () => {
     const rootPath = manualPath.trim()
     if (!rootPath) return
-    await connect({ rootPath, artworkMaxEdge: tweak.deviceArtworkMaxEdge })
-    setManualPath('')
+    setConnectTarget({ rootPath, name: basenameForPath(rootPath) })
+  }
+
+  const pickDeviceRoot = async () => {
+    const picked = await window.api.devices.pickRoot()
+    if (picked.canceled || !picked.path) return
+    setConnectTarget({
+      rootPath: picked.path,
+      name: basenameForPath(picked.path),
+    })
   }
 
   const addAsLibrary = async (rootPath: string) => {
@@ -73,7 +84,7 @@ function DeviceDetectionPanel({ tweak, setTweak }: Props) {
         <button className="btn" type="button" disabled={loading} onClick={() => void refreshVolumes()}>
           <Icon name="rotate" size={13} /> Detectar ahora
         </button>
-        <button className="btn primary" type="button" disabled={loading} onClick={() => void pickAndConnect(tweak.deviceArtworkMaxEdge)}>
+        <button className="btn primary" type="button" disabled={loading} onClick={() => void pickDeviceRoot()}>
           <Icon name="device" size={13} /> Elegir carpeta/unidad
         </button>
       </div>
@@ -129,7 +140,7 @@ function DeviceDetectionPanel({ tweak, setTweak }: Props) {
                     className="btn"
                     type="button"
                     disabled={loading || connectedRoots.has(candidate.rootPath)}
-                    onClick={() => void connect({ rootPath: candidate.rootPath, artworkMaxEdge: tweak.deviceArtworkMaxEdge })}
+                    onClick={() => setConnectTarget({ rootPath: candidate.rootPath, name: candidate.name })}
                   >
                     Conectar
                   </button>
@@ -157,7 +168,7 @@ function DeviceDetectionPanel({ tweak, setTweak }: Props) {
                       className="btn"
                       type="button"
                       disabled={loading}
-                      onClick={() => void connect({ rootPath: volume.rootPath, artworkMaxEdge: tweak.deviceArtworkMaxEdge })}
+                      onClick={() => setConnectTarget({ rootPath: volume.rootPath, name: volume.name })}
                     >
                       DAP
                     </button>
@@ -179,6 +190,18 @@ function DeviceDetectionPanel({ tweak, setTweak }: Props) {
           )}
         </div>
       </div>
+      {connectTarget && (
+        <DeviceConnectModal
+          target={connectTarget}
+          artworkMaxEdge={tweak.deviceArtworkMaxEdge}
+          onConnected={() => {
+            if (connectTarget.rootPath === manualPath.trim()) setManualPath('')
+          }}
+          onClose={() => {
+            setConnectTarget(null)
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -236,6 +259,98 @@ function LyricsGlobalOffsetSetting({ tweak, setTweak }: Props) {
         <button type="button" className="btn sm ghost" title="Resetear desfasaje global" onClick={() => commit(0)}>0</button>
       </div>
     </div>
+  )
+}
+
+function LibraryFoldersPanel() {
+  const folders = useFolders()
+  const pickFolder = useLibraryStore(s => s.pickFolder)
+  const addFolder = useLibraryStore(s => s.addFolder)
+  const refresh = useLibraryStore(s => s.refresh)
+  const [removeTarget, setRemoveTarget] = useState<DbFolder | null>(null)
+  const [adding, setAdding] = useState(false)
+  const [scanningId, setScanningId] = useState<number | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const pickAndAdd = async () => {
+    setAdding(true)
+    setError(null)
+    try {
+      const picked = await pickFolder()
+      if (picked) await addFolder(picked)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  const scanFolder = async (folderId: number) => {
+    setScanningId(folderId)
+    setError(null)
+    try {
+      await window.api.library.scanNow(folderId)
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setScanningId(null)
+    }
+  }
+
+  return (
+    <>
+      <div className="set-card library-folders-card">
+        <div className="library-folders-head">
+          <div>
+            <div className="lbl">Carpetas de música</div>
+            <div className="sub">Rutas que Crate analiza y mantiene conectadas.</div>
+          </div>
+          <button className="btn" type="button" disabled={adding} onClick={() => { void pickAndAdd() }}>
+            <Icon name="plus" size={13} /> {adding ? 'Agregando...' : 'Agregar carpeta'}
+          </button>
+        </div>
+        {error && <pre className="modal-error library-folders-error">{error}</pre>}
+        {folders.length === 0 ? (
+          <div className="library-folders-empty">No hay carpetas configuradas.</div>
+        ) : (
+          <div className="library-folders-list">
+            {folders.map(folder => (
+              <div className="library-folder-row" key={folder.id}>
+                <Icon name="folder" size={15} />
+                <div className="library-folder-main">
+                  <strong>{folder.name}</strong>
+                  <span>{folder.path}</span>
+                </div>
+                <span className="library-folder-count">{folder.track_count} temas</span>
+                <div className="library-folder-actions">
+                  <button
+                    className="btn ghost sm"
+                    type="button"
+                    disabled={scanningId === folder.id}
+                    onClick={() => { void scanFolder(folder.id) }}
+                  >
+                    {scanningId === folder.id ? 'Analizando' : 'Analizar'}
+                  </button>
+                  <button className="btn ghost sm" type="button" onClick={() => setRemoveTarget(folder)}>
+                    Eliminar
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      {removeTarget && (
+        <FolderRemovalConfirmModal
+          folder={removeTarget}
+          onClose={() => setRemoveTarget(null)}
+          onRemoved={() => {
+            if (scanningId === removeTarget.id) setScanningId(null)
+          }}
+        />
+      )}
+    </>
   )
 }
 
@@ -425,6 +540,7 @@ export function SettingsView({ tweak, setTweak }: Props) {
 
       <div className="set-section">
         <h2>Library</h2>
+        <LibraryFoldersPanel />
         <div className="set-card">
           <div className="set-row">
             <div>
@@ -471,11 +587,6 @@ export function SettingsView({ tweak, setTweak }: Props) {
             ['lyricsAutoFetch', 'Buscar letras automáticamente', 'Al reproducir, busca letras en línea (LRCLIB) si no hay en caché.'],
             ['lyricsPreferSynced', 'Preferir letras sincronizadas', 'Usa la versión con tiempos cuando esté disponible.'],
             ['lyricsCacheLocal', 'Guardar letras en caché local', 'Cachea los resultados en la base de datos.'],
-            ['lyricsWriteSidecar', 'Crear archivo .lrc externo', 'Guarda un .lrc junto a la canción cuando hay letra sincronizada.'],
-            ['lyricsEmbedAuto', 'Escribir letras dentro del FLAC automáticamente', 'Inyecta en el archivo sin pedir confirmación (no recomendado).'],
-            ['lyricsOverwrite', 'Sobrescribir letras existentes', 'Reemplaza letras ya presentes en el archivo al inyectar.'],
-            ['lyricsConfirmBeforeWrite', 'Preguntar antes de modificar archivos', 'Muestra una confirmación antes de inyectar en el archivo.'],
-            ['lyricsBackupBeforeWrite', 'Crear backup antes de modificar archivos', 'Guarda un .cratebak antes de escribir en el FLAC.'],
           ] as const).map(([key, label, sub]) => (
             <div className="set-row" key={key}>
               <div>

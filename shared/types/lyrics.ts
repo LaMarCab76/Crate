@@ -68,33 +68,6 @@ export interface LyricsCandidate {
   score: number
 }
 
-// Per-action FLAC write options resolved from settings + the explicit action.
-export interface LyricsWriteOptions {
-  embedInFile: boolean
-  writeSidecarLrc: boolean
-  overwriteExisting: boolean
-  createBackup: boolean
-}
-
-// Dry-run preview for the embed action (no file mutation).
-export interface LyricsEmbedPreview {
-  trackId: number
-  path: string
-  isFlac: boolean
-  hasExistingLyrics: boolean
-  willWriteUnsynced: boolean
-  willWriteSynced: boolean
-  willBackup: boolean
-  blocked: LyricsFailureReason | null // non-null => action would be refused
-}
-
-export interface LyricsEmbedResult {
-  ok: boolean
-  reason?: LyricsFailureReason
-  verified: boolean
-  backupPath?: string
-}
-
 export interface LyricsSelectionSummary {
   done: number
   found: number
@@ -112,20 +85,10 @@ export interface LyricsSettingsState {
   autoFetch: boolean
   preferSynced: boolean
   cacheLocal: boolean
-  createSidecar: boolean
-  embedInFlac: boolean
-  overwriteExisting: boolean
-  askBeforeModifying: boolean
-  backupBeforeModifying: boolean
 }
 
 export const LYRICS_SETTINGS_DEFAULTS: LyricsSettingsState = {
   autoFetch: true,
   preferSynced: true,
   cacheLocal: true,
-  createSidecar: true,
-  embedInFlac: false,
-  overwriteExisting: false,
-  askBeforeModifying: true,
-  backupBeforeModifying: true,
 }

@@ -1,23 +1,13 @@
 import { type CSSProperties, type MouseEvent, useState } from 'react'
-import { CodecStrip } from './CodecStrip'
 import { Icon } from './Icon'
 import { fmtTime } from '@renderer/utils/format'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
 import { useQueueStore } from '@renderer/stores/queueStore'
-import type { Track } from '@shared/types/library'
 
-interface Props {
-  track: Track
-  // The title block lives here only in the artwork (viz-off) layout; in the
-  // visualizer layout the title is shown centered with the artwork instead.
-  showTitle: boolean
-}
-
-// Bottom overlay for the fullscreen "stage": title block (lower-left), a
-// full-width seek bar, then a controls row with the transport centered and the
-// volume pinned to the lower-right corner. Drag-to-seek and drag-volume reuse
-// the same handlers the mini-player and the former Ambient/Studio views used.
-export function PlayerStage({ track, showTitle }: Props) {
+// Bottom overlay for the fullscreen stage: full-width seek bar, centered
+// transport, and volume pinned to the lower-right corner. Drag-to-seek and
+// drag-volume reuse the mini-player handlers.
+export function PlayerStage() {
   const status = usePlaybackStore(s => s.status)
   const positionSec = usePlaybackStore(s => s.positionSec)
   const durationSec = usePlaybackStore(s => s.durationSec)
@@ -27,6 +17,11 @@ export function PlayerStage({ track, showTitle }: Props) {
   const previous = useQueueStore(s => s.previous)
   const seek = useQueueStore(s => s.seek)
   const setVolume = useQueueStore(s => s.setVolume)
+  const isTrackTransitioning = useQueueStore(s => s.isTrackTransitioning)
+  const shuffle = useQueueStore(s => s.shuffle)
+  const repeat = useQueueStore(s => s.repeat)
+  const toggleShuffle = useQueueStore(s => s.toggleShuffle)
+  const setRepeat = useQueueStore(s => s.setRepeat)
 
   const [dragProgress, setDragProgress] = useState<number | null>(null)
 
@@ -34,6 +29,9 @@ export function PlayerStage({ track, showTitle }: Props) {
   const progress = durationSec > 0 ? positionSec / durationSec : 0
   const displayProgress = dragProgress ?? progress
   const displayPositionSec = dragProgress !== null ? dragProgress * durationSec : positionSec
+  const cycleRepeat = () => {
+    setRepeat(repeat === 'off' ? 'all' : repeat === 'all' ? 'one' : 'off')
+  }
 
   const onProgressMouseDown = (e: MouseEvent<HTMLDivElement>) => {
     if (durationSec <= 0) return
@@ -66,15 +64,31 @@ export function PlayerStage({ track, showTitle }: Props) {
 
   return (
     <div className="np-stage-overlay">
-      {showTitle && (
-        <div className="np-stage-meta">
-          <h2>{track.t}</h2>
-          <p>{track.artist} · {track.albumTitle}</p>
-          <div className="pp-quality-chip">
-            <CodecStrip track={track} compact />
-          </div>
+      <div className="np-stage-controls">
+        <div className="np-buttons">
+          <button
+            className={`sub ${shuffle ? 'active' : ''}`}
+            title="Shuffle"
+            aria-pressed={shuffle}
+            onClick={() => toggleShuffle()}
+          >
+            <Icon name="shuffle" size={16} />
+          </button>
+          <button title="Previous" onClick={() => { void previous() }}><Icon name="prev" size={20} /></button>
+          <button className="play" onClick={() => { void togglePlay() }} title={playing ? 'Pause' : 'Play'}>
+            <Icon name={playing ? 'pause' : 'play'} size={20} />
+          </button>
+          <button title="Next" disabled={isTrackTransitioning} onClick={() => { void next() }}><Icon name="next" size={20} /></button>
+          <button
+            className={`sub ${repeat !== 'off' ? 'active' : ''}`}
+            title={repeat === 'one' ? 'Repeat One' : repeat === 'all' ? 'Repeat All' : 'Repeat'}
+            aria-pressed={repeat !== 'off'}
+            onClick={cycleRepeat}
+          >
+            <Icon name="repeat" size={16} />
+          </button>
         </div>
-      )}
+      </div>
 
       <div className="np-progress">
         <span className="time">{fmtTime(displayPositionSec)}</span>
@@ -84,22 +98,13 @@ export function PlayerStage({ track, showTitle }: Props) {
         <span className="time">-{fmtTime(Math.max(0, durationSec - displayPositionSec))}</span>
       </div>
 
-      <div className="np-stage-controls">
-        <div className="np-buttons">
-          <button title="Previous" onClick={() => { void previous() }}><Icon name="prev" size={22} /></button>
-          <button className="play" style={{ width: 52, height: 52 }} onClick={() => { void togglePlay() }} title={playing ? 'Pause' : 'Play'}>
-            <Icon name={playing ? 'pause' : 'play'} size={20} />
-          </button>
-          <button title="Next" onClick={() => { void next() }}><Icon name="next" size={22} /></button>
-        </div>
-        <div className="np-stage-volume pp-volume">
-          <span className="ic"><Icon name={volume === 0 ? 'volumeM' : 'volume'} size={15} /></span>
-          <div className="slider-wrap" style={{ '--pct': `${volume * 100}%` } as CSSProperties}>
-            <div className="track" onMouseDown={onVolumeMouseDown} role="slider" tabIndex={0}>
-              <div className="fill" style={{ width: `${volume * 100}%` }} />
-            </div>
-            <div className="dot" aria-hidden="true" />
+      <div className="np-stage-volume pp-volume">
+        <span className="ic"><Icon name={volume === 0 ? 'volumeM' : 'volume'} size={15} /></span>
+        <div className="slider-wrap" style={{ '--pct': `${volume * 100}%` } as CSSProperties}>
+          <div className="track" onMouseDown={onVolumeMouseDown} role="slider" tabIndex={0}>
+            <div className="fill" style={{ width: `${volume * 100}%` }} />
           </div>
+          <div className="dot" aria-hidden="true" />
         </div>
       </div>
     </div>

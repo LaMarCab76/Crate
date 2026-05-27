@@ -6,6 +6,7 @@ import { LyricsPanel } from './LyricsPanel'
 import { EQBars } from './EQBars'
 import { SpectrumVisualizer } from './SpectrumVisualizer'
 import { UpNextToast } from './UpNextToast'
+import { TrackLoadingOverlay } from './TrackLoadingOverlay'
 import { fmtTime } from '@renderer/utils/format'
 import {
   toggleTrackFavorite,
@@ -28,6 +29,14 @@ interface PlayerPaneProps {
   onOpenAlbum?: (album: Album) => void
   onOpenArtist?: (artist: Artist) => void
 }
+
+type PlayerTab = 'nowPlaying' | 'upNext'
+type InertPanelProps = { inert?: '' }
+
+const PLAYER_VISUALIZER_EXIT_MS = 260
+
+const getInertPanelProps = (inactive: boolean): InertPanelProps =>
+  inactive ? { inert: '' } : {}
 
 export function PlayerPane({
   isOpen,
@@ -52,6 +61,7 @@ export function PlayerPane({
   const next = useQueueStore(s => s.next)
   const previous = useQueueStore(s => s.previous)
   const setVolume = useQueueStore(s => s.setVolume)
+  const isTrackTransitioning = useQueueStore(s => s.isTrackTransitioning)
   const album = useAlbumByUiId(track?.albumId)
   const artist = useArtistByUiId(track?.artistId)
   const [lastAlbum, setLastAlbum] = useState<Album | null>(null)
@@ -61,10 +71,12 @@ export function PlayerPane({
   const showVisualizer = useTweakStore(s => s.tweak.showPlayerVisualizer)
   const showLyrics = useTweakStore(s => s.tweak.showPlayerLyrics)
   const setTweak = useTweakStore(s => s.setTweak)
+  const [visualizerVisible, setVisualizerVisible] = useState(() => showVisualizer)
+  const [visualizerClosing, setVisualizerClosing] = useState(false)
   const artworkPath = track?.artworkPath ?? displayAlbum?.artworkPath ?? null
   const [artworkTint, setArtworkTint] = useState<string | null>(null)
   const [dragProgress, setDragProgress] = useState<number | null>(null)
-  const [activeTab, setActiveTab] = useState<'nowPlaying' | 'upNext'>('nowPlaying')
+  const [activeTab, setActiveTab] = useState<PlayerTab>('nowPlaying')
   const [deviceMenuOpen, setDeviceMenuOpen] = useState(false)
   const [outputDevices, setOutputDevices] = useState<AudioOutputDevice[]>([])
   const [deviceLoading, setDeviceLoading] = useState(false)
@@ -81,6 +93,30 @@ export function PlayerPane({
   useEffect(() => {
     if (album) setLastAlbum(album)
   }, [album])
+
+  useEffect(() => {
+    if (showVisualizer) {
+      setVisualizerVisible(true)
+      setVisualizerClosing(false)
+      return
+    }
+
+    if (!visualizerVisible) return
+
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      setVisualizerVisible(false)
+      setVisualizerClosing(false)
+      return
+    }
+
+    setVisualizerClosing(true)
+    const timeout = window.setTimeout(() => {
+      setVisualizerVisible(false)
+      setVisualizerClosing(false)
+    }, PLAYER_VISUALIZER_EXIT_MS)
+
+    return () => window.clearTimeout(timeout)
+  }, [showVisualizer, visualizerVisible])
 
   const totalQueueRemainingSec =
     Math.max(0, durationSec - positionSec) + queueNext.reduce((sum, item) => sum + item.d, 0)
@@ -218,7 +254,6 @@ export function PlayerPane({
 
   const canOpenAlbum = album != null && onOpenAlbum != null && !album.id.startsWith('a-unresolved-')
   const canOpenArtist = artist != null && onOpenArtist != null
-  const inlineLyricsVariant = lyricsSidePaneOpen || showVisualizer ? 'current' : 'inline'
 
   const selectOutputDevice = async (device: AudioOutputDevice) => {
     if (device.isCurrent) {
@@ -295,246 +330,280 @@ export function PlayerPane({
         </div>
       </div>
 
-      <div className="pp-tab-content">
-        {activeTab === 'nowPlaying' ? (
-          <div className="pp-player" role="tabpanel" aria-label="Now Playing">
-            <UpNextToast variant="side" />
-            <div className="pp-player-top">
-              <div className="art" onClick={onExpand} role="button" tabIndex={0}>
-                <Artwork album={displayAlbum} radius={8} objectFit="contain" />
-              </div>
+      <UpNextToast variant="side" enabled={isOpen && activeTab === 'nowPlaying'} />
 
-              <div className="info">
-                <div className="title-row">
-                  {canOpenAlbum ? (
-                    <button
-                      type="button"
-                      className="t pp-link-title"
-                      onClick={e => {
-                        e.stopPropagation()
-                        onOpenAlbum?.(album)
-                      }}
-                      title="Abrir álbum"
-                    >
-                      {track.t}
-                    </button>
-                  ) : (
-                    <div className="t">{track.t}</div>
-                  )}
-                  <button
-                    className="tb-icon-btn"
-                    style={{ marginTop: -2 }}
-                    title={track.loved ? 'Remove from favorites' : 'Mark as favorite'}
-                    onClick={() => {
-                      if (track.dbId == null) return
-                      void toggleTrackFavorite(track.dbId, !track.loved)
-                    }}
-                  >
-                    <Icon name={track.loved ? 'heartF' : 'heart'} size={14} />
-                  </button>
+      <div className="pp-tab-content">
+        <div className="pp-tab-viewport">
+          <div className={`pp-tab-slider ${activeTab === 'upNext' ? 'show-up-next' : 'show-now-playing'}`}>
+            <div
+              className={`pp-tab-panel ${activeTab === 'nowPlaying' ? 'active' : 'inactive'}`}
+              role="tabpanel"
+              aria-label="Now Playing"
+              aria-hidden={activeTab !== 'nowPlaying'}
+              {...getInertPanelProps(activeTab !== 'nowPlaying')}
+            >
+              <div className="pp-player">
+                <div className="pp-player-top">
+                  <div className="art" onClick={onExpand} role="button" tabIndex={0}>
+                    <Artwork album={displayAlbum} radius={8} objectFit="contain" />
+                    <TrackLoadingOverlay />
+                  </div>
+
+                  <div className="info">
+                    <div className="title-row">
+                      {canOpenAlbum ? (
+                        <button
+                          type="button"
+                          className="t pp-link-title"
+                          onClick={e => {
+                            e.stopPropagation()
+                            onOpenAlbum?.(album)
+                          }}
+                          title="Abrir álbum"
+                        >
+                          {track.t}
+                        </button>
+                      ) : (
+                        <div className="t">{track.t}</div>
+                      )}
+                      <button
+                        className="tb-icon-btn"
+                        style={{ marginTop: -2 }}
+                        title={track.loved ? 'Remove from favorites' : 'Mark as favorite'}
+                        onClick={() => {
+                          if (track.dbId == null) return
+                          void toggleTrackFavorite(track.dbId, !track.loved)
+                        }}
+                      >
+                        <Icon name={track.loved ? 'heartF' : 'heart'} size={14} />
+                      </button>
+                    </div>
+                    <div className="a">
+                      {canOpenArtist ? (
+                        <button
+                          type="button"
+                          className="pp-link-meta a"
+                          onClick={e => {
+                            e.stopPropagation()
+                            onOpenArtist?.(artist)
+                          }}
+                          title="Abrir artista"
+                        >
+                          {track.artist}
+                        </button>
+                      ) : (
+                        track.artist
+                      )}
+                      {' · '}
+                      {canOpenAlbum ? (
+                        <button
+                          type="button"
+                          className="pp-link-meta a"
+                          onClick={e => {
+                            e.stopPropagation()
+                            onOpenAlbum?.(album)
+                          }}
+                          title="Abrir álbum"
+                        >
+                          {track.albumTitle}
+                        </button>
+                      ) : (
+                        track.albumTitle
+                      )}
+                    </div>
+                    <div className="pp-quality-chip">
+                      <CodecStrip track={track} compact />
+                    </div>
+                  </div>
                 </div>
-                <div className="a">
-                  {canOpenArtist ? (
+
+                <div className="pp-player-bottom">
+                  <div className="pp-progress">
+                    <div className="slider-wrap" style={{ '--pct': `${displayProgress * 100}%` } as CSSProperties}>
+                      <div className="track" onMouseDown={onProgressMouseDown} role="slider" tabIndex={0}>
+                        <div className="fill" style={{ width: `${displayProgress * 100}%` }} />
+                      </div>
+                      <div className="dot" aria-hidden="true" />
+                    </div>
+                    <div className="times">
+                      <span>{fmtTime(displayPositionSec)}</span>
+                      <span>-{fmtTime(Math.max(0, durationSec - displayPositionSec))}</span>
+                    </div>
+                  </div>
+
+                  <div className="pp-controls">
+                    <button className="sub" title="Shuffle"><Icon name="shuffle" size={15} /></button>
+                    <button title="Previous" onClick={() => { void previous() }}><Icon name="prev" size={20} /></button>
+                    <button className="play" onClick={() => { void togglePlay() }} title={playing ? 'Pause' : 'Play'}>
+                      <Icon name={playing ? 'pause' : 'play'} size={16} />
+                    </button>
+                    <button title="Next" disabled={isTrackTransitioning} onClick={() => { void next() }}><Icon name="next" size={20} /></button>
+                    <button className="sub active" title="Repeat"><Icon name="repeat" size={15} /></button>
+                  </div>
+
+                  <div className="pp-volume">
+                    <span className="ic"><Icon name={volume === 0 ? 'volumeM' : 'volume'} size={14} /></span>
+                    <div className="slider-wrap" style={{ '--pct': `${volume * 100}%` } as CSSProperties}>
+                      <div className="track" onMouseDown={onVolumeMouseDown} role="slider" tabIndex={0}>
+                        <div className="fill" style={{ width: `${volume * 100}%` }} />
+                      </div>
+                      <div className="dot" aria-hidden="true" />
+                    </div>
+                    <div className="output-device-control" ref={deviceMenuRef}>
+                      <button
+                        className={`tb-icon-btn ${deviceMenuOpen ? 'active' : ''} ${exclusiveState.enabled ? 'exclusive-on' : ''}`}
+                        title={exclusiveState.enabled ? 'Audio output (Exclusive mode)' : 'Audio output'}
+                        aria-haspopup="menu"
+                        aria-expanded={deviceMenuOpen}
+                        onClick={onOutputButtonClick}
+                      >
+                        <Icon name="speaker" size={14} />
+                      </button>
+                      {deviceMenuOpen && (
+                        <div className={`output-device-menu upward ${exclusiveBusy ? 'transitioning' : ''}`} role="menu">
+                          <div className="output-device-title">Audio Output</div>
+                          {deviceLoading && <div className="output-device-state">Loading outputs...</div>}
+                          {deviceError && <div className="output-device-state error">{deviceError}</div>}
+                          {!deviceLoading && !deviceError && outputDevices.length === 0 && (
+                            <div className="output-device-state">No output devices found</div>
+                          )}
+                          {!deviceError && outputDevices.map(device => (
+                            <Fragment key={device.id}>
+                              <button
+                                type="button"
+                                className={`output-device-item ${device.isCurrent ? 'current' : ''}`}
+                                disabled={deviceLoading || exclusiveBusy}
+                                role="menuitemradio"
+                                aria-checked={device.isCurrent}
+                                onClick={() => { void selectOutputDevice(device) }}
+                              >
+                                <Icon name={device.isCurrent ? 'check' : 'speaker'} size={13} />
+                                <span className="output-device-name">{device.name}</span>
+                                {device.isCurrent && exclusiveState.enabled && (
+                                  <span className="output-device-badge exclusive">Exclusive</span>
+                                )}
+                                {device.isDefault && !(device.isCurrent && exclusiveState.enabled) && (
+                                  <span className="output-device-badge">Default</span>
+                                )}
+                              </button>
+                              {device.isCurrent && (
+                                <ExclusiveToggleRow
+                                  enabled={exclusiveState.enabled}
+                                  supported={device.supportsExclusive}
+                                  busy={exclusiveBusy}
+                                  error={exclusiveError}
+                                  onToggle={toggleExclusiveMode}
+                                />
+                              )}
+                            </Fragment>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className={`pp-player-viz${showVisualizer ? '' : ' collapsed'}${visualizerClosing ? ' closing' : ''}`}>
                     <button
                       type="button"
-                      className="pp-link-meta a"
-                      onClick={e => {
-                        e.stopPropagation()
-                        onOpenArtist?.(artist)
-                      }}
-                      title="Abrir artista"
+                      className="pp-player-viz-head"
+                      onClick={() => setTweak('showPlayerVisualizer', !showVisualizer)}
+                      aria-expanded={showVisualizer}
+                      title={showVisualizer ? 'Hide visualizer' : 'Show visualizer'}
                     >
-                      {track.artist}
+                      <span>Visualizer</span>
+                      <Icon name={showVisualizer ? 'chevD' : 'chevR'} size={12} />
                     </button>
-                  ) : (
-                    track.artist
-                  )}
-                  {' · '}
-                  {canOpenAlbum ? (
-                    <button
-                      type="button"
-                      className="pp-link-meta a"
-                      onClick={e => {
-                        e.stopPropagation()
-                        onOpenAlbum?.(album)
-                      }}
-                      title="Abrir álbum"
-                    >
-                      {track.albumTitle}
-                    </button>
-                  ) : (
-                    track.albumTitle
-                  )}
-                </div>
-                <div className="pp-quality-chip">
-                  <CodecStrip track={track} compact />
+                    {visualizerVisible && (
+                      <div className="pp-player-viz-body" aria-hidden={!showVisualizer}>
+                        <div className="pp-player-viz-clip">
+                          <SpectrumVisualizer
+                            mode="mini"
+                            active={isOpen && activeTab === 'nowPlaying' && showVisualizer}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className={`pp-player-lyrics${showLyrics ? '' : ' collapsed'}${lyricsSidePaneOpen ? ' side-open' : ''}`}>
+                    <div className="pp-player-lyrics-head">
+                      <button
+                        type="button"
+                        className="pp-player-lyrics-toggle"
+                        onClick={() => setTweak('showPlayerLyrics', !showLyrics)}
+                        aria-expanded={showLyrics}
+                        title={showLyrics ? 'Hide lyrics' : 'Show lyrics'}
+                      >
+                        <span>Lyrics</span>
+                        <Icon name={showLyrics ? 'chevD' : 'chevR'} size={12} />
+                      </button>
+                    </div>
+                    {showLyrics && (
+                      <button
+                        type="button"
+                        className="tb-icon-btn pp-lyrics-side-toggle"
+                        title="Open lyrics sidebar"
+                        aria-label="Open lyrics sidebar"
+                        aria-pressed={lyricsSidePaneOpen}
+                        onClick={onToggleLyricsSidePane}
+                      >
+                        <Icon name="sidebarRight" size={13} />
+                      </button>
+                    )}
+                    {showLyrics && (
+                      <div className="pp-lyrics-preview">
+                        <LyricsPanel
+                          variant="inline"
+                          showActions={false}
+                          showInlineHeader={false}
+                          sidePaneOpen={lyricsSidePaneOpen}
+                          onToggleSidePane={onToggleLyricsSidePane}
+                          active={isOpen && activeTab === 'nowPlaying' && showLyrics && !lyricsSidePaneOpen}
+                        />
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
-
-            <div className="pp-player-bottom">
-              <div className="pp-progress">
-                <div className="slider-wrap" style={{ '--pct': `${displayProgress * 100}%` } as CSSProperties}>
-                  <div className="track" onMouseDown={onProgressMouseDown} role="slider" tabIndex={0}>
-                    <div className="fill" style={{ width: `${displayProgress * 100}%` }} />
+            <div
+              className={`pp-tab-panel ${activeTab === 'upNext' ? 'active' : 'inactive'}`}
+              role="tabpanel"
+              aria-label="Up Next"
+              aria-hidden={activeTab !== 'upNext'}
+              {...getInertPanelProps(activeTab !== 'upNext')}
+            >
+              <div className="pp-queue">
+                <div className="queue-head">
+                  <div className="queue-head-main">
+                    <h3>Up Next</h3>
+                    <div className="queue-remaining">{totalQueueRemainingText} remaining</div>
                   </div>
-                  <div className="dot" aria-hidden="true" />
                 </div>
-                <div className="times">
-                  <span>{fmtTime(displayPositionSec)}</span>
-                  <span>-{fmtTime(Math.max(0, durationSec - displayPositionSec))}</span>
-                </div>
-              </div>
-
-              <div className="pp-controls">
-                <button className="sub" title="Shuffle"><Icon name="shuffle" size={15} /></button>
-                <button title="Previous" onClick={() => { void previous() }}><Icon name="prev" size={20} /></button>
-                <button className="play" onClick={() => { void togglePlay() }} title={playing ? 'Pause' : 'Play'}>
-                  <Icon name={playing ? 'pause' : 'play'} size={16} />
-                </button>
-                <button title="Next" onClick={() => { void next() }}><Icon name="next" size={20} /></button>
-                <button className="sub active" title="Repeat"><Icon name="repeat" size={15} /></button>
-              </div>
-
-              <div className="pp-volume">
-                <span className="ic"><Icon name={volume === 0 ? 'volumeM' : 'volume'} size={14} /></span>
-                <div className="slider-wrap" style={{ '--pct': `${volume * 100}%` } as CSSProperties}>
-                  <div className="track" onMouseDown={onVolumeMouseDown} role="slider" tabIndex={0}>
-                    <div className="fill" style={{ width: `${volume * 100}%` }} />
-                  </div>
-                  <div className="dot" aria-hidden="true" />
-                </div>
-                <div className="output-device-control" ref={deviceMenuRef}>
-                  <button
-                    className={`tb-icon-btn ${deviceMenuOpen ? 'active' : ''} ${exclusiveState.enabled ? 'exclusive-on' : ''}`}
-                    title={exclusiveState.enabled ? 'Audio output (Exclusive mode)' : 'Audio output'}
-                    aria-haspopup="menu"
-                    aria-expanded={deviceMenuOpen}
-                    onClick={onOutputButtonClick}
-                  >
-                    <Icon name="speaker" size={14} />
-                  </button>
-                  {deviceMenuOpen && (
-                    <div className={`output-device-menu upward ${exclusiveBusy ? 'transitioning' : ''}`} role="menu">
-                      <div className="output-device-title">Audio Output</div>
-                      {deviceLoading && <div className="output-device-state">Loading outputs...</div>}
-                      {deviceError && <div className="output-device-state error">{deviceError}</div>}
-                      {!deviceLoading && !deviceError && outputDevices.length === 0 && (
-                        <div className="output-device-state">No output devices found</div>
-                      )}
-                      {!deviceError && outputDevices.map(device => (
-                        <Fragment key={device.id}>
-                          <button
-                            type="button"
-                            className={`output-device-item ${device.isCurrent ? 'current' : ''}`}
-                            disabled={deviceLoading || exclusiveBusy}
-                            role="menuitemradio"
-                            aria-checked={device.isCurrent}
-                            onClick={() => { void selectOutputDevice(device) }}
-                          >
-                            <Icon name={device.isCurrent ? 'check' : 'speaker'} size={13} />
-                            <span className="output-device-name">{device.name}</span>
-                            {device.isCurrent && exclusiveState.enabled && (
-                              <span className="output-device-badge exclusive">Exclusive</span>
-                            )}
-                            {device.isDefault && !(device.isCurrent && exclusiveState.enabled) && (
-                              <span className="output-device-badge">Default</span>
-                            )}
-                          </button>
-                          {device.isCurrent && (
-                            <ExclusiveToggleRow
-                              enabled={exclusiveState.enabled}
-                              supported={device.supportsExclusive}
-                              busy={exclusiveBusy}
-                              error={exclusiveError}
-                              onToggle={toggleExclusiveMode}
-                            />
-                          )}
-                        </Fragment>
-                      ))}
+                <div className="queue-list">
+                  <div className="queue-section-label">Playing from · {displayAlbum?.title ?? '—'}</div>
+                  <div className="queue-item now">
+                    <div className="art"><Artwork album={displayAlbum} /></div>
+                    <div>
+                      <div className="t">{track.t}</div>
+                      <div className="a">{track.artist}</div>
                     </div>
-                  )}
-                </div>
-              </div>
-              <div className={`pp-player-viz${showVisualizer ? '' : ' collapsed'}`}>
-                <button
-                  type="button"
-                  className="pp-player-viz-head"
-                  onClick={() => setTweak('showPlayerVisualizer', !showVisualizer)}
-                  aria-expanded={showVisualizer}
-                  title={showVisualizer ? 'Hide visualizer' : 'Show visualizer'}
-                >
-                  <span>Visualizer</span>
-                  <Icon name={showVisualizer ? 'chevD' : 'chevR'} size={12} />
-                </button>
-                {showVisualizer && <SpectrumVisualizer mode="mini" />}
-              </div>
-              <div className={`pp-player-lyrics${showLyrics ? '' : ' collapsed'}${lyricsSidePaneOpen ? ' side-open' : ''}`}>
-                <div className="pp-player-lyrics-head">
-                  <button
-                    type="button"
-                    className="pp-player-lyrics-toggle"
-                    onClick={() => setTweak('showPlayerLyrics', !showLyrics)}
-                    aria-expanded={showLyrics}
-                    title={showLyrics ? 'Hide lyrics' : 'Show lyrics'}
-                  >
-                    <span>Lyrics</span>
-                    <Icon name={showLyrics ? 'chevD' : 'chevR'} size={12} />
-                  </button>
-                  <button
-                    type="button"
-                    className={`tb-icon-btn pp-lyrics-side-toggle ${lyricsSidePaneOpen ? 'active' : ''}`}
-                    title={lyricsSidePaneOpen ? 'Close lyrics sidebar' : 'Open lyrics sidebar'}
-                    aria-label={lyricsSidePaneOpen ? 'Close lyrics sidebar' : 'Open lyrics sidebar'}
-                    aria-pressed={lyricsSidePaneOpen}
-                    onClick={onToggleLyricsSidePane}
-                  >
-                    <Icon name="sidebarRight" size={13} />
-                  </button>
-                </div>
-                {showLyrics && (
-                  <div className="pp-lyrics-preview">
-                    <LyricsPanel
-                      variant={inlineLyricsVariant}
-                      showActions={false}
-                      showInlineHeader={false}
-                      sidePaneOpen={lyricsSidePaneOpen}
-                      onToggleSidePane={onToggleLyricsSidePane}
+                    <EQBars
+                      active={isOpen && activeTab === 'upNext'}
+                      style={{ color: 'var(--text-primary)' }}
                     />
                   </div>
-                )}
+                  {queueNext.length === 0 && queueHistory.length === 0 && (
+                    <div className="queue-section-label" style={{ color: 'var(--text-tertiary)' }}>
+                      Queue is empty
+                    </div>
+                  )}
+                  {queueNext.map(t => <QueueItem key={t.id} track={t} />)}
+                  {queueHistory.length > 0 && <div className="queue-section-label">History</div>}
+                  {queueHistory.slice().reverse().map(t => <QueueItem key={`h-${t.id}`} track={t} dim />)}
+                </div>
               </div>
             </div>
           </div>
-        ) : (
-          <div className="pp-queue" role="tabpanel" aria-label="Up Next">
-            <div className="queue-head">
-              <div className="queue-head-main">
-                <h3>Up Next</h3>
-                <div className="queue-remaining">{totalQueueRemainingText} remaining</div>
-              </div>
-            </div>
-            <div className="queue-list">
-              <div className="queue-section-label">Playing from · {displayAlbum?.title ?? '—'}</div>
-              <div className="queue-item now">
-                <div className="art"><Artwork album={displayAlbum} /></div>
-                <div>
-                  <div className="t">{track.t}</div>
-                  <div className="a">{track.artist}</div>
-                </div>
-                <EQBars style={{ color: 'var(--text-primary)' }} />
-              </div>
-              {queueNext.length === 0 && queueHistory.length === 0 && (
-                <div className="queue-section-label" style={{ color: 'var(--text-tertiary)' }}>
-                  Queue is empty
-                </div>
-              )}
-              {queueNext.map(t => <QueueItem key={t.id} track={t} />)}
-              {queueHistory.length > 0 && <div className="queue-section-label">History</div>}
-              {queueHistory.slice().reverse().map(t => <QueueItem key={`h-${t.id}`} track={t} dim />)}
-            </div>
-          </div>
-        )}
+        </div>
       </div>
     </div>
   )

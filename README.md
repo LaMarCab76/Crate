@@ -52,7 +52,9 @@ The UI is a port of the original Claude Design handoff:
 - Procedural SVG album artwork (palette + seed + pattern)
 - Animated equalizer indicator for the currently playing track
 - Full-screen Now Playing with synced lyrics + visualizer
-- Synced lyrics with global and per-track timing offset controls
+- Synced lyrics with global and per-track timing offset controls; lyrics are
+  stored as mandatory `.lrc` sidecars next to the audio and are copied during
+  device sync instead of being embedded into audio files.
 - Persistent playback visualization cache with configurable DB quota
 - Filesystem-backed library reconciliation with per-library scan history and
   configurable retention.

@@ -4,17 +4,18 @@
 //
 // Design choices:
 //   - All BASS calls are confined to the Electron main process main thread.
-//   - We stream from disk (BASS_StreamCreateFile mem=0). RAM-resident streams
-//     and prefetching can be layered on later for fast skip-around behavior.
+//   - Playback streams prefer a full in-memory copy of the source file. Disk
+//     streaming remains a fallback when the RAM budget says no.
 //   - The current stream handle is owned by this class. Gapless preloading
-//     hands an additional preloaded stream over via takeStream().
+//     hands an additional in-memory stream over via adoptStream().
 
 import { broadcast } from '../ipc/events'
-import { statSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
+import { freemem, totalmem } from 'node:os'
 import {
   BASS_ACTIVE_PAUSED, BASS_ACTIVE_PLAYING, BASS_ACTIVE_STOPPED,
   BASS_ATTRIB_VOL, BASS_DATA_FFT2048, BASS_DEVICE_DEFAULT, BASS_DEVICE_ENABLED,
-  BASS_DEVICE_INIT, BASS_DEVICE_LOOPBACK, BASS_LEVEL_RMS, BASS_LEVEL_STEREO,
+  BASS_DEVICE_INIT, BASS_DEVICE_LOOPBACK, BASS_FILE_MEM, BASS_FILE_NAME, BASS_LEVEL_RMS, BASS_LEVEL_STEREO,
   BASS_POS_BYTE, BASS_SAMPLE_FLOAT, BASS_STREAM_DECODE, BASS_STREAM_PRESCAN,
   bassErrorName,
 } from './bass-constants'
@@ -63,6 +64,8 @@ const ANALYSIS_CACHE_MAX = 50
 const TABLE_BARS_FPS = 60
 const TABLE_BARS_BANDS = 5
 const TABLE_BARS_DISPLAY_GAIN = 2.8
+const PLAYBACK_MEMORY_RESERVE_BYTES = 512 * 1024 * 1024
+const PLAYBACK_MEMORY_MAX_TRACK_BYTES = 2 * 1024 * 1024 * 1024
 
 export type PlaybackStatus = 'stopped' | 'playing' | 'paused' | 'loading'
 
@@ -75,6 +78,12 @@ export interface StreamInfo {
   bytesPerSecond: number
 }
 
+interface CreatedStream {
+  handle: HSTREAM
+  info: StreamInfo
+  memoryBuffer: Buffer | null
+}
+
 let engine: AudioEngine | null = null
 
 export class AudioEngine {
@@ -85,15 +94,18 @@ export class AudioEngine {
   private volume = 1.0
   private status: PlaybackStatus = 'stopped'
   private progressTimer: NodeJS.Timeout | null = null
-  private fftTimer: NodeJS.Timeout | null = null
+  private frameTimer: NodeJS.Timeout | null = null
+  private frameTickMs = 0
   private fftMode: FftMode = 'off'
   private fftIntervalMs = 0
   private screenFftIntervalMs = DEFAULT_SCREEN_FFT_INTERVAL_MS
   private fftBuffer: Float32Array = new Float32Array(FFT_BINS_RAW)
   private fftOut: number[] = new Array(FFT_BINS_OUT).fill(0)
-  private meterTimer: NodeJS.Timeout | null = null
+  private lastFftAt = 0
+  private lastMeterAt = 0
   private meterEnabled = false
   private levelBuf: Float32Array = new Float32Array(2)
+  private currentMemoryBuffer: Buffer | null = null
   private analysisCache = new Map<string, PlaybackAnalysisResult>()
   private tableBarsCache = new Map<string, PlaybackTableBarsResult>()
   private getInfo: ReturnType<typeof makeChannelGetInfo> | null = null
@@ -135,31 +147,27 @@ export class AudioEngine {
     }
     this.currentPath = null
     this.streamInfo = null
+    this.currentMemoryBuffer = null
     this.stopProgressTimer()
     this.setStatus('stopped')
   }
 
   load(path: string): StreamInfo {
     this.ensureInit()
-    this.freeCurrent()
-    this.setStatus('loading')
 
-    const bass = loadBass()
-    // BASS_STREAM_PRESCAN gives us accurate length on VBR formats up front,
-    // BASS_SAMPLE_FLOAT keeps the decode path in 32-bit float so DSP (EQ)
-    // doesn't introduce truncation noise.
-    const handle = bass.StreamCreateFile(0, path, 0n, 0n, BASS_STREAM_PRESCAN | BASS_SAMPLE_FLOAT)
-    if (handle === 0) {
-      const code = bass.ErrorGetCode()
-      throw new Error(`Failed to load ${path}: ${bassErrorName(code)} (${code})`)
-    }
+    const created = this.createStream(path)
+    if (!created) throw new Error(`Failed to load ${path}: not enough memory`)
+    const { handle, info } = created
+    const old = this.releaseCurrent()
+    if (old.handle !== 0) this.freeStream(old.handle)
+
     this.currentStream = handle
     this.currentPath = path
+    this.currentMemoryBuffer = created.memoryBuffer
 
     // Apply current volume to the freshly created stream.
-    bass.ChannelSetAttribute(handle, BASS_ATTRIB_VOL, this.volume)
+    loadBass().ChannelSetAttribute(handle, BASS_ATTRIB_VOL, this.volume)
 
-    const info = this.computeStreamInfo(handle)
     this.streamInfo = info
     this.setStatus('paused')
     return info
@@ -337,6 +345,7 @@ export class AudioEngine {
     }
     this.currentPath = null
     this.streamInfo = null
+    this.currentMemoryBuffer = null
     this.stopProgressTimer()
     this.setStatus('stopped')
     // BASS_Free targets the current device; ensure we're on the right one
@@ -417,21 +426,36 @@ export class AudioEngine {
 
   // Hand the current stream off to a caller (e.g. GaplessController preserving
   // a preloaded stream). This class no longer owns it after the call.
-  releaseCurrent(): { handle: HSTREAM; path: string | null; info: StreamInfo | null } {
-    const out = { handle: this.currentStream, path: this.currentPath, info: this.streamInfo }
+  releaseCurrent(): { handle: HSTREAM; path: string | null; info: StreamInfo | null; memoryBuffer: Buffer | null } {
+    const out = {
+      handle: this.currentStream,
+      path: this.currentPath,
+      info: this.streamInfo,
+      memoryBuffer: this.currentMemoryBuffer,
+    }
     this.currentStream = 0
     this.currentPath = null
     this.streamInfo = null
+    this.currentMemoryBuffer = null
     this.stopProgressTimer()
     return out
   }
 
   // Adopt a preloaded stream as the current one (used by GaplessController
   // when swapping).
-  adoptStream(handle: HSTREAM, path: string): void {
+  adoptStream(handle: HSTREAM, path: string, memoryBuffer: Buffer | null = null): StreamInfo {
+    let info: StreamInfo
+    try {
+      info = this.computeStreamInfo(handle)
+    } catch (err) {
+      const bass = loadBass()
+      bass.StreamFree(handle)
+      throw new Error(`Adopted stream is no longer valid: ${(err as Error).message}`)
+    }
     this.currentStream = handle
     this.currentPath = path
-    this.streamInfo = this.computeStreamInfo(handle)
+    this.currentMemoryBuffer = memoryBuffer
+    this.streamInfo = info
     const bass = loadBass()
     // Set volume before starting playback so the swap doesn't blip to full
     // volume for a frame. Start playback BEFORE setStatus/startProgressTimer:
@@ -439,22 +463,74 @@ export class AudioEngine {
     // must already be playing or it would stop the FFT timer (visualizer
     // freezes after a gapless swap).
     bass.ChannelSetAttribute(handle, BASS_ATTRIB_VOL, this.volume)
-    bass.ChannelPlay(handle, 0)
+    const playStarted = bass.ChannelPlay(handle, 0)
+    if (!playStarted) {
+      const code = bass.ErrorGetCode()
+      bass.StreamFree(handle)
+      this.currentStream = 0
+      this.currentPath = null
+      this.currentMemoryBuffer = null
+      this.streamInfo = null
+      this.setStatus('stopped')
+      throw new Error(`Failed to start playback after gapless swap: ${bassErrorName(code)} (${code})`)
+    }
     this.setStatus('playing')
     this.startProgressTimer()
+    return info
   }
 
-  // Preload a stream for gapless. The handle is returned but no ownership
-  // transfer happens — the caller (GaplessController) keeps it.
-  createStream(path: string): { handle: HSTREAM; info: StreamInfo } {
+  // Create a stream for playback. We prefer a full in-memory file buffer so
+  // playback is detached from slow/removable storage after the initial read.
+  createStream(path: string, options: { memoryOnly?: boolean } = {}): CreatedStream | null {
     this.ensureInit()
+    const memoryStream = this.createMemoryStream(path)
+    if (memoryStream) return memoryStream
+    if (options.memoryOnly) return null
+    return this.createFileStream(path)
+  }
+
+  private createMemoryStream(path: string): CreatedStream | null {
+    let stats
+    try {
+      stats = statSync(path)
+    } catch {
+      return null
+    }
+    if (!stats.isFile()) return null
+    if (!this.canFitPlaybackFileInMemory(stats.size)) return null
+
+    let buffer: Buffer
+    try {
+      buffer = readFileSync(path)
+    } catch (err) {
+      console.warn(`[audio] memory stream read failed for ${path}:`, (err as Error).message)
+      return null
+    }
+    if (buffer.byteLength === 0) return null
+
     const bass = loadBass()
-    const handle = bass.StreamCreateFile(0, path, 0n, 0n, BASS_STREAM_PRESCAN | BASS_SAMPLE_FLOAT)
+    const handle = bass.StreamCreateFileMemory(BASS_FILE_MEM, buffer, 0n, BigInt(buffer.byteLength), BASS_STREAM_PRESCAN | BASS_SAMPLE_FLOAT)
+    if (handle === 0) {
+      return null
+    }
+    return { handle, info: this.computeStreamInfo(handle), memoryBuffer: buffer }
+  }
+
+  private createFileStream(path: string): CreatedStream {
+    const bass = loadBass()
+    const handle = bass.StreamCreateFile(BASS_FILE_NAME, path, 0n, 0n, BASS_STREAM_PRESCAN | BASS_SAMPLE_FLOAT)
     if (handle === 0) {
       const code = bass.ErrorGetCode()
-      throw new Error(`Failed to preload ${path}: ${bassErrorName(code)} (${code})`)
+      throw new Error(`Failed to load ${path}: ${bassErrorName(code)} (${code})`)
     }
-    return { handle, info: this.computeStreamInfo(handle) }
+    return { handle, info: this.computeStreamInfo(handle), memoryBuffer: null }
+  }
+
+  private canFitPlaybackFileInMemory(bytes: number): boolean {
+    if (!Number.isSafeInteger(bytes) || bytes <= 0) return false
+    if (bytes > PLAYBACK_MEMORY_MAX_TRACK_BYTES) return false
+    const reserve = Math.max(PLAYBACK_MEMORY_RESERVE_BYTES, Math.floor(totalmem() * 0.05))
+    return freemem() - bytes > reserve
   }
 
   freeStream(handle: HSTREAM): void {
@@ -472,14 +548,12 @@ export class AudioEngine {
   private startProgressTimer(): void {
     this.clearProgressTimer()
     this.progressTimer = setInterval(() => this.emitProgress(), 250)
-    this.syncFftTimer()
-    this.syncMeterTimer()
+    this.syncFrameTimer()
   }
 
   private stopProgressTimer(): void {
     this.clearProgressTimer()
-    this.stopFftTimer()
-    this.stopMeterTimer()
+    this.stopFrameTimer(true, true)
   }
 
   private clearProgressTimer(): void {
@@ -498,32 +572,80 @@ export class AudioEngine {
   }
 
   private syncFftTimer(): void {
-    if (this.fftMode === 'off' || this.getStatus() !== 'playing' || this.currentStream === 0) {
-      this.stopFftTimer()
+    this.syncFrameTimer()
+  }
+
+  private syncMeterTimer(): void {
+    this.syncFrameTimer()
+  }
+
+  // Unified frame timer: a single setInterval pulses both FFT and meter at
+  // their respective cadences, so the renderer doesn't get hit by two parallel
+  // IPC streams when both are active at the same rate (the common case).
+  private syncFrameTimer(): void {
+    const playing = this.getStatus() === 'playing' && this.currentStream !== 0
+    const fftActive = playing && this.fftMode !== 'off'
+    const meterActive = playing && this.meterEnabled
+
+    if (!fftActive && !meterActive) {
+      this.stopFrameTimer(true, true)
       return
     }
 
-    const nextInterval = this.fftMode === 'screen'
-      ? this.screenFftIntervalMs
-      : FFT_INTERVAL_MS[this.fftMode]
-    if (this.fftTimer && this.fftIntervalMs === nextInterval) return
+    const fftMs = fftActive
+      ? (this.fftMode === 'screen'
+        ? this.screenFftIntervalMs
+        : this.fftMode === 'off'
+          ? 0
+          : FFT_INTERVAL_MS[this.fftMode])
+      : 0
+    const meterMs = meterActive ? METER_INTERVAL_MS : 0
+    this.fftIntervalMs = fftMs
 
-    this.stopFftTimer(false)
-    this.fftIntervalMs = nextInterval
-    this.emitFft()
-    this.fftTimer = setInterval(() => this.emitFft(), nextInterval)
+    const candidates = [fftMs, meterMs].filter(ms => ms > 0)
+    const tickMs = Math.max(1, Math.min(...candidates))
+
+    if (this.frameTimer && this.frameTickMs === tickMs) {
+      // Active set may have changed (e.g. meter turned off): emit a final
+      // flatline on the channel that just stopped.
+      return
+    }
+
+    this.stopFrameTimer(false, false)
+    this.frameTickMs = tickMs
+    this.lastFftAt = 0
+    this.lastMeterAt = 0
+    this.framePulse()
+    this.frameTimer = setInterval(() => this.framePulse(), tickMs)
   }
 
-  private stopFftTimer(sendFlatline = true): void {
-    if (this.fftTimer) {
-      clearInterval(this.fftTimer)
-      this.fftTimer = null
+  private framePulse(): void {
+    const now = Date.now()
+    const playing = this.getStatus() === 'playing' && this.currentStream !== 0
+    if (!playing) return
+    if (this.fftMode !== 'off' && this.fftIntervalMs > 0 && now - this.lastFftAt >= this.fftIntervalMs - 1) {
+      this.lastFftAt = now
+      this.emitFft()
+    }
+    if (this.meterEnabled && now - this.lastMeterAt >= METER_INTERVAL_MS - 1) {
+      this.lastMeterAt = now
+      this.emitLevels()
+    }
+  }
+
+  private stopFrameTimer(sendFftFlatline: boolean, sendMeterFlatline: boolean): void {
+    if (this.frameTimer) {
+      clearInterval(this.frameTimer)
+      this.frameTimer = null
+      this.frameTickMs = 0
       this.fftIntervalMs = 0
     }
-    if (sendFlatline) {
-      // Send one final flatline frame so the renderer can settle bars to 0.
+    if (sendFftFlatline) {
       this.fftOut.fill(0)
       broadcast('audio:fft', { bins: this.fftOut })
+    }
+    if (sendMeterFlatline) {
+      broadcast('audio:levels', { peakL: 0, peakR: 0, rmsL: 0, rmsR: 0 })
     }
   }
 
@@ -541,28 +663,6 @@ export class AudioEngine {
       this.fftOut[i] = Math.min(1, Math.sqrt(Math.max(0, amp)) * 1.6)
     }
     broadcast('audio:fft', { bins: this.fftOut })
-  }
-
-  // Mirror of syncFftTimer for the VU meter feed. Runs only while metering is
-  // requested, a stream exists, and it's actually playing.
-  private syncMeterTimer(): void {
-    if (!this.meterEnabled || this.getStatus() !== 'playing' || this.currentStream === 0) {
-      this.stopMeterTimer()
-      return
-    }
-    if (this.meterTimer) return
-    this.emitLevels()
-    this.meterTimer = setInterval(() => this.emitLevels(), METER_INTERVAL_MS)
-  }
-
-  private stopMeterTimer(sendFlatline = true): void {
-    if (this.meterTimer) {
-      clearInterval(this.meterTimer)
-      this.meterTimer = null
-    }
-    if (sendFlatline) {
-      broadcast('audio:levels', { peakL: 0, peakR: 0, rmsL: 0, rmsR: 0 })
-    }
   }
 
   private emitLevels(): void {

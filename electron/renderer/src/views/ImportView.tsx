@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { Icon } from '@renderer/components/Icon'
 import { MetadataCompletionModal } from '@renderer/components/MetadataCompletionModal'
+import { FolderRemovalConfirmModal } from '@renderer/components/FolderRemovalConfirmModal'
 import { useFolders, useImporting, useLibraryStore, useMetadataCompletionPrompt } from '@renderer/stores/libraryStore'
+import type { DbFolder } from '@shared/types/db'
 
 function ProgressBar({ value, max }: { value: number; max: number }) {
   const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0
@@ -36,8 +38,8 @@ export function ImportView() {
   const dismissMetadataPrompt = useLibraryStore(s => s.dismissMetadataCompletionPrompt)
   const pickFolder = useLibraryStore(s => s.pickFolder)
   const addFolder = useLibraryStore(s => s.addFolder)
-  const removeFolder = useLibraryStore(s => s.removeFolder)
   const [metadataModalOpen, setMetadataModalOpen] = useState(false)
+  const [removeTarget, setRemoveTarget] = useState<DbFolder | null>(null)
   const pickAndAdd = async () => {
     const picked = await pickFolder()
     if (picked) await addFolder(picked)
@@ -128,7 +130,7 @@ export function ImportView() {
                   <Icon name="folder" />
                   <div className="path">{f.path}</div>
                   <div className="stat">{f.track_count} tracks</div>
-                  <button className="btn ghost sm" onClick={() => removeFolder(f.id)}>
+                  <button className="btn ghost sm" onClick={() => setRemoveTarget(f)}>
                     Remove
                   </button>
                 </div>
@@ -170,6 +172,9 @@ export function ImportView() {
           trackIds={metadataPrompt.trackIds}
           onClose={() => setMetadataModalOpen(false)}
         />
+      )}
+      {removeTarget && (
+        <FolderRemovalConfirmModal folder={removeTarget} onClose={() => setRemoveTarget(null)} />
       )}
     </div>
   )

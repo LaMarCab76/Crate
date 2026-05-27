@@ -15,6 +15,7 @@ import type {
   DeviceUnknownVolume,
   DeviceVolumeSnapshot,
   RockboxThemeInstallResult,
+  RockboxThemeLibraryResult,
 } from '@shared/types/device-sync'
 
 interface DeviceState {
@@ -23,6 +24,7 @@ interface DeviceState {
   unknownVolumes: DeviceUnknownVolume[]
   pendingJournals: DevicePendingJournal[]
   deviceLibraries: Record<string, DeviceLibraryResult>
+  rockboxThemeLibraries: Record<string, RockboxThemeLibraryResult>
   scanResult: DeviceScanResult | null
   plan: DeviceSyncPlan | null
   scanProgress: DeviceScanProgressEvent | null
@@ -36,10 +38,10 @@ interface DeviceState {
   detectCandidates(): Promise<void>
   refreshVolumes(): Promise<void>
   ignoreVolume(rootPath: string): Promise<void>
-  pickAndConnect(artworkMaxEdge?: number): Promise<void>
   connect(payload: DeviceConnectPayload): Promise<DeviceRecord>
   updateSettings(deviceId: string, settings: DeviceSettingsUpdate): Promise<DeviceRecord>
   loadDeviceLibrary(deviceId: string, force?: boolean): Promise<DeviceLibraryResult>
+  loadRockboxThemes(deviceId: string, force?: boolean): Promise<RockboxThemeLibraryResult>
   installRockboxThemes(deviceId: string, files: unknown[]): Promise<RockboxThemeInstallResult>
   selectDevice(id: string): void
   scan(deviceId?: string): Promise<void>
@@ -66,12 +68,29 @@ function nextSelectedDeviceId(
   return devices[0]?.id ?? null
 }
 
+function rockboxThemesFromLibrary(library: DeviceLibraryResult): RockboxThemeLibraryResult {
+  return {
+    device: library.device,
+    themes: library.rockboxThemes,
+    scan: library.rockboxThemeScan,
+  }
+}
+
+function canReuseDeviceLibrary(library: DeviceLibraryResult, device?: DeviceRecord): boolean {
+  const storage = library.storage
+  if (!storage) return false
+  const isAvailable = device?.isAvailable ?? library.device.isAvailable
+  if (!isAvailable) return true
+  return !storage.error && storage.totalBytes > 0
+}
+
 export const useDeviceStore = create<DeviceState>((set, get) => ({
   devices: [],
   candidates: [],
   unknownVolumes: [],
   pendingJournals: [],
   deviceLibraries: {},
+  rockboxThemeLibraries: {},
   scanResult: null,
   plan: null,
   scanProgress: null,
@@ -146,12 +165,6 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     }
   },
 
-  async pickAndConnect(artworkMaxEdge) {
-    const picked = await window.api.devices.pickRoot()
-    if (picked.canceled || !picked.path) return
-    await get().connect({ rootPath: picked.path, artworkMaxEdge })
-  },
-
   async connect(payload) {
     set({ loading: true, error: null })
     try {
@@ -171,6 +184,9 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
         deviceLibraries: library
           ? { ...state.deviceLibraries, [device.id]: library }
           : state.deviceLibraries,
+        rockboxThemeLibraries: library
+          ? { ...state.rockboxThemeLibraries, [device.id]: rockboxThemesFromLibrary(library) }
+          : state.rockboxThemeLibraries,
       }))
       return device
     } catch (err) {
@@ -193,6 +209,9 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
         deviceLibraries: state.deviceLibraries[device.id]
           ? { ...state.deviceLibraries, [device.id]: { ...state.deviceLibraries[device.id], device } }
           : state.deviceLibraries,
+        rockboxThemeLibraries: state.rockboxThemeLibraries[device.id]
+          ? { ...state.rockboxThemeLibraries, [device.id]: { ...state.rockboxThemeLibraries[device.id], device } }
+          : state.rockboxThemeLibraries,
         loading: false,
       }))
       return device
@@ -203,13 +222,19 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
   },
 
   async loadDeviceLibrary(deviceId, force = false) {
-    const cached = get().deviceLibraries[deviceId]
-    if (cached && !force) return cached
+    const state = get()
+    const cached = state.deviceLibraries[deviceId]
+    const device = state.devices.find(item => item.id === deviceId) ?? cached?.device
+    if (cached && !force && canReuseDeviceLibrary(cached, device)) return cached
     set({ loading: true, error: null })
     try {
       const library = await window.api.devices.library(deviceId)
       set(state => ({
         deviceLibraries: { ...state.deviceLibraries, [deviceId]: library },
+        rockboxThemeLibraries: {
+          ...state.rockboxThemeLibraries,
+          [deviceId]: rockboxThemesFromLibrary(library),
+        },
         selectedDeviceId: deviceId,
         loading: false,
       }))
@@ -220,20 +245,76 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     }
   },
 
+  async loadRockboxThemes(deviceId, force = false) {
+    const cached = get().rockboxThemeLibraries[deviceId]
+    if (cached && !force) return cached
+    set({ loading: true, error: null })
+    try {
+      let library: DeviceLibraryResult | null = null
+      let themes: RockboxThemeLibraryResult
+      if (typeof window.api.devices.rockboxThemes === 'function') {
+        themes = await window.api.devices.rockboxThemes(deviceId)
+      } else {
+        library = await window.api.devices.library(deviceId)
+        themes = rockboxThemesFromLibrary(library)
+      }
+      set(state => ({
+        devices: state.devices.map(device => device.id === themes.device.id ? themes.device : device),
+        deviceLibraries: library
+          ? { ...state.deviceLibraries, [deviceId]: library }
+          : state.deviceLibraries,
+        rockboxThemeLibraries: { ...state.rockboxThemeLibraries, [deviceId]: themes },
+        selectedDeviceId: deviceId,
+        loading: false,
+      }))
+      return themes
+    } catch (err) {
+      set({ loading: false, error: (err as Error).message })
+      throw err
+    }
+  },
+
   async installRockboxThemes(deviceId, files) {
     set({ loading: true, error: null, themeInstallResult: null })
     try {
       const result = await window.api.devices.installRockboxThemesFromFiles(deviceId, files)
-      const [devices, library] = await Promise.all([
-        window.api.devices.list(),
-        window.api.devices.library(deviceId),
-      ])
-      set(state => ({
-        devices,
-        deviceLibraries: { ...state.deviceLibraries, [deviceId]: library },
-        themeInstallResult: result,
-        loading: false,
-      }))
+      const devices = await window.api.devices.list()
+      set(state => {
+        const cachedDevice =
+          devices.find(device => device.id === deviceId) ??
+          state.rockboxThemeLibraries[deviceId]?.device ??
+          state.deviceLibraries[deviceId]?.device ??
+          state.devices.find(device => device.id === deviceId)
+        return {
+          devices,
+          deviceLibraries: state.deviceLibraries[deviceId]
+            ? {
+                ...state.deviceLibraries,
+                [deviceId]: {
+                  ...state.deviceLibraries[deviceId],
+                  rockboxThemes: result.themes,
+                  rockboxThemeScan: result.scan,
+                  summary: {
+                    ...state.deviceLibraries[deviceId].summary,
+                    rockboxThemeCount: result.themes.length,
+                  },
+                },
+              }
+            : state.deviceLibraries,
+          rockboxThemeLibraries: cachedDevice
+            ? {
+                ...state.rockboxThemeLibraries,
+                [deviceId]: {
+                  device: cachedDevice,
+                  themes: result.themes,
+                  scan: result.scan,
+                },
+              }
+            : state.rockboxThemeLibraries,
+          themeInstallResult: result,
+          loading: false,
+        }
+      })
       return result
     } catch (err) {
       set({ loading: false, error: (err as Error).message })
@@ -263,6 +344,9 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
         deviceLibraries: library
           ? { ...state.deviceLibraries, [id]: library }
           : state.deviceLibraries,
+        rockboxThemeLibraries: library
+          ? { ...state.rockboxThemeLibraries, [id]: rockboxThemesFromLibrary(library) }
+          : state.rockboxThemeLibraries,
       }))
     } catch (err) {
       set({ loading: false, error: (err as Error).message, scanProgress: null })
@@ -342,20 +426,39 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
   },
 }))
 
-if (typeof window !== 'undefined' && window.api?.devices) {
-  window.api.devices.onScanProgress(event => {
+let deviceListenerCleanups: Array<() => void> | null = null
+
+function initializeDeviceListeners(): void {
+  if (typeof window === 'undefined' || !window.api?.devices) return
+  if (deviceListenerCleanups) {
+    for (const off of deviceListenerCleanups) off()
+    deviceListenerCleanups = null
+  }
+  const offScan = window.api.devices.onScanProgress(event => {
     useDeviceStore.setState({ scanProgress: event })
   })
-  window.api.devices.onSyncProgress(event => {
+  const offSync = window.api.devices.onSyncProgress(event => {
     useDeviceStore.setState({ syncProgress: event })
   })
-  window.api.devices.onVolumesChanged((snapshot: DeviceVolumeSnapshot) => {
+  const offVolumes = window.api.devices.onVolumesChanged((snapshot: DeviceVolumeSnapshot) => {
     useDeviceStore.setState(state => ({
       devices: snapshot.devices,
       candidates: snapshot.candidates,
       unknownVolumes: snapshot.unknownVolumes,
       selectedDeviceId: nextSelectedDeviceId(state.selectedDeviceId, snapshot.devices),
     }))
+  })
+  deviceListenerCleanups = [offScan, offSync, offVolumes]
+}
+
+initializeDeviceListeners()
+
+if (typeof import.meta !== 'undefined' && (import.meta as { hot?: { dispose: (cb: () => void) => void } }).hot) {
+  (import.meta as { hot: { dispose: (cb: () => void) => void } }).hot.dispose(() => {
+    if (deviceListenerCleanups) {
+      for (const off of deviceListenerCleanups) off()
+      deviceListenerCleanups = null
+    }
   })
 }
 
@@ -368,5 +471,11 @@ export function useSelectedDevice(): DeviceRecord | null {
 export function useDeviceLibrary(deviceId: string | null): DeviceLibraryResult | null {
   return useDeviceStore(state =>
     deviceId ? state.deviceLibraries[deviceId] ?? null : null,
+  )
+}
+
+export function useRockboxThemeLibrary(deviceId: string | null): RockboxThemeLibraryResult | null {
+  return useDeviceStore(state =>
+    deviceId ? state.rockboxThemeLibraries[deviceId] ?? null : null,
   )
 }

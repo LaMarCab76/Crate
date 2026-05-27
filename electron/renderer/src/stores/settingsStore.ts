@@ -39,18 +39,11 @@ export interface Tweak {
   // Show the full-screen background spectrum in the fullscreen player. Off
   // keeps just the artwork; persisted so the toggle restores on reopen.
   fullPlayerVisualizer: boolean
-  // Show the fullscreen file/spec sheet below the artwork in visualizer mode.
-  fullPlayerFileDataVisible: boolean
   // --- Lyrics. Mirror of LyricsSettingsState; pushed to main via setLyrics so
-  // it knows caching / sidecar / embed / backup behavior before any action.
+  // it knows cache/fetch behavior before any action. Sidecar writes are mandatory.
   lyricsAutoFetch: boolean
   lyricsPreferSynced: boolean
   lyricsCacheLocal: boolean
-  lyricsWriteSidecar: boolean
-  lyricsEmbedAuto: boolean
-  lyricsOverwrite: boolean
-  lyricsConfirmBeforeWrite: boolean
-  lyricsBackupBeforeWrite: boolean
   lyricsGlobalOffsetMs: number
 }
 
@@ -71,18 +64,12 @@ const TWEAK_DEFAULTS: Tweak = {
   exclusiveMode: false,
   playerTintSource: 'artwork',
   playerTintColor: '#0a84ff',
-  showPlayerVisualizer: true,
-  showPlayerLyrics: true,
-  fullPlayerVisualizer: false,
-  fullPlayerFileDataVisible: true,
+  showPlayerVisualizer: false,
+  showPlayerLyrics: false,
+  fullPlayerVisualizer: true,
   lyricsAutoFetch: true,
   lyricsPreferSynced: true,
   lyricsCacheLocal: true,
-  lyricsWriteSidecar: true,
-  lyricsEmbedAuto: false,
-  lyricsOverwrite: false,
-  lyricsConfirmBeforeWrite: true,
-  lyricsBackupBeforeWrite: true,
   lyricsGlobalOffsetMs: 0,
 }
 
@@ -92,11 +79,6 @@ function lyricsPrefsFromTweak(t: Tweak): LyricsSettingsState {
     autoFetch: t.lyricsAutoFetch,
     preferSynced: t.lyricsPreferSynced,
     cacheLocal: t.lyricsCacheLocal,
-    createSidecar: t.lyricsWriteSidecar,
-    embedInFlac: t.lyricsEmbedAuto,
-    overwriteExisting: t.lyricsOverwrite,
-    askBeforeModifying: t.lyricsConfirmBeforeWrite,
-    backupBeforeModifying: t.lyricsBackupBeforeWrite,
   }
 }
 
@@ -108,8 +90,9 @@ function load(): Tweak {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY)
     if (!raw) return TWEAK_DEFAULTS
-    const parsed = JSON.parse(raw) as Partial<Tweak> & { bgSource?: string }
-    const merged = { ...TWEAK_DEFAULTS, ...parsed } as Tweak
+    const parsed = JSON.parse(raw) as Partial<Tweak> & { bgSource?: string; fullPlayerFileDataVisible?: unknown }
+    const merged = { ...TWEAK_DEFAULTS, ...parsed } as Tweak & { fullPlayerFileDataVisible?: unknown }
+    delete merged.fullPlayerFileDataVisible
     // Migrate users that had the old bgSource = 'artwork' to the player tint.
     // The removed accent/bg color fields fall away on the next persist.
     if (parsed.bgSource === 'artwork' && merged.playerTintSource === 'default') {
@@ -261,7 +244,7 @@ if (typeof window !== 'undefined') {
   void window.api?.settings?.setLibraryScanLogRetention(initial.libraryScanLogRetentionDays).catch(() => {
     /* main not ready yet, ignore */
   })
-  // Push lyrics prefs to main on boot so embed/sidecar/cache behavior is known
+  // Push lyrics prefs to main on boot so cache/fetch behavior is known.
   // before the user opens Settings.
   void window.api?.settings?.setLyrics(lyricsPrefsFromTweak(initial)).catch(() => {
     /* main not ready yet, ignore */

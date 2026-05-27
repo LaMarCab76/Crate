@@ -1,17 +1,14 @@
 import { dialog } from 'electron'
-import { writeFileSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { getRepos, type Repos } from '../db/repositories'
 import { broadcast } from '../ipc/events'
 import type { DbTrack, DbTrackLyrics } from '@shared/types/db'
 import type {
   LyricsCandidate,
-  LyricsEmbedPreview,
-  LyricsEmbedResult,
   LyricsResult,
   LyricsSource,
   LyricsStatus,
   LyricsView,
-  LyricsWriteOptions,
   LyricsSelectionSummary,
 } from '@shared/types/lyrics'
 import { isSyncedLrc, setLrcOffset } from '@shared/lyrics/lrc'
@@ -24,12 +21,9 @@ import {
   toConfidence,
 } from './LyricsMatcher'
 import { LrclibProvider, LrclibRateLimitError, type LrclibQuery, type LrclibRaw } from './providers/LrclibProvider'
-import { readEmbeddedLyrics, hasEmbeddedLyrics } from './providers/EmbeddedLyricsProvider'
+import { readEmbeddedLyrics } from './providers/EmbeddedLyricsProvider'
 import { readSidecarLrc, sidecarPathFor } from './providers/SidecarLrcProvider'
-import { writeFlacLyrics } from './writers/FlacVorbisLyricsWriter'
 import { writeSidecarLrc, removeSidecarLrc } from './writers/SidecarLrcWriter'
-import { stripFlacLyrics } from './writers/stripFlacLyrics'
-import { extname } from 'node:path'
 
 const NOT_FOUND_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const LOW_CONFIDENCE = 0.8 // < this (for an lrclib row not user-edited) => 'low_confidence'
@@ -120,13 +114,17 @@ export class LyricsService {
     if (!track) return emptyView(trackId, 'none')
 
     const row = this.repos.lyrics.getByTrackId(trackId)
-    if (row) return viewFromRow(row)
+    if (row) {
+      this.materializeSidecar(track, row)
+      return viewFromRow(this.repos.lyrics.getByTrackId(trackId) ?? row)
+    }
 
     // No DB row yet: read local file sources in priority order and seed.
     const embedded = readEmbeddedLyrics(track.path)
     if (embedded) {
       const seeded = this.seedFromResult(trackId, embedded)
       this.repos.lyrics.markEmbedded(trackId, true)
+      this.materializeSidecar(track, seeded)
       return viewFromRow(this.repos.lyrics.getByTrackId(trackId) ?? seeded)
     }
 
@@ -254,7 +252,7 @@ export class LyricsService {
     const plain = synced ? null : lrcText
     const syncedLrc = synced ? lrcText : null
     this.repos.lyrics.setUserEdited(trackId, plain, syncedLrc)
-    this.maybeWriteSidecar(track, syncedLrc)
+    this.maybeWriteSidecar(track, syncedLrc ?? plain)
     return viewFromRow(this.repos.lyrics.getByTrackId(trackId)!)
   }
 
@@ -262,7 +260,7 @@ export class LyricsService {
     const track = this.repos.tracks.getById(trackId)
     if (!track) return emptyView(trackId, 'none')
     this.repos.lyrics.setUserEdited(trackId, plain, synced)
-    this.maybeWriteSidecar(track, synced)
+    this.maybeWriteSidecar(track, synced ?? plain)
     return viewFromRow(this.repos.lyrics.getByTrackId(trackId)!)
   }
 
@@ -296,65 +294,10 @@ export class LyricsService {
     return { canceled: false, path: result.filePath }
   }
 
-  // --- FLAC embed (opt-in) -----------------------------------------------
-
-  previewEmbed(trackId: number): LyricsEmbedPreview {
-    const track = this.repos.tracks.getById(trackId)
-    const row = this.repos.lyrics.getByTrackId(trackId)
-    const settings = getLyricsSettings().get()
-    const path = track?.path ?? ''
-    const isFlac = path !== '' && extname(path).toLowerCase() === '.flac'
-    const existing = isFlac ? hasEmbeddedLyrics(path) : { synced: false, plain: false }
-    const hasExistingLyrics = existing.synced || existing.plain
-    const willWriteUnsynced = Boolean(row?.plain_lyrics)
-    const willWriteSynced = Boolean(row?.synced_lyrics_lrc)
-
-    let blocked: LyricsEmbedPreview['blocked'] = null
-    if (!track) blocked = 'file_not_found'
-    else if (!isFlac) blocked = 'not_flac'
-    else if (!willWriteUnsynced && !willWriteSynced) blocked = 'missing_metadata'
-    else if (hasExistingLyrics && !settings.overwriteExisting) blocked = 'existing_lyrics'
-
-    return {
-      trackId,
-      path,
-      isFlac,
-      hasExistingLyrics,
-      willWriteUnsynced,
-      willWriteSynced,
-      willBackup: settings.backupBeforeModifying,
-      blocked,
-    }
-  }
-
-  embedInFile(trackId: number, opts?: Partial<LyricsWriteOptions>): LyricsEmbedResult {
-    const track = this.repos.tracks.getById(trackId)
-    const row = this.repos.lyrics.getByTrackId(trackId)
-    if (!track) return { ok: false, reason: 'file_not_found', verified: false }
-    if (!row || (!row.plain_lyrics && !row.synced_lyrics_lrc)) {
-      return { ok: false, reason: 'missing_metadata', verified: false }
-    }
-
-    const settings = getLyricsSettings().get()
-    const result = writeFlacLyrics({
-      path: track.path,
-      plainLyrics: row.plain_lyrics,
-      syncedLyricsLrc: row.synced_lyrics_lrc,
-      sourceId: row.source_id,
-      overwriteExisting: opts?.overwriteExisting ?? settings.overwriteExisting,
-      createBackup: opts?.createBackup ?? settings.backupBeforeModifying,
-    })
-
-    if (result.ok) this.repos.lyrics.markEmbedded(trackId, true)
-    else this.repos.lyrics.recordFailure(trackId, 'flac-writer', result.reason ?? 'unknown')
-    return result
-  }
-
-  remove(trackId: number, opts?: { stripEmbedded?: boolean }): void {
+  remove(trackId: number): void {
     const track = this.repos.tracks.getById(trackId)
     const row = this.repos.lyrics.getByTrackId(trackId)
     if (track && row?.sidecar_written === 1) removeSidecarLrc(track.path)
-    if (track && opts?.stripEmbedded && row?.embedded_in_file === 1) stripFlacLyrics(track.path)
     this.repos.lyrics.delete(trackId)
   }
 
@@ -403,7 +346,7 @@ export class LyricsService {
         instrumental: instrumental ? 1 : 0,
       })
     }
-    this.maybeWriteSidecar(track, synced)
+    const sidecarPath = this.maybeWriteSidecar(track, synced ?? plain)
 
     const row = this.repos.lyrics.getByTrackId(track.id)
     if (row) return viewFromRow(row)
@@ -417,19 +360,33 @@ export class LyricsService {
       instrumental,
       isUserEdited: false,
       embeddedInFile: false,
-      sidecarWritten: false,
+      sidecarWritten: Boolean(sidecarPath),
       confidence,
     }
   }
 
-  private maybeWriteSidecar(track: DbTrack, synced: string | null): void {
-    if (!synced) return
-    if (!getLyricsSettings().get().createSidecar) return
+  private lyricsContentFromRow(row: DbTrackLyrics): string | null {
+    return row.synced_lyrics_lrc ?? row.plain_lyrics ?? null
+  }
+
+  private materializeSidecar(track: DbTrack, row: DbTrackLyrics): void {
+    this.maybeWriteSidecar(track, this.lyricsContentFromRow(row), false)
+  }
+
+  private maybeWriteSidecar(track: DbTrack, content: string | null, overwrite = true): string | null {
+    if (!content) return null
     try {
-      const path = writeSidecarLrc(track.path, synced)
+      const existingPath = sidecarPathFor(track.path)
+      if (!overwrite && existsSync(existingPath)) {
+        this.repos.lyrics.markSidecarWritten(track.id, true, existingPath)
+        return existingPath
+      }
+      const path = writeSidecarLrc(track.path, content)
       this.repos.lyrics.markSidecarWritten(track.id, true, path)
+      return path
     } catch {
       this.repos.lyrics.recordFailure(track.id, 'sidecar-writer', 'write_failed')
+      return null
     }
   }
 

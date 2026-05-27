@@ -25,6 +25,7 @@ import type {
   PlaybackTableBarsResult,
   ProgressEvent,
   QueueSnapshotPayload,
+  RemoveFolderOptions,
   SearchResultsPayload,
   StreamInfoPayload,
   TrackMetadataUpdatePayload,
@@ -34,6 +35,7 @@ import type {
   DeviceCandidate,
   DeviceConnectPayload,
   DeviceLibraryResult,
+  DeviceMusicRootPickResult,
   DevicePendingJournal,
   DeviceRecord,
   DeviceScanProgressEvent,
@@ -45,6 +47,7 @@ import type {
   DeviceSyncProgressEvent,
   DeviceVolumeSnapshot,
   RockboxThemeInstallResult,
+  RockboxThemeLibraryResult,
 } from '@shared/types/device-sync'
 import type {
   DbAlbum,
@@ -56,13 +59,10 @@ import type {
 } from '@shared/types/db'
 import type {
   LyricsCandidate,
-  LyricsEmbedPreview,
-  LyricsEmbedResult,
   LyricsSelectionProgress,
   LyricsSelectionSummary,
   LyricsSettingsState,
   LyricsView,
-  LyricsWriteOptions,
 } from '@shared/types/lyrics'
 import type {
   DownloadJob,
@@ -126,8 +126,8 @@ const api: Api = {
     pickFolder: () => ipcRenderer.invoke('library:folders:pick') as Promise<PickFolderResult>,
     addFolder: (path: string) =>
       ipcRenderer.invoke('library:folders:add', path) as Promise<AddFolderResult>,
-    removeFolder: (id: number) =>
-      ipcRenderer.invoke('library:folders:remove', id) as Promise<void>,
+    removeFolder: (id: number, options?: RemoveFolderOptions) =>
+      ipcRenderer.invoke('library:folders:remove', id, options ?? {}) as Promise<void>,
     scanNow: (folderId?: number) =>
       ipcRenderer.invoke('library:scanNow', folderId) as Promise<LibraryScanRun>,
     scanLog: (folderId?: number, limit?: number) =>
@@ -172,10 +172,11 @@ const api: Api = {
       ipcRenderer.invoke('audio:playbackCache:setLimit', { maxBytes }) as Promise<PlaybackCacheStats>,
     clearPlaybackCache: () =>
       ipcRenderer.invoke('audio:playbackCache:clear') as Promise<PlaybackCacheStats>,
-    preloadNext: (path: string) =>
-      ipcRenderer.invoke('audio:preloadNext', { path }) as Promise<void>,
+    preloadNext: (path: string, trackId?: number | null) =>
+      ipcRenderer.invoke('audio:preloadNext', { path, trackId: trackId ?? null }) as Promise<StreamInfoPayload | null>,
     clearNext: () => ipcRenderer.invoke('audio:clearNext') as Promise<void>,
-    swapNow: () => ipcRenderer.invoke('audio:swapNow') as Promise<boolean>,
+    swapNow: (expectedPath?: string | null) =>
+      ipcRenderer.invoke('audio:swapNow', { expectedPath: expectedPath ?? null }) as Promise<StreamInfoPayload | null>,
     getStatus: () => ipcRenderer.invoke('audio:getStatus') as Promise<PlaybackStatePayload>,
     listOutputDevices: () => ipcRenderer.invoke('audio:devices:list'),
     setOutputDevice: (deviceId: number) =>
@@ -187,7 +188,7 @@ const api: Api = {
       ipcRenderer.invoke('audio:exclusive:set', { enabled }) as Promise<ExclusiveModeState>,
     onProgress: (h) => subscribe<ProgressEvent>('audio:progress', h),
     onTrackEnded: (h) => subscribe<void>('audio:track-ended', () => h()),
-    onGaplessFired: (h) => subscribe<{ path: string }>('audio:gapless-fired', h),
+    onGaplessFired: (h) => subscribe<{ path: string; streamInfo: StreamInfoPayload | null }>('audio:gapless-fired', h),
     onStateChanged: (h) => subscribe<{ status: PlaybackStatus }>('audio:state-changed', h),
     onFft: (h) => subscribe<FftEvent>('audio:fft', h),
     onLevels: (h) => subscribe<LevelsEvent>('audio:levels', h),
@@ -262,12 +263,8 @@ const api: Api = {
       ipcRenderer.invoke('lyrics:setOffset', { trackId, offsetMs }) as Promise<LyricsView>,
     export: (trackId: number) =>
       ipcRenderer.invoke('lyrics:export', trackId) as Promise<{ canceled: boolean; path: string | null }>,
-    previewEmbed: (trackId: number) =>
-      ipcRenderer.invoke('lyrics:previewEmbed', trackId) as Promise<LyricsEmbedPreview>,
-    embedInFile: (trackId: number, options?: Partial<LyricsWriteOptions>) =>
-      ipcRenderer.invoke('lyrics:embedInFile', { trackId, options }) as Promise<LyricsEmbedResult>,
-    remove: (trackId: number, stripEmbedded?: boolean) =>
-      ipcRenderer.invoke('lyrics:remove', { trackId, stripEmbedded }) as Promise<void>,
+    remove: (trackId: number) =>
+      ipcRenderer.invoke('lyrics:remove', { trackId }) as Promise<void>,
     fetchForSelection: (trackIds: number[]) =>
       ipcRenderer.invoke('lyrics:fetchForSelection', trackIds) as Promise<LyricsSelectionSummary>,
     onChanged: (h) => subscribe<{ trackId: number }>('lyrics:changed', h),
@@ -282,6 +279,8 @@ const api: Api = {
       ipcRenderer.invoke('devices:volumes:ignore', rootPath) as Promise<DeviceVolumeSnapshot>,
     pickRoot: () =>
       ipcRenderer.invoke('devices:pickRoot') as Promise<PickFolderResult>,
+    pickMusicRoot: (rootPath: string, currentMusicRoot?: string) =>
+      ipcRenderer.invoke('devices:pickMusicRoot', rootPath, currentMusicRoot) as Promise<DeviceMusicRootPickResult>,
     connect: (payload: DeviceConnectPayload) =>
       ipcRenderer.invoke('devices:connect', payload) as Promise<DeviceRecord>,
     updateSettings: (deviceId: string, settings: DeviceSettingsUpdate) =>
@@ -292,6 +291,8 @@ const api: Api = {
       ipcRenderer.invoke('devices:scan', deviceId) as Promise<DeviceScanResult>,
     library: (deviceId: string) =>
       ipcRenderer.invoke('devices:library', deviceId) as Promise<DeviceLibraryResult>,
+    rockboxThemes: (deviceId: string) =>
+      ipcRenderer.invoke('devices:rockboxThemes', deviceId) as Promise<RockboxThemeLibraryResult>,
     planSync: (payload: DeviceSyncPlanRequest) =>
       ipcRenderer.invoke('devices:planSync', payload) as Promise<DeviceSyncPlan>,
     applySync: (planId: string) =>

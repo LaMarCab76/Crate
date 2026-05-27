@@ -4,18 +4,16 @@
 import type { DbAlbum, DbArtist, DbFolder, DbGenre, DbPlaylist, DbTrack } from './db'
 import type {
   LyricsCandidate,
-  LyricsEmbedPreview,
-  LyricsEmbedResult,
   LyricsSelectionProgress,
   LyricsSelectionSummary,
   LyricsSettingsState,
   LyricsView,
-  LyricsWriteOptions,
 } from './lyrics'
 import type {
   DeviceCandidate,
   DeviceConnectPayload,
   DeviceLibraryResult,
+  DeviceMusicRootPickResult,
   DevicePendingJournal,
   DeviceRecord,
   DeviceScanProgressEvent,
@@ -27,6 +25,7 @@ import type {
   DeviceSyncProgressEvent,
   DeviceVolumeSnapshot,
   RockboxThemeInstallResult,
+  RockboxThemeLibraryResult,
 } from './device-sync'
 import type {
   DownloadJob,
@@ -58,6 +57,10 @@ export interface SearchResultsPayload {
 export interface AddFolderResult {
   folder: DbFolder
   startedScan: boolean
+}
+
+export interface RemoveFolderOptions {
+  deleteMusic?: boolean
 }
 
 export interface PickFolderResult {
@@ -266,7 +269,7 @@ export interface LibraryApi {
   folders(): Promise<DbFolder[]>
   pickFolder(): Promise<PickFolderResult>
   addFolder(path: string): Promise<AddFolderResult>
-  removeFolder(id: number): Promise<void>
+  removeFolder(id: number, options?: RemoveFolderOptions): Promise<void>
   scanNow(folderId?: number): Promise<LibraryScanRun>
   scanLog(folderId?: number, limit?: number): Promise<LibraryScanLogPayload>
 
@@ -398,9 +401,9 @@ export interface AudioApi {
   getPlaybackCacheStats(): Promise<PlaybackCacheStats>
   setPlaybackCacheLimit(maxBytes: number): Promise<PlaybackCacheStats>
   clearPlaybackCache(): Promise<PlaybackCacheStats>
-  preloadNext(path: string): Promise<void>
+  preloadNext(path: string, trackId?: number | null): Promise<StreamInfoPayload | null>
   clearNext(): Promise<void>
-  swapNow(): Promise<boolean>
+  swapNow(expectedPath?: string | null): Promise<StreamInfoPayload | null>
   getStatus(): Promise<PlaybackStatePayload>
   listOutputDevices(): Promise<AudioOutputDevice[]>
   setOutputDevice(deviceId: number): Promise<AudioOutputDevice>
@@ -410,7 +413,7 @@ export interface AudioApi {
 
   onProgress(h: (e: ProgressEvent) => void): EventOff
   onTrackEnded(h: () => void): EventOff
-  onGaplessFired(h: (e: { path: string }) => void): EventOff
+  onGaplessFired(h: (e: { path: string; streamInfo: StreamInfoPayload | null }) => void): EventOff
   onStateChanged(h: (e: { status: PlaybackStatus }) => void): EventOff
   onFft(h: (e: FftEvent) => void): EventOff
   onLevels(h: (e: LevelsEvent) => void): EventOff
@@ -458,9 +461,7 @@ export interface LyricsApi {
   save(trackId: number, plain: string | null, synced: string | null): Promise<LyricsView>
   setOffset(trackId: number, offsetMs: number): Promise<LyricsView>
   export(trackId: number): Promise<{ canceled: boolean; path: string | null }>
-  previewEmbed(trackId: number): Promise<LyricsEmbedPreview>
-  embedInFile(trackId: number, options?: Partial<LyricsWriteOptions>): Promise<LyricsEmbedResult>
-  remove(trackId: number, stripEmbedded?: boolean): Promise<void>
+  remove(trackId: number): Promise<void>
   fetchForSelection(trackIds: number[]): Promise<LyricsSelectionSummary>
 
   onChanged(h: (e: { trackId: number }) => void): EventOff
@@ -472,8 +473,8 @@ export interface SettingsApi {
   // service can short-circuit writes when the user has disabled the feature.
   setLibraryBackup(enabled: boolean): Promise<void>
   setLibraryScanLogRetention(days: number | null): Promise<void>
-  // Pushes lyrics preferences into main so it knows caching / sidecar / embed /
-  // backup behavior before any lyrics action (mirrors setLibraryBackup).
+  // Pushes lyrics preferences into main so it knows cache/fetch behavior before
+  // any lyrics action (mirrors setLibraryBackup).
   setLyrics(patch: Partial<LyricsSettingsState>): Promise<void>
 }
 
@@ -482,11 +483,13 @@ export interface DevicesApi {
   volumes(): Promise<DeviceVolumeSnapshot>
   ignoreVolume(rootPath: string): Promise<DeviceVolumeSnapshot>
   pickRoot(): Promise<PickFolderResult>
+  pickMusicRoot(rootPath: string, currentMusicRoot?: string): Promise<DeviceMusicRootPickResult>
   connect(payload: DeviceConnectPayload): Promise<DeviceRecord>
   updateSettings(deviceId: string, settings: DeviceSettingsUpdate): Promise<DeviceRecord>
   list(): Promise<DeviceRecord[]>
   scan(deviceId: string): Promise<DeviceScanResult>
   library(deviceId: string): Promise<DeviceLibraryResult>
+  rockboxThemes(deviceId: string): Promise<RockboxThemeLibraryResult>
   planSync(payload: DeviceSyncPlanRequest): Promise<DeviceSyncPlan>
   applySync(planId: string): Promise<DeviceSyncApplyResult>
   installRockboxThemesFromFiles(deviceId: string, files: unknown[]): Promise<RockboxThemeInstallResult>
