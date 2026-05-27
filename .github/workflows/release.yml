@@ -9,15 +9,43 @@ on:
       tag:
         description: Existing tag to publish
         required: true
-        default: v0.1.0
+        default: v0.3.0
 
 permissions:
   contents: write
 
 jobs:
-  macos:
-    name: macOS DMG
-    runs-on: macos-latest
+  build:
+    name: Build ${{ matrix.platform_name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform_name: macOS
+            artifact_name: macos
+            build_script: dist:mac
+            artifact_paths: |
+              release/*.dmg
+              release/*.dmg.blockmap
+              release/latest-mac.yml
+          - os: windows-latest
+            platform_name: Windows
+            artifact_name: windows
+            build_script: dist:win
+            artifact_paths: |
+              release/*.exe
+              release/*.exe.blockmap
+              release/latest.yml
+          - os: ubuntu-latest
+            platform_name: Linux
+            artifact_name: linux
+            build_script: dist:linux
+            artifact_paths: |
+              release/*.AppImage
+              release/*.deb
+              release/latest-linux.yml
     env:
       RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -40,19 +68,35 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Build macOS packages
-        run: npm run dist:mac
+      - name: Build ${{ matrix.platform_name }} packages
+        run: npm run ${{ matrix.build_script }}
 
-      - name: Upload workflow artifact
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: crate-${{ env.RELEASE_TAG }}-macos
-          path: |
-            release/*.dmg
-            release/*.dmg.blockmap
-            release/latest-mac.yml
+          name: crate-${{ env.RELEASE_TAG }}-${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_paths }}
+          if-no-files-found: ignore
 
-      - name: Publish GitHub Release
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish to GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -69,7 +113,12 @@ jobs:
             printf '# Crate %s\n\nRelease build.\n' "${tag}" > "${notes_file}"
           fi
 
-          assets=(release/*.dmg release/*.dmg.blockmap release/latest-mac.yml)
+          mapfile -t assets < <(find artifacts -type f -print)
+
+          if [[ ${#assets[@]} -eq 0 ]]; then
+            echo "No assets found to publish" >&2
+            exit 1
+          fi
 
           if gh release view "${tag}" >/dev/null 2>&1; then
             gh release upload "${tag}" "${assets[@]}" --clobber
