@@ -11,6 +11,7 @@ import type {
   LyricsView,
 } from '@shared/types/lyrics'
 import { usePlaybackStore } from './playbackStore'
+import { useQueueStore } from './queueStore'
 import { useTweakStore } from './settingsStore'
 
 export type LyricsViewStatus = LyricsStatus | 'idle' | 'loading' | 'error'
@@ -30,6 +31,7 @@ interface LyricsStoreState {
   visibleConsumerCount: number
 
   loadForTrack(id: number | null, opts?: { allowAutoFetch?: boolean }): Promise<void>
+  prefetchForTrack(id: number | null): Promise<void>
   fetchOnline(force?: boolean): Promise<void>
   searchOnline(): Promise<void>
   chooseCandidate(lrclibId: string): Promise<void>
@@ -76,6 +78,19 @@ export function hasVisibleLyricsConsumers(): boolean {
 // large LRC strings. Bounded so the renderer doesn't hold every LRC ever seen.
 const PARSE_LRC_CACHE_MAX = 32
 const parseLrcCache = new Map<string, ParsedLrc>()
+
+// Remember which upcoming tracks we already asked main to resolve so the
+// remaining-time subscription doesn't refire the same prefetch every tick.
+const PREFETCHED_TRACK_IDS_MAX = 32
+const prefetchedTrackIds = new Set<number>()
+
+function rememberPrefetchedTrack(id: number): void {
+  prefetchedTrackIds.add(id)
+  if (prefetchedTrackIds.size > PREFETCHED_TRACK_IDS_MAX) {
+    const oldest = prefetchedTrackIds.values().next().value
+    if (oldest !== undefined) prefetchedTrackIds.delete(oldest)
+  }
+}
 
 function parseLrcCached(text: string): ParsedLrc {
   const cached = parseLrcCache.get(text)
@@ -153,6 +168,29 @@ export const useLyricsStore = create<LyricsStoreState>((set, get) => ({
         return
       }
       set({ loading: false, status: 'error', error: msg(e) })
+    }
+  },
+
+  async prefetchForTrack(id) {
+    if (id == null || !window.api?.lyrics) return
+    if (id === get().trackId) return
+    if (prefetchedTrackIds.has(id)) return
+    rememberPrefetchedTrack(id)
+    try {
+      let view = await window.api.lyrics.get(id)
+      if (view.status === 'none' || view.status === 'not_found') {
+        const auto = useTweakStore.getState().tweak.lyricsAutoFetch
+        if (auto) {
+          try {
+            view = await window.api.lyrics.fetch(id, false)
+          } catch {
+            // best-effort: leave the resolved view so we still warm the parse cache below
+          }
+        }
+      }
+      if (view.syncedLyricsLrc) parseLrcCached(view.syncedLyricsLrc)
+    } catch {
+      // best-effort prefetch — swallow so the upcoming-toast UI is never blocked
     }
   },
 
@@ -362,6 +400,9 @@ export function setLyricsPanelVisible(consumer: symbol, visible: boolean): void 
 }
 
 let lyricsListenerCleanups: Array<() => void> | null = null
+// Matches the earliest "A continuación" toast threshold (UpNextToast bottom variant).
+const UP_NEXT_LYRICS_PREFETCH_REMAINING_SEC = 30
+let upNextPrefetchFiredForId: number | null = null
 
 function initializeLyricsListeners(): void {
   if (typeof window === 'undefined' || !window.api?.lyrics) return
@@ -372,6 +413,7 @@ function initializeLyricsListeners(): void {
   const offTrackChange = usePlaybackStore.subscribe((state, prev) => {
     const id = state.currentTrack?.dbId ?? null
     if (id !== (prev.currentTrack?.dbId ?? null)) {
+      upNextPrefetchFiredForId = null
       if (hasVisibleLyricsConsumers()) {
         void useLyricsStore.getState().loadForTrack(id)
       } else {
@@ -386,6 +428,20 @@ function initializeLyricsListeners(): void {
     useLyricsStore.getState().recomputeNow()
   })
 
+  const offUpNextPrefetch = usePlaybackStore.subscribe(state => {
+    if (state.status !== 'playing') return
+    if (!state.durationSec || state.durationSec <= 0) return
+    const remaining = state.durationSec - state.positionSec
+    if (remaining <= 0 || remaining > UP_NEXT_LYRICS_PREFETCH_REMAINING_SEC) return
+    const queue = useQueueStore.getState()
+    const next = queue.tracks[queue.currentIndex + 1]
+    const nextId = next?.dbId ?? null
+    if (nextId == null) return
+    if (upNextPrefetchFiredForId === nextId) return
+    upNextPrefetchFiredForId = nextId
+    void useLyricsStore.getState().prefetchForTrack(nextId)
+  })
+
   const offTweak = useTweakStore.subscribe((state, prev) => {
     if (state.tweak.lyricsGlobalOffsetMs === prev.tweak.lyricsGlobalOffsetMs) return
     if (!hasVisibleLyricsConsumers()) return
@@ -398,7 +454,7 @@ function initializeLyricsListeners(): void {
     if (trackId === ls.trackId) void ls.loadForTrack(trackId, { allowAutoFetch: false })
   })
 
-  lyricsListenerCleanups = [offTrackChange, offPlayhead, offTweak, offChanged]
+  lyricsListenerCleanups = [offTrackChange, offPlayhead, offUpNextPrefetch, offTweak, offChanged]
 
   if (hasVisibleLyricsConsumers()) {
     void useLyricsStore.getState().loadForTrack(usePlaybackStore.getState().currentTrack?.dbId ?? null)
