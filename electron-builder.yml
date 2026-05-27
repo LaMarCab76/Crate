@@ -39,6 +39,7 @@ win:
 
 linux:
   category: AudioVideo
+  maintainer: Lautaro Caballero <lcaballero@frba.utn.edu.ar>
   target:
     - AppImage
     - deb
