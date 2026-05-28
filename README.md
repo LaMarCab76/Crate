@@ -1,78 +1,221 @@
 # Crate
 
-Audiophile music library and player, built as an **Electron + Vite + React + TypeScript** desktop app (replacing a prior SwiftUI / macOS-only implementation).
+Audiophile music library and player for **macOS, Windows and Linux**, built as an
+Electron + Vite + React + TypeScript desktop app on top of the
+[BASS](https://www.un4seen.com/bass.html) audio library.
 
-## Status
-
-This is an alpha. The current shell renders the full UI from the design with mock data. The next phases wire up SQLite, BASS audio playback, library import, lyrics, and EQ.
-
-| Phase | Description | Status |
-|------:|:------------|:------:|
-| 0 | Archive Swift, scaffold Electron app | ✅ |
-| 1 | UI shell — all views, theme, density, mini player, full-screen NowPlaying | ✅ |
-| 2 | Data layer — `better-sqlite3`, FTS5, schema port | pending |
-| 3 | Audio engine — BASS via koffi FFI, gapless, DACManager, EQ | pending |
-| 4 | Metadata + library import — `music-metadata`, chokidar watchers | pending |
-| 5 | Lyrics (LRClib — see `docs/lyrics-feature.md`), R128 scanner, media keys, mini player popout | pending |
-| 6 | Packaging — DMG, NSIS, AppImage, auto-update | pending |
+> Current release: **v0.3.1** — installers and release notes live in
+> [`docs/releases/`](docs/releases/).
 
 ## Quick start
 
 ```bash
 npm install
-npm run dev     # opens an Electron dev window with HMR
-npm run build   # bundles main, preload, renderer into out/
-npm run dist    # builds an installer with electron-builder
+npm run dev          # Electron dev window with Vite HMR
+npm run typecheck    # tsc for the main + renderer projects
+npm run build        # bundles main, preload, renderer into out/
+npm run dist         # packages an installer with electron-builder
+npm run dist:mac     # DMG (x64 + arm64)
+npm run dist:win     # NSIS installer (x64)
+npm run dist:linux   # AppImage + .deb
 ```
+
+The `postinstall` hook rebuilds `better-sqlite3` against the bundled Electron
+runtime. If a native module ever drifts after an Electron upgrade,
+`npm run rebuild` does it on demand.
 
 ## Project layout
 
 ```
 electron/
-  main/         # Electron main process (Node) — IPC, audio, DB live here
-  preload/      # contextBridge to expose typed APIs to the renderer
-  renderer/     # React UI (this is what users see)
+  main/         Electron main process (Node) — DB, audio, devices, downloads, IPC
+    audio/        BASS FFI bindings, AudioEngine, GaplessController, EQ, CoreAudio hog mode
+    db/           better-sqlite3 connection, migrator + 17 SQL migrations, repositories
+    devices/      DAP detection, sync planner/journal, Rockbox theme scanner, artwork optimizer
+    downloads/    Qobuz + Tidal providers, HAR credential extractor, job manager
+    library/      Folder watchers, reconciler, metadata extractor/writer, artwork cache
+    lyrics/       LRClib + sidecar + embedded providers, .lrc sidecar writer
+    ipc/          5 typed channels (library, audio, lyrics, devices, downloads)
+    services/     LibraryBackup (portable JSON mirror of the SQLite library)
+  preload/      contextBridge that exposes the typed `window.api` to the renderer
+  renderer/     React UI
     src/
-      components/    # Reusable: Sidebar, PlayerPane, CodecStrip, Artwork, Icon…
-      views/         # Top-level: LibraryView, AlbumsView, AlbumView, ArtistView…
-      stores/        # Settings, queue, playback state (Zustand)
-      data/          # mockLibrary.ts (replaced by SQLite queries in Phase 2)
-      styles/        # globals.css
-shared/         # Types shared between main and renderer (audio, library, IPC)
-native/         # BASS dylibs/dlls/sos (populated in Phase 3)
+      components/   Sidebar, PlayerPane, PlayerBottomBar, NowPlayingFull,
+                    FullScreenQueue, LyricsPanel, SpectrumVisualizer, EQBars,
+                    TrackTable, ContextMenu, ModalShell, DeviceConnectModal…
+      views/        Library, Albums, Album, Artists, Artist, Genres, Playlist,
+                    Search, Devices, DeviceLibrary, Downloads, Import, Settings
+      stores/       Zustand stores: library, playback, queue, settings, EQ,
+                    devices, downloads, lyrics
+      utils/        FFT, levels, color extract, virtual rows, audio math
+      styles/       globals.css
+shared/         Cross-process TypeScript: IPC contract, library/db/device types,
+                LRC parser, equalizer + device-sync constants
+native/libs/    BASS dylibs (FX, FLAC, Opus, DSD, WV, TTA, MPC, APE, HLS, WebM, MIDI…)
+electron-build/ App icon, entitlements, Electron rebuild scripts
+docs/           Release notes + feature specs (e.g. lyrics-feature.md)
 ```
 
-## Design
+## Features
 
-The UI is a port of the original Claude Design handoff:
+### Audio engine
+- **BASS** loaded through the [koffi](https://koffi.dev) FFI in the main process,
+  with the full plugin set in `native/libs/` (FLAC, Opus, DSD, WavPack, TTA,
+  Musepack, APE, HLS, WebM, MIDI, FX) so the same engine handles MP3, AAC,
+  FLAC, ALAC, DSD, WavPack and more.
+- Streams are preferred **fully in memory** when the RAM budget allows; large
+  files fall back to disk streaming.
+- **Gapless playback** via a dedicated `GaplessController` that preloads the
+  next track on a configurable threshold and hot-swaps the BASS stream on
+  end-of-stream, with adoption from the queue store so autoplay keeps working
+  even if preload didn't fire.
+- **Crossfade** (0–12 s) and **soundcheck** toggle in Settings.
+- **Exclusive / hog mode** on macOS through a CoreAudio FFI shim
+  (`ExclusiveModeManager`) — bypasses the system mixer, releases the device on
+  quit so other apps recover the output.
+- **Output device picker** with hot-reapply, plus FFT and stereo RMS level
+  metering exposed to the UI at configurable cadences (mini / full / screen).
+- **Persistent playback analysis cache** (waveform peaks + track-row bars)
+  stored in SQLite with a configurable disk quota, so re-opening an album does
+  not re-decode every file.
+- 10-band **graphic EQ** powered by the bass_fx plugin, with per-band gain
+  shared between the renderer store and the engine.
 
-- Three-pane layout: translucent sidebar + main + right player pane with a draggable splitter
-- Dark + light themes, three densities (compact / regular / comfy), three layouts (classic / editorial / dense)
-- Codec strip with audiophile tiers (low / mid / high / cd / studio / master / ref)
-- Procedural SVG album artwork (palette + seed + pattern)
-- Animated equalizer indicator for the currently playing track
-- Full-screen Now Playing with synced lyrics + visualizer
-- Synced lyrics with global and per-track timing offset controls; lyrics are
-  stored as mandatory `.lrc` sidecars next to the audio and are copied during
-  device sync instead of being embedded into audio files.
-- Persistent playback visualization cache with configurable DB quota
-- Filesystem-backed library reconciliation with per-library scan history and
-  configurable retention.
-- Mini player popout
-- Device sync with automatic volume detection, sidebar navigation for mounted
-  DAPs, Rockbox theme listing, drag-and-drop Rockbox theme installs, per-device
-  dashboard/configuration, and global sync progress.
+### Library
+- Multi-folder libraries with a **chokidar** `FolderWatcher` plus a
+  `LibraryReconciler` that scans on startup, sweeps in the background, and
+  records every run in a `library_scan_log` with configurable retention.
+- `ImportService` + `MetadataExtractor` use **music-metadata** and
+  **node-taglib-sharp** to ingest tags, embedded artwork and stream info.
+- `MetadataCompletionService` applies rule-based fill-ins (artist / album
+  cleanup, sort fields, primary-artist parsing) with an in-app review modal
+  before writing tags back via `MetadataWriter`.
+- `ArtworkCache` extracts and resizes embedded art on first sight and exposes
+  it under a privileged `crate://` protocol scheme so the renderer can render
+  thousands of covers without round-tripping through IPC for the bytes.
+- **SQLite** schema (17 migrations) with **FTS5** search and triggers that keep
+  the index fresh as tracks change, plus repositories per entity
+  (tracks, albums, artists, genres, playlists, queues, folders, scan log,
+  playback analysis, download jobs, lyrics).
+- Optional **portable JSON backup** (`LibraryBackup`) that mirrors the SQLite
+  library to disk and flushes before quit, so the library survives a wipe of
+  the user-data directory.
 
-## Why Electron (this time)
+### Views & UI shell
+- Three-pane layout with a translucent vibrant sidebar, main content, and a
+  right-side player pane behind a draggable splitter.
+- Dark + light themes, three densities (compact / regular / comfy), three list
+  layouts (classic / editorial / dense).
+- Top-level views: **Library, Albums, Album, Artists, Artist, Genres, Playlist,
+  Search (FTS5), Devices, Device library, Downloads, Import, Settings**, with
+  per-view list sort + filter prefs persisted via `ListPrefsMenu`.
+- Procedural SVG album artwork as a fallback (palette + seed + pattern), and a
+  per-frame color extractor that tints the player from the current cover.
+- Animated EQ indicator for the playing track in any list, `UpNextToast`
+  notices, `TrackLoadingOverlay`, `ContextMenu` actions, `ModalShell` for
+  dialogs.
 
-The prior Swift app was feature-rich (gapless, hi-res, hog mode, R128, FTS5 search) but iteration was slow and it was locked to macOS. Electron unlocks:
+### Player surfaces
+- `PlayerPane` (sidebar player) with codec strip, transport, queue preview and
+  optional inline lyrics + FFT visualizer.
+- `PlayerBottomBar` as a slim transport for dense layouts.
+- `NowPlayingFull` full-screen mode with background spectrum, synced lyrics,
+  and a sibling `FullScreenQueue` view for managing what's next.
+- `SpectrumVisualizer` and `EQBars` with unified bands and a custom log-spaced
+  FFT mapping; the engine downshifts its FFT mode when no visualizer is mounted.
+- Player tint source is configurable per session: **default / preset / custom /
+  artwork-extracted**.
 
-- Faster UI iteration (Vite HMR, no Xcode)
-- Cross-platform potential (macOS + Windows + Linux)
-- Modern dev tooling (TypeScript, React DevTools)
+### Lyrics
+- Read pipeline composes four providers — **LRClib** (online), embedded tags,
+  `.lrc` **sidecar**, and an in-DB **cache** — coordinated by `LyricsMatcher`
+  with candidate selection in `LyricsCandidates` when multiple matches show up.
+- Write pipeline writes mandatory **`.lrc` sidecars** next to the audio file
+  (`SidecarLrcWriter`) — sidecars are what gets copied during device sync, so
+  lyrics travel with the library. A `FlacVorbisLyricsWriter` plus
+  `stripFlacLyrics` handle legacy embedded cases.
+- Synced display with **global** and **per-track** timing offsets
+  (`lyricsGlobalOffsetMs` in settings, plus the parsed `[offset:…]` tag
+  honored at lookup time).
+- Settings: auto-fetch, prefer-synced, local cache toggle, global offset.
+- A `LyricsPanel` (inline) and `LyricsSidePane` (overlay) both subscribe to the
+  same playback tick and run the same current-line lookup.
+- Full spec for future iteration in [`docs/lyrics-feature.md`](docs/lyrics-feature.md).
 
-The audiophile features will be preserved by reusing the same **BASS C library** (currently called via CBass on Swift) through Node FFI (koffi) in Phase 3.
+### Devices & sync (DAPs)
+- `DeviceSyncService` with an OS-level **volume monitor** that detects mounted
+  USB / Rockbox / FiiO-style players on macOS, Windows and Linux and classifies
+  them as connected / candidate / unknown.
+- `DeviceConnectModal` to confirm music root, artwork limits and per-device
+  options before linking; sidebar nav and a per-device dashboard
+  (`DeviceLibraryView`) once linked.
+- **Sync planner** that produces a plan + journal; sync is journaled so it
+  can be **resumed or discarded** after a crash or unplug, with pending
+  journals surfaced in the Devices view.
+- `ArtworkOptimizer` re-encodes embedded covers to the device's configured
+  maximum edge size (default tunable in Settings) so the on-device library
+  doesn't blow past flash storage limits.
+- `RockboxThemeScanner` lists installed themes and accepts **drag-and-drop
+  `.zip` theme installs** straight into the device's `/.rockbox/themes/`.
+
+### Downloads
+- `DownloadManager` with provider plugins: **Qobuz** and **TIDAL**.
+- Search → enqueue → resolve → download → verify → tag → import pipeline,
+  with statuses surfaced per job (queued / authenticating / resolving /
+  downloading / verifying / tagging / importing / completed / failed /
+  cancelled / unavailable / already-exists) and retry / cancel actions.
+- Quality presets: **Best / Hi-Res / Lossless / MP3 320**.
+- **HAR credential extractor** (`HarCredentialExtractor`) plus a
+  `CredentialStore` — paste a browser HAR export, the extractor finds the
+  auth payload, and credentials live in the OS keychain instead of plain JSON.
+- `ServiceSetup` wizard + tutorial state for first-time provider linking.
+
+### Settings
+- Library: folders, manual + scheduled scans, scan-log retention, portable
+  backup toggle.
+- Audio: gapless, crossfade duration, soundcheck, exclusive mode, 10-band EQ.
+- Player: tint source (default / preset / custom / artwork), spectrum +
+  inline-lyrics visibility, full-screen background spectrum.
+- Lyrics: auto-fetch, prefer-synced, local cache, global offset.
+- Devices: default artwork max-edge, volume detection, ignore lists.
+- Playback cache: stats + clear + per-byte quota.
+
+### Packaging & infra
+- `electron-builder` targets: **DMG (x64 + arm64), NSIS (x64), AppImage, .deb**,
+  with `native/libs/` shipped via `extraResources` + `asarUnpack` so BASS
+  loads at runtime.
+- Strict renderer sandbox: `contextIsolation: true`, `nodeIntegration: false`,
+  navigation locked to the app's own origin, `window.open` filtered to
+  http(s) only.
+- IPC layer with input **validation helpers**, **throttled** event broadcasts
+  and a single `events.ts` `broadcast()` entry point.
+- Unhandled-rejection / uncaught-exception loggers so a single bad IPC call
+  can't silently kill the main process.
+
+## Status
+
+| Phase | Description | Status |
+|------:|:------------|:------:|
+| 0 | Archive Swift, scaffold Electron app | ✅ |
+| 1 | UI shell — all views, theme, density, mini player, full-screen NowPlaying | ✅ |
+| 2 | Data layer — `better-sqlite3`, FTS5, schema, repositories | ✅ |
+| 3 | Audio engine — BASS via koffi FFI, gapless, EQ, exclusive mode | ✅ |
+| 4 | Metadata + library import — `music-metadata`, chokidar watchers, reconciler | ✅ |
+| 5 | Lyrics (LRClib + sidecar), playback analysis cache, device sync | ✅ |
+| 6 | Packaging — DMG, NSIS, AppImage, .deb | ✅ |
+| 7 | R128 / loudness scanner, OS media keys, mini-player popout, auto-update | pending |
 
 ## License
 
 GPL-3.0-or-later. See `LICENSE`.
+
+## Acknowledgements
+
+Crate is a **rewrite of the original macOS-only SwiftUI app** of the same name,
+which was feature-rich (gapless, hi-res, hog mode, R128, FTS5 search) but slow
+to iterate on and locked to Apple platforms. The Electron rewrite keeps the
+same audiophile-grade BASS engine (previously bridged through CBass in Swift,
+now through koffi FFI in Node) while unlocking cross-platform builds, Vite
+HMR-driven UI iteration, and modern TypeScript tooling. Feature specs salvaged
+from the Swift codebase — like [`docs/lyrics-feature.md`](docs/lyrics-feature.md)
+— guide the parity work as Crate moves through its remaining phases.
