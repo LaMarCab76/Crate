@@ -6,7 +6,7 @@ import {
   addTracksToPlaylist,
   createPlaylistWithTracks,
   toggleTrackFavorite,
-  trashTracks,
+  trashTracksWithAnimation,
   updateTrackMetadata,
   updateTracksMetadata,
   usePlaylists,
@@ -325,25 +325,11 @@ function ConfirmTrashModal({
   tracks: Track[]
   onClose: () => void
 }) {
-  const [working, setWorking] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const ids = trackDbIds(tracks)
 
-  const onConfirm = async () => {
-    setWorking(true)
-    setError(null)
-    try {
-      const result = await trashTracks(ids)
-      if (result.failed.length > 0) {
-        setError(result.failed.map(f => `${f.title}: ${f.error}`).join('\n'))
-        return
-      }
-      onClose()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setWorking(false)
-    }
+  const onConfirm = () => {
+    onClose()
+    void trashTracksWithAnimation(ids)
   }
 
   return (
@@ -352,8 +338,8 @@ function ConfirmTrashModal({
       onClose={onClose}
       footer={(
         <>
-          <button type="button" className="btn" onClick={onClose} disabled={working}>Cancelar</button>
-          <button type="button" className="btn danger" disabled={working || ids.length === 0} onClick={() => { void onConfirm() }}>
+          <button type="button" className="btn" onClick={onClose}>Cancelar</button>
+          <button type="button" className="btn danger" disabled={ids.length === 0} onClick={onConfirm}>
             Mover a Papelera
           </button>
         </>
@@ -364,7 +350,6 @@ function ConfirmTrashModal({
         {tracks.slice(0, 8).map(track => <div key={track.id}>{track.t}</div>)}
         {tracks.length > 8 && <div>+ {tracks.length - 8} más</div>}
       </div>
-      {error && <pre className="modal-error">{error}</pre>}
     </ModalShell>
   )
 }

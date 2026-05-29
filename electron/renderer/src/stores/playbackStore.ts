@@ -4,34 +4,60 @@
 
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
-import type { PlaybackStatus, StreamInfoPayload } from '@shared/types/ipc-contract'
+import type { PlaybackStatus, StreamLoadSource, StreamInfoPayload } from '@shared/types/ipc-contract'
 import type { Track } from '@shared/types/library'
+
+type StreamSourceBadgeState = 'idle' | 'promoting' | 'promoted'
 
 interface PlaybackState {
   status: PlaybackStatus
   currentTrack: Track | null
   streamInfo: StreamInfoPayload | null
+  isTrackLoading: boolean
   positionSec: number
   durationSec: number
   volume: number
+  streamSource: StreamLoadSource
+  streamSourceState: StreamSourceBadgeState
+  bufferedBytes: number | null
+  totalBytes: number | null
+  bufferedSec: number | null
+  bufferComplete: boolean
 
   setCurrentTrack(t: Track | null): void
   setStatus(s: PlaybackStatus): void
+  setTrackLoading(isTrackLoading: boolean): void
   setProgress(positionSec: number, durationSec: number): void
   setVolume(v: number): void
   setStreamInfo(info: StreamInfoPayload | null): void
+  setStreamSource(source: StreamLoadSource): void
+  setStreamSourceState(state: StreamSourceBadgeState): void
+  setBufferProgress(progress: {
+    bufferedBytes: number | null
+    totalBytes: number | null
+    bufferedSec: number | null
+    bufferComplete: boolean
+  }): void
 }
 
 export const usePlaybackStore = create<PlaybackState>(set => ({
   status: 'stopped',
   currentTrack: null,
   streamInfo: null,
+  isTrackLoading: false,
   positionSec: 0,
   durationSec: 0,
   volume: 1,
+  streamSource: 'none',
+  streamSourceState: 'idle',
+  bufferedBytes: null,
+  totalBytes: null,
+  bufferedSec: null,
+  bufferComplete: false,
 
   setCurrentTrack: t => set({ currentTrack: t }),
   setStatus: s => set({ status: s }),
+  setTrackLoading: isTrackLoading => set({ isTrackLoading }),
   setProgress: (positionSec, durationSec) => set({ positionSec, durationSec }),
   setVolume: v => set({ volume: v }),
   setStreamInfo: info =>
@@ -39,6 +65,9 @@ export const usePlaybackStore = create<PlaybackState>(set => ({
       streamInfo: info,
       durationSec: info?.duration ?? 0,
     }),
+  setStreamSource: source => set({ streamSource: source, streamSourceState: 'idle' }),
+  setStreamSourceState: streamSourceState => set({ streamSourceState }),
+  setBufferProgress: progress => set(progress),
 }))
 
 // ---------------- Play-count threshold ----------------
@@ -96,7 +125,19 @@ if (typeof window !== 'undefined' && window.api?.audio) {
     }
   })
   window.api.audio.onStateChanged(({ status }) => {
-    usePlaybackStore.getState().setStatus(status)
+    const state = usePlaybackStore.getState()
+    state.setStatus(status)
+    if (status !== 'loading') state.setTrackLoading(false)
+  })
+  window.api.audio.onStreamSourceChanged(({ source, currentPath }) => {
+    const state = usePlaybackStore.getState()
+    if (currentPath && state.currentTrack?.path && state.currentTrack.path !== currentPath) return
+    state.setStreamSource(source)
+  })
+  window.api.audio.onBufferProgress(({ currentPath, bufferedBytes, totalBytes, bufferedSec, bufferComplete }) => {
+    const state = usePlaybackStore.getState()
+    if (currentPath && state.currentTrack?.path && state.currentTrack.path !== currentPath) return
+    state.setBufferProgress({ bufferedBytes, totalBytes, bufferedSec, bufferComplete })
   })
 
   // When the in-store currentTrack changes, reset the play-count window so a
@@ -113,6 +154,14 @@ if (typeof window !== 'undefined' && window.api?.audio) {
   window.api.audio.getStatus().then(s => {
     const store = usePlaybackStore.getState()
     store.setStatus(s.status)
+    store.setTrackLoading(s.status === 'loading')
+    store.setStreamSource(s.streamSource)
+    store.setBufferProgress({
+      bufferedBytes: s.bufferedBytes,
+      totalBytes: s.totalBytes,
+      bufferedSec: s.bufferedSec,
+      bufferComplete: s.bufferComplete,
+    })
     store.setStreamInfo(s.streamInfo)
     store.setVolume(s.volume)
     if (typeof s.positionSec === 'number') {

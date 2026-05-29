@@ -112,6 +112,20 @@ export function SpectrumVisualizer({ mode = 'mini', active = true }: Props) {
   const bandScratchRef = useRef<Float32Array>(new Float32Array(bandCount))
   const lastLitRef = useRef<Float32Array>(new Float32Array(bandCount))
 
+  const isElementRectVisible = () => {
+    const el = rootRef.current
+    if (!el) return false
+    const rect = el.getBoundingClientRect()
+    return (
+      rect.width > 0
+      && rect.height > 0
+      && rect.bottom > 0
+      && rect.top < (window.innerHeight || 0)
+      && rect.right > 0
+      && rect.left < (window.innerWidth || 0)
+    )
+  }
+
   // Frequency-axis ticks placed at their log position. x is a fraction of the
   // bands area, which aligns with the matching column center.
   const freqTicks = useMemo(() => {
@@ -165,6 +179,7 @@ export function SpectrumVisualizer({ mode = 'mini', active = true }: Props) {
 
     const el = rootRef.current
     if (!el) return
+    if (isElementRectVisible()) setElementVisible(true)
 
     const observer = new IntersectionObserver(entries => {
       const entry = entries[0]
@@ -174,6 +189,30 @@ export function SpectrumVisualizer({ mode = 'mini', active = true }: Props) {
 
     return () => observer.disconnect()
   }, [])
+
+  useEffect(() => {
+    if (!active || playbackStatus !== 'playing' || elementVisible) return
+
+    let frame = 0
+    let attempts = 0
+    const maxAttempts = 8
+
+    const checkRect = () => {
+      if (isElementRectVisible()) {
+        setElementVisible(true)
+        return
+      }
+
+      attempts += 1
+      if (attempts >= maxAttempts || !active || playbackStatus !== 'playing') return
+      frame = window.requestAnimationFrame(checkRect)
+    }
+
+    frame = window.requestAnimationFrame(checkRect)
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame)
+    }
+  }, [active, elementVisible, playbackStatus])
 
   useEffect(() => {
     const shouldAnimate = active && playbackStatus === 'playing' && windowVisible && elementVisible

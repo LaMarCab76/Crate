@@ -84,16 +84,6 @@ export function GenresView({ onSelectAlbum }: { onSelectAlbum?: (al: Album) => v
         <div className="actions list-toolbar">
           <ListPrefsMenu buttonLabel="Filtro" menuTitle="Géneros" onReset={() => setPrefs(defaults.genres)}>
             <div className="list-prefs-row">
-              <div className="list-prefs-label">Buscar</div>
-              <input
-                className="list-input"
-                value={prefs.query}
-                onChange={e => setPrefs({ query: e.target.value })}
-                placeholder="Buscar género"
-                aria-label="Buscar género"
-              />
-            </div>
-            <div className="list-prefs-row">
               <div className="list-prefs-label">Ordenar géneros por</div>
               <div className="list-prefs-row-inline">
                 <select

@@ -119,16 +119,6 @@ export function LibraryView() {
             onReset={() => setPrefs(defaults.library)}
           >
             <div className="list-prefs-row">
-              <div className="list-prefs-label">Buscar</div>
-              <input
-                className="list-input"
-                value={prefs.query}
-                onChange={e => setPrefs({ query: e.target.value })}
-                placeholder="Título, artista, álbum o género"
-                aria-label="Buscar canciones"
-              />
-            </div>
-            <div className="list-prefs-row">
               <div className="list-prefs-row-inline">
                 <div className="list-prefs-label">Ordenar por</div>
                 <select

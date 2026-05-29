@@ -34,6 +34,9 @@
   --np-tint: transparent;
   --scrollbar-thumb: color-mix(in srgb, var(--text-primary) 28%, transparent);
   --scrollbar-thumb-hover: color-mix(in srgb, var(--text-primary) 42%, transparent);
+  --up-next-toast-bg: rgba(18, 18, 22, 0.24);
+  --up-next-toast-border: rgba(255, 255, 255, 0.18);
+  --up-next-toast-backdrop: blur(10px) saturate(1.14);
 
   --shadow-window: 0 30px 80px rgba(0,0,0,0.55), 0 0 0 0.5px rgba(255,255,255,0.08), 0 0 0 1px rgba(0,0,0,0.6);
   --shadow-pop: 0 12px 32px rgba(0,0,0,0.4), 0 0 0 0.5px rgba(255,255,255,0.08);
@@ -75,6 +78,9 @@
   --accent: rgba(0, 0, 0, 0.88);
   --accent-soft: rgba(0, 0, 0, 0.08);
   --color-playing: #1D6FEB;
+  --up-next-toast-bg: rgba(255, 255, 255, 0.34);
+  --up-next-toast-border: rgba(0, 0, 0, 0.13);
+  --up-next-toast-backdrop: blur(10px) saturate(1.1);
 
   --shadow-window: 0 30px 80px rgba(0,0,0,0.18), 0 0 0 0.5px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.06);
   --shadow-pop: 0 12px 32px rgba(0,0,0,0.18), 0 0 0 0.5px rgba(0,0,0,0.1);
@@ -147,8 +153,8 @@ html, body {
 .window {
   width: 100%; height: 100%;
   background:
-    linear-gradient(color-mix(in oklab, var(--bg-tint) 22%, transparent),
-                    color-mix(in oklab, var(--bg-tint) 22%, transparent)),
+    linear-gradient(color-mix(in oklab, var(--bg-tint) 30%, transparent),
+                    color-mix(in oklab, var(--bg-tint) 30%, transparent)),
     var(--bg-window);
   display: flex; flex-direction: column;
   overflow: hidden;
@@ -171,14 +177,20 @@ html, body {
 .frame { flex: 1; display: flex; min-height: 0; overflow: hidden; position: relative; }
 
 .layout-resize-handle {
-  width: 8px;
-  flex-shrink: 0;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 10px;
   cursor: col-resize;
-  position: relative;
   background: transparent;
   touch-action: none;
   user-select: none;
-  z-index: 3;
+  z-index: 5;
+  transform: translateX(-50%);
+}
+
+.lyrics-side-resize-handle {
+  transform: translateX(50%);
 }
 
 .layout-resize-handle::after {
@@ -190,7 +202,7 @@ html, body {
   width: 1px;
   transform: translateX(-50%);
   background: color-mix(in srgb, var(--divider) 100%, transparent);
-  opacity: 0.55;
+  opacity: 0;
   transition: opacity 140ms ease, background 140ms ease;
 }
 
@@ -214,6 +226,12 @@ html, body {
   transition: none !important;
 }
 
+.frame.layout-resizing-lyrics-side .lyrics-side-pane,
+.frame.layout-resizing-lyrics-side .player-pane,
+.frame.layout-resizing-lyrics-side .main-area {
+  transition: none !important;
+}
+
 .playerpane-resize-handle {
   cursor: ew-resize;
 }
@@ -224,7 +242,6 @@ html, body {
   background: var(--bg-sidebar);
   backdrop-filter: blur(40px) saturate(180%);
   -webkit-backdrop-filter: blur(40px) saturate(180%);
-  border-right: 0.5px solid var(--divider);
   display: flex; flex-direction: column;
   min-height: 0;
   min-width: var(--sb-w);
@@ -410,8 +427,8 @@ html, body {
   display: flex; align-items: center; gap: 8px;
   padding: 0 14px;
   background:
-    linear-gradient(color-mix(in oklab, var(--bg-tint) 22%, transparent),
-                    color-mix(in oklab, var(--bg-tint) 22%, transparent)),
+    linear-gradient(color-mix(in oklab, var(--bg-tint) 30%, transparent),
+                    color-mix(in oklab, var(--bg-tint) 30%, transparent)),
     var(--bg-window);
   border-bottom: 0.5px solid var(--divider);
   -webkit-app-region: drag;
@@ -486,6 +503,40 @@ html, body {
 }
 .tb-search-clear:hover { background: var(--bg-hover); color: var(--text-primary); }
 
+/* Give the search bar a bit more room when the scope toggle is visible */
+.tb-search.has-scope { width: 280px; }
+.tb-search.has-scope.is-active { width: min(500px, 50vw); }
+
+/* Scope segmented control inside the search bar */
+.tb-search-scope {
+  display: flex;
+  gap: 1px;
+  background: var(--border-subtle);
+  border-radius: 4px;
+  padding: 1px;
+  flex-shrink: 0;
+}
+.tb-search-scope-btn {
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 2px 7px;
+  border-radius: 3px;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  line-height: 1;
+  transition: background 100ms ease, color 100ms ease;
+  user-select: none;
+}
+.tb-search-scope-btn.active {
+  background: var(--bg-panel);
+  color: var(--text-primary);
+}
+.tb-search-scope-btn:not(.active):hover {
+  color: var(--text-secondary);
+}
+
 .tb-icon-btn {
   width: 28px; height: 28px;
   display: inline-flex; align-items: center; justify-content: center;
@@ -512,13 +563,16 @@ html, body {
 .content {
   flex: 1; overflow-y: auto;
   background:
-    linear-gradient(color-mix(in oklab, var(--bg-tint) 22%, transparent),
-                    color-mix(in oklab, var(--bg-tint) 22%, transparent)),
+    linear-gradient(color-mix(in oklab, var(--bg-tint) 30%, transparent),
+                    color-mix(in oklab, var(--bg-tint) 30%, transparent)),
     var(--bg-content);
-  scrollbar-width: thin;
+  scrollbar-width: none;
   transition:
     background 200ms ease,
     padding-bottom 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.content::-webkit-scrollbar {
+  display: none;
 }
 
 /* Main area */
@@ -592,10 +646,9 @@ html, body {
   min-width: 340px;
   background:
     linear-gradient(180deg,
-                    color-mix(in oklab, var(--np-tint) 22%, transparent),
-                    transparent 70%),
+                    color-mix(in oklab, var(--np-tint) 42%, transparent),
+                    transparent 78%),
     var(--bg-panel);
-  border-left: 0.5px solid var(--divider);
   display: flex; flex-direction: column;
   min-height: 0;
   opacity: 1;
@@ -667,7 +720,7 @@ html, body {
 }
 
 .lyrics-side-pane {
-  --lyrics-side-w: clamp(320px, 28vw, 420px);
+  --lyrics-side-w: 380px;
   --lyrics-side-duration: 340ms;
   --lyrics-side-ease: cubic-bezier(0.18, 0.92, 0.22, 1);
   --lyrics-side-content-duration: 260ms;
@@ -681,10 +734,9 @@ html, body {
   overflow: hidden;
   background:
     linear-gradient(180deg,
-                    color-mix(in oklab, var(--np-tint) 16%, transparent),
-                    transparent 72%),
+                    color-mix(in oklab, var(--np-tint) 28%, transparent),
+                    transparent 78%),
     var(--bg-panel);
-  border-left: 0.5px solid var(--divider);
   opacity: 1;
   transform: translateX(0);
   clip-path: inset(0 0 0 0 round 0);
@@ -696,8 +748,7 @@ html, body {
     min-width 300ms cubic-bezier(0.22, 1, 0.36, 1),
     opacity 210ms cubic-bezier(0.22, 1, 0.36, 1),
     transform 300ms cubic-bezier(0.22, 1, 0.36, 1),
-    clip-path 300ms cubic-bezier(0.22, 1, 0.36, 1),
-    border-left-color 210ms cubic-bezier(0.22, 1, 0.36, 1);
+    clip-path 300ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .lyrics-side-pane.closing {
@@ -713,7 +764,6 @@ html, body {
     opacity: 0;
     transform: translateX(18px);
     clip-path: inset(0 0 0 22px round 0);
-    border-left-color: transparent;
   }
   to {
     flex-basis: var(--lyrics-side-w);
@@ -722,7 +772,6 @@ html, body {
     opacity: 1;
     transform: translateX(0);
     clip-path: inset(0 0 0 0 round 0);
-    border-left-color: var(--divider);
   }
 }
 
@@ -734,7 +783,6 @@ html, body {
     opacity: 1;
     transform: translateX(0);
     clip-path: inset(0 0 0 0 round 0);
-    border-left-color: var(--divider);
   }
   to {
     flex-basis: 0;
@@ -743,7 +791,6 @@ html, body {
     opacity: 0;
     transform: translateX(18px);
     clip-path: inset(0 0 0 22px round 0);
-    border-left-color: transparent;
   }
 }
 
@@ -1344,6 +1391,42 @@ html, body {
   min-height: 0;
 }
 
+.stream-source-badge {
+  align-self: flex-start;
+  margin-top: 4px;
+  min-height: 20px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 0.5px solid transparent;
+  border-left-width: 3px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  line-height: 1.1;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-elev) 82%, transparent);
+}
+
+.stream-source-badge.is-memory {
+  color: color-mix(in srgb, #4ade80 95%, var(--text-primary));
+  border-color: color-mix(in srgb, #4ade80 52%, transparent);
+  background: color-mix(in srgb, #4ade80 16%, transparent);
+}
+
+.stream-source-badge.is-file {
+  color: color-mix(in srgb, #f59e0b 82%, var(--text-primary));
+  border-color: color-mix(in srgb, #f59e0b 52%, transparent);
+  background: color-mix(in srgb, #f59e0b 16%, transparent);
+}
+
+.stream-source-badge.is-none {
+  color: var(--text-tertiary);
+  border-color: color-mix(in srgb, var(--border-subtle) 55%, transparent);
+  background: color-mix(in srgb, var(--bg-elev) 72%, transparent);
+}
+
 .pp-player-viz {
   margin-top: 6px;
   border-top: 0.5px solid var(--divider);
@@ -1841,11 +1924,11 @@ html, body {
   z-index: 30;
   background:
     radial-gradient(circle at 18% 0%,
-                    color-mix(in oklab, var(--np-tint) 22%, transparent),
-                    transparent 44%),
+                    color-mix(in oklab, var(--np-tint) 42%, transparent),
+                    transparent 50%),
     linear-gradient(180deg,
-                    color-mix(in oklab, var(--np-tint) 12%, transparent),
-                    transparent 82%),
+                    color-mix(in oklab, var(--np-tint) 24%, transparent),
+                    transparent 86%),
     var(--bg-panel);
   border: 0.5px solid color-mix(in srgb, var(--divider) 92%, transparent);
   border-radius: 14px;
@@ -1985,10 +2068,14 @@ html, body {
   gap: 12px;
   max-width: min(420px, 72vw);
   padding: 9px 18px 9px 9px;
-  background: color-mix(in srgb, var(--bg-elev) 92%, transparent);
-  border: 0.5px solid var(--divider);
+  background: var(--up-next-toast-bg);
+  border: 0.5px solid var(--up-next-toast-border);
   border-radius: 12px;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.46);
+  box-shadow:
+    0 16px 44px rgba(0, 0, 0, 0.28),
+    0 1px 0 rgba(255, 255, 255, 0.08) inset;
+  backdrop-filter: var(--up-next-toast-backdrop);
+  -webkit-backdrop-filter: var(--up-next-toast-backdrop);
   pointer-events: none;
   z-index: 72;
   opacity: 0;
@@ -2031,13 +2118,14 @@ html, body {
   gap: 12px;
   padding: 9px 13px 9px 9px;
   overflow: hidden;
-  border: 0.5px solid color-mix(in oklab, var(--divider) 82%, var(--text-primary));
+  border: 0.5px solid var(--up-next-toast-border);
   border-radius: 10px;
-  background: color-mix(in oklab, var(--bg-elev) 93%, transparent);
+  background: var(--up-next-toast-bg);
   box-shadow:
-    0 14px 34px rgba(0, 0, 0, 0.36),
+    0 14px 34px rgba(0, 0, 0, 0.26),
     0 1px 0 rgba(255, 255, 255, 0.04) inset;
-  backdrop-filter: blur(18px);
+  backdrop-filter: var(--up-next-toast-backdrop);
+  -webkit-backdrop-filter: var(--up-next-toast-backdrop);
 }
 
 .up-next-inline .art {
@@ -2667,6 +2755,7 @@ html, body {
 }
 .list-input--small {
   width: 100px;
+  min-width: 0;
 }
 .list-select {
   appearance: none;
@@ -2695,6 +2784,42 @@ html, body {
   border-radius: var(--r-input);
   color: var(--text-secondary);
   font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.list-toggle input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  border: 0.5px solid var(--border-strong);
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.list-toggle input[type="checkbox"]:checked {
+  background: var(--text-primary);
+  border-color: transparent;
+}
+.list-toggle input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 7px;
+  border: 1.5px solid var(--bg-window);
+  border-left: none;
+  border-top: none;
+  transform: rotate(45deg);
+}
+.list-toggle:hover {
+  border-color: var(--border-default);
+  color: var(--text-primary);
 }
 
 /* Buttons */
@@ -4003,11 +4128,15 @@ button:disabled { cursor: not-allowed; }
   align-items: center;
   gap: 12px;
   max-width: min(320px, 32vw);
-  padding: 0;
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
+  padding: 8px 12px 8px 8px;
+  background: rgba(18, 18, 22, 0.36);
+  border: 0.5px solid rgba(255, 255, 255, 0.18);
+  border-radius: 12px;
+  box-shadow:
+    0 18px 52px rgba(0, 0, 0, 0.36),
+    0 1px 0 rgba(255, 255, 255, 0.08) inset;
+  backdrop-filter: blur(24px) saturate(1.28);
+  -webkit-backdrop-filter: blur(24px) saturate(1.28);
   opacity: 0;
   pointer-events: none;
   z-index: 60;
@@ -4713,6 +4842,23 @@ button:disabled { cursor: not-allowed; }
   padding: 0 8px;
   text-align: right;
   outline: none;
+}
+.up-next-window-controls {
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.up-next-window-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+.up-next-window-input {
+  width: 74px;
 }
 .lyrics-offset-setting {
   min-width: 0;
@@ -7364,7 +7510,6 @@ button:disabled { cursor: not-allowed; }
 .lyr-line-future { color: color-mix(in oklab, var(--text-secondary) 48%, var(--text-tertiary)); opacity: 0.78; }
 .lyr-line-active {
   color: var(--text-primary); font-weight: 650;
-  background: color-mix(in oklab, var(--np-tint) 16%, transparent);
 }
 .lyr-list-window .lyr-line-layout-active {
   font-weight: 650;
@@ -7496,7 +7641,6 @@ button:disabled { cursor: not-allowed; }
 .lyr-side .lyr-line-active {
   font-size: 18px;
   letter-spacing: 0;
-  background: color-mix(in oklab, var(--np-tint) 14%, transparent);
 }
 
 .lyr-side .lyr-line-wait {
@@ -7518,6 +7662,25 @@ button:disabled { cursor: not-allowed; }
   line-height: 1.5;
 }
 
+.lyr-side .lyr-line-stack {
+  display: grid;
+}
+.lyr-side .lyr-line-stack > .lyr-line-visible,
+.lyr-side .lyr-line-stack > .lyr-line-ghost {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+.lyr-side .lyr-line-ghost {
+  visibility: hidden;
+  font-weight: 650;
+  pointer-events: none;
+  user-select: none;
+}
+.lyr-inline .lyr-line-ghost,
+.lyr-current .lyr-line-ghost {
+  display: none;
+}
+
 .lyr-warn {
   margin: 8px 14px 0; padding: 6px 10px; border-radius: 6px;
   font-size: 11.5px; color: #f0c674; background: rgba(240, 198, 116, 0.12);
@@ -7527,56 +7690,48 @@ button:disabled { cursor: not-allowed; }
   font-size: 11.5px; color: #ff6b6b; background: rgba(255, 107, 107, 0.1);
 }
 
-.lyr-actions {
-  display: flex; gap: 2px; flex-wrap: wrap; flex-shrink: 0;
-  padding: 6px 8px; border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.lyr-offset-shell {
+/* ── Barra inferior compacta ─────────────────────────── */
+.lyr-bottom-bar {
   flex-shrink: 0;
-  display: grid;
-  gap: 6px;
-  padding: 6px 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 0.5px solid var(--divider);
 }
-.lyr-offset-toggle {
-  width: 100%;
-  height: 28px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+.lyr-bottom-bar .lyr-offset {
+  border-bottom: 0.5px solid var(--divider);
+}
+.lyr-strip {
+  display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 8px;
-  border: 0.5px solid var(--border-subtle);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-secondary);
-  font: inherit;
-  cursor: pointer;
+  gap: 1px;
+  padding: 3px 6px;
+  min-height: 28px;
 }
-.lyr-offset-toggle:hover,
-.lyr-offset-shell.open .lyr-offset-toggle {
+.lyr-strip-spacer { flex: 1; }
+.lyr-offset-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  height: 24px;
+  border-radius: 5px;
+  border: 0.5px solid transparent;
+  background: transparent;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+  white-space: nowrap;
+}
+.lyr-offset-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+.lyr-offset-btn.active {
   background: var(--bg-hover);
   color: var(--text-primary);
+  border-color: var(--border-subtle);
 }
-.lyr-offset-toggle span {
-  min-width: 0;
-  color: inherit;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  text-align: left;
-}
-.lyr-offset-toggle strong {
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 600;
-}
-.lyr-offset-shell.open .lyr-offset-toggle strong {
-  color: var(--text-secondary);
-}
+
 .lyr-offset {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -7824,4 +7979,66 @@ button:disabled { cursor: not-allowed; }
     animation: none !important;
     transform: none !important;
   }
+}
+
+/* ─── Track deletion animations ────────────────────────────────────────────── */
+
+/* Library/album table rows: collapse driven by JS (height + cell padding → 0). */
+.tbl tr.deleting {
+  --track-delete-row-duration: 240ms;
+  --track-delete-row-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+  will-change: height, opacity;
+  contain: layout paint;
+}
+
+.tbl tr.deleting,
+.tbl tr.deleting td {
+  transition:
+    height var(--track-delete-row-duration, 240ms) var(--track-delete-row-ease, cubic-bezier(0.4, 0, 0.2, 1)),
+    opacity var(--track-delete-row-duration, 240ms) var(--track-delete-row-ease, cubic-bezier(0.4, 0, 0.2, 1)),
+    padding-top var(--track-delete-row-duration, 240ms) var(--track-delete-row-ease, cubic-bezier(0.4, 0, 0.2, 1)),
+    padding-bottom var(--track-delete-row-duration, 240ms) var(--track-delete-row-ease, cubic-bezier(0.4, 0, 0.2, 1));
+}
+
+/* Queue panel items (PlayerPane): collapse height */
+.queue-item {
+  --track-delete-row-duration: 240ms;
+  --track-delete-row-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+  max-height: 80px;
+  transition:
+    max-height var(--track-delete-row-duration, 240ms) var(--track-delete-row-ease, cubic-bezier(0.4, 0, 0.2, 1)),
+    opacity var(--track-delete-row-duration, 240ms) var(--track-delete-row-ease, cubic-bezier(0.4, 0, 0.2, 1)),
+    margin-bottom var(--track-delete-row-duration, 240ms) var(--track-delete-row-ease, cubic-bezier(0.4, 0, 0.2, 1));
+}
+.queue-item.deleting {
+  max-height: 0 !important;
+  opacity: 0 !important;
+  margin-bottom: 0;
+}
+
+/* Fullscreen queue items: same collapse */
+.np-queue-item {
+  --track-delete-row-duration: 240ms;
+  --track-delete-row-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+  max-height: 80px;
+  transition:
+    max-height var(--track-delete-row-duration, 240ms) var(--track-delete-row-ease, cubic-bezier(0.4, 0, 0.2, 1)),
+    opacity var(--track-delete-row-duration, 240ms) var(--track-delete-row-ease, cubic-bezier(0.4, 0, 0.2, 1)),
+    margin-bottom var(--track-delete-row-duration, 240ms) var(--track-delete-row-ease, cubic-bezier(0.4, 0, 0.2, 1)),
+    background 160ms ease;
+}
+.np-queue-item.deleting {
+  max-height: 0 !important;
+  opacity: 0 !important;
+  margin-bottom: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tbl tr.deleting,
+  .tbl tr.deleting td,
+  .queue-item.deleting,
+  .np-queue-item.deleting { transition: none !important; }
 }

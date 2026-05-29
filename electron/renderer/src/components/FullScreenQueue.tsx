@@ -1,7 +1,12 @@
-import { useMemo } from 'react'
+import { type CSSProperties, useMemo } from 'react'
 import { Artwork } from './Artwork'
 import { EQBars } from './EQBars'
-import { useAlbumByUiId } from '@renderer/stores/libraryStore'
+import {
+  TRACK_DELETE_ROW_EASE,
+  TRACK_DELETE_ROW_MS,
+  useAlbumByUiId,
+  useDeletingTrackIds,
+} from '@renderer/stores/libraryStore'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
 import { useQueueIndex, useQueueStore, useQueueTracks, useQueueUpNext } from '@renderer/stores/queueStore'
 import { fmtTime } from '@renderer/utils/format'
@@ -21,6 +26,10 @@ export function FullScreenQueue() {
 
   const totalRemainingSec = useMemo(() => upNext.reduce((sum, t) => sum + (t.d ?? 0), 0), [upNext])
   const totalRemainingText = totalRemainingSec > 0 ? fmtTime(totalRemainingSec) : null
+  const queueDeleteStyle = {
+    '--track-delete-row-duration': `${TRACK_DELETE_ROW_MS}ms`,
+    '--track-delete-row-ease': TRACK_DELETE_ROW_EASE,
+  } as CSSProperties
 
   if (!track) {
     return (
@@ -38,7 +47,7 @@ export function FullScreenQueue() {
           <span className="np-queue-remaining">{totalRemainingText} restantes</span>
         )}
       </div>
-      <div className="np-queue-list">
+      <div className="np-queue-list" style={queueDeleteStyle}>
         <div className="np-queue-section">Reproduciendo</div>
         <div className="np-queue-item now">
           <div className="np-queue-art"><Artwork album={displayAlbum} /></div>
@@ -70,8 +79,10 @@ export function FullScreenQueue() {
 
 function FullScreenQueueItem({ track, onSelect }: { track: Track; onSelect: () => void }) {
   const album = useAlbumByUiId(track.albumId)
+  const deletingIds = useDeletingTrackIds()
+  const isDeleting = track.dbId != null && deletingIds.has(track.dbId)
   return (
-    <button type="button" className="np-queue-item" onClick={onSelect}>
+    <button type="button" className={`np-queue-item${isDeleting ? ' deleting' : ''}`} onClick={onSelect}>
       <div className="np-queue-art"><Artwork album={album} /></div>
       <div className="np-queue-meta">
         <div className="np-queue-title">{track.t}</div>

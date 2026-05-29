@@ -11,6 +11,11 @@ interface ToolbarProps {
   onNavigate: (v: View) => void
   searchQuery: string
   onSearchQueryChange: (query: string) => void
+  searchScope: 'global' | 'view'
+  onSearchScopeChange: (s: 'global' | 'view') => void
+  viewQuery: string
+  onViewQueryChange: (q: string) => void
+  viewQueryable: boolean
   sidebarOpen: boolean
   onToggleSidebar: () => void
   playerPaneOpen: boolean
@@ -59,6 +64,11 @@ export function Toolbar({
   onNavigate,
   searchQuery,
   onSearchQueryChange,
+  searchScope,
+  onSearchScopeChange,
+  viewQuery,
+  onViewQueryChange,
+  viewQueryable,
   sidebarOpen,
   onToggleSidebar,
   playerPaneOpen,
@@ -66,8 +76,12 @@ export function Toolbar({
   onTogglePlayerPane,
 }: ToolbarProps) {
   const isSearchView = view.kind === 'search'
+  const isViewMode = searchScope === 'view' && viewQueryable
+  const isActive = isSearchView || isViewMode
+  const activeQuery = isViewMode ? viewQuery : searchQuery
   const searchInputRef = useRef<HTMLInputElement>(null)
 
+  // Auto-focus when entering the global SearchView.
   useEffect(() => {
     if (!isSearchView) return
     const frame = window.requestAnimationFrame(() => {
@@ -77,11 +91,11 @@ export function Toolbar({
   }, [isSearchView])
 
   const focusSearch = () => {
-    if (!isSearchView) {
-      onNavigate({ kind: 'search' })
+    if (isViewMode || isSearchView) {
+      searchInputRef.current?.focus()
       return
     }
-    searchInputRef.current?.focus()
+    onNavigate({ kind: 'search' })
   }
 
   return (
@@ -103,23 +117,45 @@ export function Toolbar({
       </button>
       <div className="tb-title">{titleForView(view)}</div>
 
-      <div className={`tb-search${isSearchView ? ' is-active' : ''}`} onClick={focusSearch}>
+      <div className={`tb-search${isActive ? ' is-active' : ''}${viewQueryable ? ' has-scope' : ''}`} onClick={focusSearch}>
         <Icon name="search" size={13} style={{ color: 'var(--text-tertiary)' }} />
+        {viewQueryable && (
+          <div className="tb-search-scope">
+            <button
+              type="button"
+              className={`tb-search-scope-btn${searchScope === 'global' ? ' active' : ''}`}
+              onClick={e => { e.stopPropagation(); onSearchScopeChange('global') }}
+            >Todos</button>
+            <button
+              type="button"
+              className={`tb-search-scope-btn${searchScope === 'view' ? ' active' : ''}`}
+              onClick={e => {
+                e.stopPropagation()
+                onSearchScopeChange('view')
+                searchInputRef.current?.focus()
+              }}
+            >Aquí</button>
+          </div>
+        )}
         <input
           ref={searchInputRef}
-          aria-label="Search library"
-          placeholder="Search library…"
-          readOnly={!isSearchView}
-          value={isSearchView ? searchQuery : ''}
-          onChange={e => onSearchQueryChange(e.target.value)}
+          aria-label={isViewMode ? 'Buscar en esta vista' : 'Search library'}
+          placeholder={isViewMode ? 'Buscar en esta vista…' : 'Buscar biblioteca…'}
+          readOnly={!isViewMode && !isSearchView}
+          value={isViewMode ? viewQuery : (isSearchView ? searchQuery : '')}
+          onChange={e => isViewMode ? onViewQueryChange(e.target.value) : onSearchQueryChange(e.target.value)}
         />
-        {isSearchView && searchQuery ? (
+        {isActive && activeQuery ? (
           <button
             className="tb-search-clear"
             type="button"
             onClick={e => {
               e.stopPropagation()
-              onSearchQueryChange('')
+              if (isViewMode) {
+                onViewQueryChange('')
+              } else {
+                onSearchQueryChange('')
+              }
               searchInputRef.current?.focus()
             }}
             title="Clear search"

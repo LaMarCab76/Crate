@@ -115,16 +115,6 @@ export function PlaylistView({ playlist, kind }: Props) {
           <div className="actions list-toolbar" style={{ marginTop: 12 }}>
             <ListPrefsMenu buttonLabel="Filtro" menuTitle="Playlist" onReset={() => setPrefs(defaults[kind])}>
               <div className="list-prefs-row">
-                <div className="list-prefs-label">Buscar</div>
-                <input
-                  className="list-input"
-                  value={prefs.query}
-                  onChange={e => setPrefs({ query: e.target.value })}
-                  placeholder="Título, artista o álbum"
-                  aria-label="Buscar en lista"
-                />
-              </div>
-              <div className="list-prefs-row">
                 <div className="list-prefs-label">Ordenar por</div>
                 <div className="list-prefs-row-inline">
                   <select

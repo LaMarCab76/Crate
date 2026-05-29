@@ -1,5 +1,10 @@
 import { create } from 'zustand'
 import { createListPrefsDefaults } from '@renderer/utils/listSort'
+import {
+  normalizeUpNextToastWindow,
+  UP_NEXT_TOAST_END_SEC_DEFAULT,
+  UP_NEXT_TOAST_START_SEC_DEFAULT,
+} from '@renderer/utils/upNextToast'
 import { DEVICE_ARTWORK_EDGE_DEFAULT, clampDeviceArtworkEdge } from '@shared/constants/device-sync'
 import { clampLyricsOffsetMs } from '@shared/lyrics/lrc'
 import type { ListPrefsMap, ListViewKind } from '@renderer/utils/listSort'
@@ -30,6 +35,8 @@ export interface Tweak {
   exclusiveMode: boolean
   playerTintSource: PlayerTintSource
   playerTintColor: string
+  upNextToastStartSec: number
+  upNextToastEndSec: number
   // Show the FFT bar visualizer in the player pane. Off skips the FFT
   // subscription so the engine can downshift its FFT mode and save work.
   showPlayerVisualizer: boolean
@@ -64,6 +71,8 @@ const TWEAK_DEFAULTS: Tweak = {
   exclusiveMode: false,
   playerTintSource: 'artwork',
   playerTintColor: '#0a84ff',
+  upNextToastStartSec: UP_NEXT_TOAST_START_SEC_DEFAULT,
+  upNextToastEndSec: UP_NEXT_TOAST_END_SEC_DEFAULT,
   showPlayerVisualizer: false,
   showPlayerLyrics: false,
   fullPlayerVisualizer: true,
@@ -98,6 +107,7 @@ function load(): Tweak {
     if (parsed.bgSource === 'artwork' && merged.playerTintSource === 'default') {
       merged.playerTintSource = 'artwork'
     }
+    Object.assign(merged, normalizeUpNextToastWindow(merged.upNextToastStartSec, merged.upNextToastEndSec))
     merged.deviceArtworkMaxEdge = clampDeviceArtworkEdge(merged.deviceArtworkMaxEdge)
     merged.lyricsGlobalOffsetMs = clampLyricsOffsetMs(merged.lyricsGlobalOffsetMs)
     if (merged.libraryScanLogRetentionDays !== null) {
@@ -208,7 +218,13 @@ export const useTweakStore = create<TweakStore>((set, get) => ({
         k === 'deviceArtworkMaxEdge' ? clampDeviceArtworkEdge(v)
         : k === 'lyricsGlobalOffsetMs' ? clampLyricsOffsetMs(v)
         : v
-      const next = { ...state.tweak, [k]: value } as Tweak
+      let next = { ...state.tweak, [k]: value } as Tweak
+      if (k === 'upNextToastStartSec' || k === 'upNextToastEndSec') {
+        next = {
+          ...next,
+          ...normalizeUpNextToastWindow(next.upNextToastStartSec, next.upNextToastEndSec),
+        }
+      }
       try {
         window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
       } catch {

@@ -6,7 +6,29 @@ import { getExclusiveModeManager } from '../audio/ExclusiveModeManager'
 import { getPlaybackAnalysisService } from '../audio/PlaybackAnalysisService'
 import { broadcast } from './events'
 import { getRepos } from '../db/repositories'
-import type { AudioOutputDevice, FftMode, PlaybackCacheStats } from '@shared/types/ipc-contract'
+import type {
+  AudioOutputDevice,
+  FftMode,
+  PlaybackCacheStats,
+  StreamLoadResult,
+  StreamInfoPayload,
+  StreamLoadSource,
+  StreamLoadFailureReason,
+} from '@shared/types/ipc-contract'
+
+type StreamLoadResultLike = {
+  attemptedMemory?: boolean
+  attempted?: boolean
+  source: StreamLoadSource
+  reason: StreamLoadFailureReason | null
+  durationMs: number
+  sizeBytes: number | null
+  streamInfo: StreamInfo | StreamInfoPayload | null
+  bufferedBytes?: number | null
+  totalBytes?: number | null
+  bufferedSec?: number | null
+  bufferComplete?: boolean
+}
 
 let gapless: GaplessController | null = null
 
@@ -23,7 +45,7 @@ export function disposeGapless(): void {
 
 // Convert main-process StreamInfo into a plain JSON-safe payload (BigInt
 // can't cross the IPC boundary).
-function serializeStreamInfo(info: StreamInfo | null) {
+function serializeStreamInfo(info: StreamInfo | StreamInfoPayload | null) {
   if (!info) return null
   return {
     freq: info.freq,
@@ -32,6 +54,25 @@ function serializeStreamInfo(info: StreamInfo | null) {
     duration: info.duration,
     durationBytes: Number(info.durationBytes),
     bytesPerSecond: info.bytesPerSecond,
+  }
+}
+
+function serializeStreamLoadResult(result: StreamLoadResultLike | null): StreamLoadResult | null {
+  if (!result) return null
+  const attempted = result.attemptedMemory ?? result.attempted
+    ?? false
+  return {
+    attempted,
+    attemptedMemory: result.attemptedMemory ?? attempted,
+    source: result.source,
+    reason: result.reason,
+    durationMs: result.durationMs,
+    sizeBytes: result.sizeBytes,
+    streamInfo: serializeStreamInfo(result.streamInfo),
+    bufferedBytes: result.bufferedBytes ?? null,
+    totalBytes: result.totalBytes ?? null,
+    bufferedSec: result.bufferedSec ?? null,
+    bufferComplete: result.bufferComplete ?? false,
   }
 }
 
@@ -66,14 +107,15 @@ function requirePath(value: unknown): string {
   return value
 }
 
-function assertTrackPathMatches(path: string, trackId: unknown, channel: string): void {
+function assertTrackPathMatches(path: string, trackId: unknown, channel: string): { duration: number } | null {
   const normalizedTrackId = normalizeTrackId(trackId)
-  if (normalizedTrackId == null) return
+  if (normalizedTrackId == null) return null
 
   const track = getRepos().tracks.getById(normalizedTrackId)
   if (!track || track.path !== path) {
     throw new Error(`${channel}: path does not match the track record`)
   }
+  return { duration: track.duration }
 }
 
 export function registerAudioChannel(): void {
@@ -86,16 +128,16 @@ export function registerAudioChannel(): void {
   // missing a hog-transfer opportunity.
   getExclusiveModeManager()
 
-  ipcMain.handle('audio:load', (_, payload: { path: string; trackId?: number | null }) => {
+  ipcMain.handle('audio:load', async (_, payload: { path: string; trackId?: number | null }) => {
     // Defense in depth: when a trackId is supplied, the path must match that track's
     // DB record, so a compromised renderer can't point the engine at an arbitrary file.
     const path = requirePath(payload?.path)
-    assertTrackPathMatches(path, payload?.trackId, 'audio:load')
-    const info = engine.load(path)
+    const track = assertTrackPathMatches(path, payload?.trackId, 'audio:load')
+    const loadResult = await engine.load(path, { estimatedDurationSec: track?.duration ?? null })
     getGapless().bindCurrentTrackEnd()
     eq.reapply(engine.getCurrentStream())
     broadcastEqState()
-    return serializeStreamInfo(info)
+    return serializeStreamLoadResult(loadResult)
   })
 
   ipcMain.handle('audio:play', () => engine.play())
@@ -164,25 +206,39 @@ export function registerAudioChannel(): void {
     return stats
   })
 
-  ipcMain.handle('audio:preloadNext', (_, payload: { path: string; trackId?: number | null }) => {
+  ipcMain.handle('audio:preloadNext', async (_, payload: { path: string; trackId?: number | null }) => {
     const path = requirePath(payload?.path)
     assertTrackPathMatches(path, payload?.trackId, 'audio:preloadNext')
-    return serializeStreamInfo(getGapless().preloadNext(path))
+    const result = await getGapless().preloadNext(path)
+    return result
   })
   ipcMain.handle('audio:clearNext', () => getGapless().clearNext())
   ipcMain.handle('audio:swapNow', (_, payload?: { expectedPath?: string | null }) => {
     const expectedPath = typeof payload?.expectedPath === 'string' && payload.expectedPath.trim().length > 0
       ? payload.expectedPath
       : null
-    const info = getGapless().swapToNext(expectedPath)
+    const result = getGapless().swapToNext(expectedPath)
     getGapless().bindCurrentTrackEnd()
-    if (info) eq.reapply(engine.getCurrentStream())
-    return serializeStreamInfo(info)
+    if (result) eq.reapply(engine.getCurrentStream())
+    return serializeStreamLoadResult(result)
+  })
+  ipcMain.handle('audio:promoteCurrentToMemory', async () => {
+    const result = await engine.promoteCurrentToMemory()
+    if (result.source === 'memory') {
+      eq.reapply(engine.getCurrentStream())
+      broadcastEqState()
+    }
+    return serializeStreamLoadResult(result)
   })
   ipcMain.handle('audio:getStatus', () => ({
     status: engine.getStatus(),
     positionSec: engine.getPosition(),
     streamInfo: serializeStreamInfo(engine.getStreamInfo()),
+    streamSource: engine.getCurrentStreamSource(),
+    bufferedBytes: engine.getCurrentStreamLoadResult().bufferedBytes,
+    totalBytes: engine.getCurrentStreamLoadResult().totalBytes,
+    bufferedSec: engine.getCurrentStreamLoadResult().bufferedSec,
+    bufferComplete: engine.getCurrentStreamLoadResult().bufferComplete,
     volume: engine.getVolume(),
     currentPath: engine.getCurrentPath(),
   }))

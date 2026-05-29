@@ -300,15 +300,68 @@ export interface StreamInfoPayload {
   bytesPerSecond: number
 }
 
+export type StreamLoadSource = 'memory' | 'progressive' | 'file' | 'none'
+export type StreamLoadFailureReason =
+  | 'file-not-found'
+  | 'file-stat-failed'
+  | 'not-a-file'
+  | 'memory-skipped'
+  | 'memory-size-limit'
+  | 'memory-timeout'
+  | 'memory-read-failed'
+  | 'memory-empty'
+  | 'memory-stream-failed'
+  | 'progressive-stream-failed'
+  | 'progressive-read-failed'
+  | 'file-stream-failed'
+
+export type PreloadNextSource = StreamLoadSource
+export type PreloadNextFailureReason = StreamLoadFailureReason
+
+export interface StreamLoadResult {
+  attempted: boolean
+  attemptedMemory?: boolean
+  source: StreamLoadSource
+  reason: StreamLoadFailureReason | null
+  durationMs: number
+  sizeBytes: number | null
+  streamInfo: StreamInfoPayload | null
+  bufferedBytes: number | null
+  totalBytes: number | null
+  bufferedSec: number | null
+  bufferComplete: boolean
+}
+
+export interface PreloadNextResult extends StreamLoadResult {
+  attempted: boolean
+  attemptedMemory?: boolean
+  source: PreloadNextSource
+  reason: StreamLoadFailureReason | null
+}
+
 export interface ProgressEvent {
   positionSec: number
   durationSec: number
+}
+
+export interface BufferProgressEvent {
+  currentPath: string | null
+  source: StreamLoadSource
+  bufferedBytes: number | null
+  totalBytes: number | null
+  bufferedSec: number | null
+  bufferComplete: boolean
 }
 
 export interface PlaybackStatePayload {
   status: PlaybackStatus
   positionSec: number
   streamInfo: StreamInfoPayload | null
+  streamSource: StreamLoadSource
+  bufferedBytes: number | null
+  totalBytes: number | null
+  bufferedSec: number | null
+  bufferComplete: boolean
   volume: number
   currentPath: string | null
 }
@@ -385,7 +438,7 @@ export interface ArtistListMode {
 }
 
 export interface AudioApi {
-  load(path: string, trackId?: number | null): Promise<StreamInfoPayload | null>
+  load(path: string, trackId?: number | null): Promise<StreamLoadResult>
   play(): Promise<void>
   pause(): Promise<void>
   stop(): Promise<void>
@@ -401,9 +454,10 @@ export interface AudioApi {
   getPlaybackCacheStats(): Promise<PlaybackCacheStats>
   setPlaybackCacheLimit(maxBytes: number): Promise<PlaybackCacheStats>
   clearPlaybackCache(): Promise<PlaybackCacheStats>
-  preloadNext(path: string, trackId?: number | null): Promise<StreamInfoPayload | null>
+  preloadNext(path: string, trackId?: number | null): Promise<PreloadNextResult>
   clearNext(): Promise<void>
-  swapNow(expectedPath?: string | null): Promise<StreamInfoPayload | null>
+  swapNow(expectedPath?: string | null): Promise<StreamLoadResult | null>
+  promoteCurrentToMemory(): Promise<StreamLoadResult>
   getStatus(): Promise<PlaybackStatePayload>
   listOutputDevices(): Promise<AudioOutputDevice[]>
   setOutputDevice(deviceId: number): Promise<AudioOutputDevice>
@@ -413,8 +467,10 @@ export interface AudioApi {
 
   onProgress(h: (e: ProgressEvent) => void): EventOff
   onTrackEnded(h: () => void): EventOff
-  onGaplessFired(h: (e: { path: string; streamInfo: StreamInfoPayload | null }) => void): EventOff
+  onGaplessFired(h: (e: { path: string; streamInfo: StreamInfoPayload | null; source?: StreamLoadSource }) => void): EventOff
   onStateChanged(h: (e: { status: PlaybackStatus }) => void): EventOff
+  onStreamSourceChanged(h: (e: { source: StreamLoadSource; currentPath: string | null }) => void): EventOff
+  onBufferProgress(h: (e: BufferProgressEvent) => void): EventOff
   onFft(h: (e: FftEvent) => void): EventOff
   onLevels(h: (e: LevelsEvent) => void): EventOff
   onExclusiveModeChanged(h: (e: ExclusiveModeState) => void): EventOff

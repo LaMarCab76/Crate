@@ -2,34 +2,38 @@ import { Artwork } from './Artwork'
 import { useAlbumByUiId } from '@renderer/stores/libraryStore'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
 import { useQueueUpNext } from '@renderer/stores/queueStore'
+import { useTweakStore } from '@renderer/stores/settingsStore'
+import { shouldShowUpNextToast } from '@renderer/utils/upNextToast'
 
 interface UpNextToastProps {
   variant: 'bottom' | 'side'
   enabled?: boolean
 }
 
-const BOTTOM_TOAST_START_SEC = 30
-const SIDE_TOAST_START_SEC = 15
-const SIDE_HIDE_LEAD_SEC = 3
-
 export function UpNextToast({ variant, enabled = true }: UpNextToastProps) {
   const track = usePlaybackStore(s => s.currentTrack)
   const status = usePlaybackStore(s => s.status)
   const positionSec = usePlaybackStore(s => s.positionSec)
   const durationSec = usePlaybackStore(s => s.durationSec)
+  const startSec = useTweakStore(s => s.tweak.upNextToastStartSec)
+  const endSec = useTweakStore(s => s.tweak.upNextToastEndSec)
   const upNext = useQueueUpNext()[0]
   const upNextAlbum = useAlbumByUiId(upNext?.albumId)
 
   const remainingSec = durationSec > 0 ? durationSec - positionSec : 0
+  const show = shouldShowUpNextToast({
+    enabled,
+    hasTrack: track != null,
+    hasUpNext: upNext != null,
+    status,
+    durationSec,
+    remainingSec,
+    startSec,
+    endSec,
+  })
 
   if (variant === 'side') {
     if (!upNext) return null
-    const show =
-      enabled &&
-      track != null &&
-      status === 'playing' &&
-      remainingSec <= SIDE_TOAST_START_SEC &&
-      remainingSec > SIDE_HIDE_LEAD_SEC
     return (
       <div className={`up-next-inline${show ? ' show' : ''}`} aria-hidden={!show}>
         <div className="up-next-inline-row">
@@ -43,8 +47,6 @@ export function UpNextToast({ variant, enabled = true }: UpNextToastProps) {
       </div>
     )
   }
-
-  const show = enabled && track != null && status === 'playing' && upNext != null && remainingSec <= BOTTOM_TOAST_START_SEC && remainingSec >= 1
 
   if (!show || !upNext) return null
 

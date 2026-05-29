@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'ele
 import type {
   AddFolderResult,
   Api,
+  BufferProgressEvent,
   EqState,
   EventOff,
   ExclusiveModeState,
@@ -20,6 +21,10 @@ import type {
   PickFolderResult,
   PlaybackAnalysisResult,
   PlaybackCacheStats,
+  PreloadNextResult,
+  StreamInfoPayload,
+  StreamLoadResult,
+  StreamLoadSource,
   PlaybackStatePayload,
   PlaybackStatus,
   PlaybackTableBarsResult,
@@ -27,7 +32,6 @@ import type {
   QueueSnapshotPayload,
   RemoveFolderOptions,
   SearchResultsPayload,
-  StreamInfoPayload,
   TrackMetadataUpdatePayload,
   TrashTracksResult,
 } from '@shared/types/ipc-contract'
@@ -144,7 +148,7 @@ const api: Api = {
   },
   audio: {
     load: (path: string, trackId?: number | null) =>
-      ipcRenderer.invoke('audio:load', { path, trackId: trackId ?? null }) as Promise<StreamInfoPayload | null>,
+      ipcRenderer.invoke('audio:load', { path, trackId: trackId ?? null }) as Promise<StreamLoadResult>,
     play: () => ipcRenderer.invoke('audio:play') as Promise<void>,
     pause: () => ipcRenderer.invoke('audio:pause') as Promise<void>,
     stop: () => ipcRenderer.invoke('audio:stop') as Promise<void>,
@@ -173,10 +177,11 @@ const api: Api = {
     clearPlaybackCache: () =>
       ipcRenderer.invoke('audio:playbackCache:clear') as Promise<PlaybackCacheStats>,
     preloadNext: (path: string, trackId?: number | null) =>
-      ipcRenderer.invoke('audio:preloadNext', { path, trackId: trackId ?? null }) as Promise<StreamInfoPayload | null>,
+      ipcRenderer.invoke('audio:preloadNext', { path, trackId: trackId ?? null }) as Promise<PreloadNextResult>,
     clearNext: () => ipcRenderer.invoke('audio:clearNext') as Promise<void>,
     swapNow: (expectedPath?: string | null) =>
-      ipcRenderer.invoke('audio:swapNow', { expectedPath: expectedPath ?? null }) as Promise<StreamInfoPayload | null>,
+      ipcRenderer.invoke('audio:swapNow', { expectedPath: expectedPath ?? null }) as Promise<StreamLoadResult | null>,
+    promoteCurrentToMemory: () => ipcRenderer.invoke('audio:promoteCurrentToMemory') as Promise<StreamLoadResult>,
     getStatus: () => ipcRenderer.invoke('audio:getStatus') as Promise<PlaybackStatePayload>,
     listOutputDevices: () => ipcRenderer.invoke('audio:devices:list'),
     setOutputDevice: (deviceId: number) =>
@@ -188,7 +193,9 @@ const api: Api = {
       ipcRenderer.invoke('audio:exclusive:set', { enabled }) as Promise<ExclusiveModeState>,
     onProgress: (h) => subscribe<ProgressEvent>('audio:progress', h),
     onTrackEnded: (h) => subscribe<void>('audio:track-ended', () => h()),
-    onGaplessFired: (h) => subscribe<{ path: string; streamInfo: StreamInfoPayload | null }>('audio:gapless-fired', h),
+    onGaplessFired: (h) => subscribe<{ path: string; streamInfo: StreamInfoPayload | null; source?: StreamLoadSource }>('audio:gapless-fired', h),
+    onStreamSourceChanged: (h) => subscribe<{ source: StreamLoadSource; currentPath: string | null }>('audio:stream-source-changed', h),
+    onBufferProgress: (h) => subscribe<BufferProgressEvent>('audio:buffer-progress', h),
     onStateChanged: (h) => subscribe<{ status: PlaybackStatus }>('audio:state-changed', h),
     onFft: (h) => subscribe<FftEvent>('audio:fft', h),
     onLevels: (h) => subscribe<LevelsEvent>('audio:levels', h),

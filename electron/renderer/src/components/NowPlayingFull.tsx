@@ -10,15 +10,13 @@ import { TrackLoadingOverlay } from './TrackLoadingOverlay'
 import { toggleTrackFavorite, useAlbumByUiId } from '@renderer/stores/libraryStore'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
 import { useQueueUpNext } from '@renderer/stores/queueStore'
+import { useTweakStore } from '@renderer/stores/settingsStore'
 import { extractDominantColor, extractPalette } from '@renderer/utils/colorExtract'
+import { shouldShowUpNextToast } from '@renderer/utils/upNextToast'
 
 interface NowPlayingFullProps {
   onCollapse: () => void
 }
-
-// Show the "up next" toast once the current track is this close to finishing.
-const NEXT_TOAST_START_SEC = 20
-const NEXT_TOAST_HIDE_LEAD_SEC = 1
 
 // Fullscreen player: one listening-room stage with artwork and controls on the
 // left, animated lyrics on the right, and an optional compact FFT strip.
@@ -30,6 +28,8 @@ export function NowPlayingFull({ onCollapse }: NowPlayingFullProps) {
   const album = useAlbumByUiId(track?.albumId)
   const upNext = useQueueUpNext()[0]
   const upNextAlbum = useAlbumByUiId(upNext?.albumId)
+  const upNextToastStartSec = useTweakStore(s => s.tweak.upNextToastStartSec)
+  const upNextToastEndSec = useTweakStore(s => s.tweak.upNextToastEndSec)
   const trackActions = useTrackActions()
   const artworkPath = track?.artworkPath ?? album?.artworkPath ?? null
   const [artworkTint, setArtworkTint] = useState<string | null>(null)
@@ -62,7 +62,15 @@ export function NowPlayingFull({ onCollapse }: NowPlayingFullProps) {
   const playing = status === 'playing'
   const remainingSec = Math.max(0, durationSec - positionSec)
   const queueVisible = rightPanelMode === 'queue'
-  const showUpNext = playing && upNext != null && durationSec > 0 && !queueVisible && remainingSec <= NEXT_TOAST_START_SEC && remainingSec >= NEXT_TOAST_HIDE_LEAD_SEC
+  const showUpNext = !queueVisible && shouldShowUpNextToast({
+    hasTrack: track != null,
+    hasUpNext: upNext != null,
+    status: playing ? 'playing' : status,
+    durationSec,
+    remainingSec,
+    startSec: upNextToastStartSec,
+    endSec: upNextToastEndSec,
+  })
   const rootClasses = ['np-full', 'np-redesign'].join(' ')
   const artworkSource = album ?? {
     seed: track.dbId ?? 1,

@@ -34,6 +34,9 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(__dirname, 'electron/renderer'),
+    server: {
+      port: 6100,
+    },
     build: {
       outDir: 'out/renderer',
       rollupOptions: {

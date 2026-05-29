@@ -5,6 +5,10 @@
 
 export const BASS_FILE_NAME       = 0
 export const BASS_FILE_MEM        = 1
+export const STREAMFILE_NOBUFFER  = 0
+export const STREAMFILE_BUFFER    = 1
+export const STREAMFILE_BUFFERPUSH = 2
+export const BASS_FILEDATA_END    = 0
 export const BASS_STREAM_PRESCAN  = 0x20000
 export const BASS_STREAM_DECODE   = 0x200000
 export const BASS_STREAM_AUTOFREE = 0x40000
@@ -15,6 +19,15 @@ export const BASS_UNICODE         = 0x80000000
 export const BASS_POS_BYTE        = 0
 export const BASS_POS_MUSIC_ORDER = 1
 export const BASS_POS_OGG         = 3
+
+// StreamGetFilePosition modes
+export const BASS_FILEPOS_CURRENT   = 0
+export const BASS_FILEPOS_DOWNLOAD  = 1
+export const BASS_FILEPOS_END       = 2
+export const BASS_FILEPOS_START     = 3
+export const BASS_FILEPOS_CONNECTED = 4
+export const BASS_FILEPOS_BUFFER    = 5
+export const BASS_FILEPOS_SIZE      = 8
 
 // ChannelIsActive return values
 export const BASS_ACTIVE_STOPPED = 0

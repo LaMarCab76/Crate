@@ -10,24 +10,44 @@
 //     hands an additional in-memory stream over via adoptStream().
 
 import { broadcast } from '../ipc/events'
-import { readFileSync, statSync } from 'node:fs'
+import { open, readFile, stat, type FileHandle } from 'node:fs/promises'
+import { statSync } from 'node:fs'
 import { freemem, totalmem } from 'node:os'
 import {
   BASS_ACTIVE_PAUSED, BASS_ACTIVE_PLAYING, BASS_ACTIVE_STOPPED,
   BASS_ATTRIB_VOL, BASS_DATA_FFT2048, BASS_DEVICE_DEFAULT, BASS_DEVICE_ENABLED,
-  BASS_DEVICE_INIT, BASS_DEVICE_LOOPBACK, BASS_FILE_MEM, BASS_FILE_NAME, BASS_LEVEL_RMS, BASS_LEVEL_STEREO,
-  BASS_POS_BYTE, BASS_SAMPLE_FLOAT, BASS_STREAM_DECODE, BASS_STREAM_PRESCAN,
+  BASS_DEVICE_INIT, BASS_DEVICE_LOOPBACK, BASS_FILEDATA_END, BASS_FILE_MEM, BASS_FILE_NAME,
+  BASS_LEVEL_RMS, BASS_LEVEL_STEREO, BASS_POS_BYTE, BASS_SAMPLE_FLOAT,
+  BASS_STREAM_DECODE, BASS_STREAM_PRESCAN, STREAMFILE_BUFFERPUSH,
   bassErrorName,
 } from './bass-constants'
 import {
+  copyBufferToPointer,
   loadBass,
   makeChannelGetInfo,
+  registerFileProcs,
   type BassChannelInfo,
   type BassDeviceInfo,
   type HSTREAM,
+  type RegisteredFileProcs,
 } from './bass-ffi'
 import { loadAllPlugins } from './PluginLoader'
-import type { AudioOutputDevice, FftMode, PlaybackAnalysisResult, PlaybackTableBarsResult } from '@shared/types/ipc-contract'
+import type {
+  AudioOutputDevice,
+  FftMode,
+  PlaybackAnalysisResult,
+  PlaybackTableBarsResult,
+  StreamLoadSource,
+  StreamLoadFailureReason,
+} from '@shared/types/ipc-contract'
+import {
+  calculateProgressiveInitialBytes,
+  decidePlaybackMemoryUse,
+  estimateBufferedSeconds,
+  PLAYBACK_MEMORY_RESERVE_BYTES,
+  pumpProgressiveChunks,
+  type ProgressiveBufferTelemetry,
+} from './progressiveBuffering'
 
 // FFT2048 returns 1024 complex bins as magnitudes (0..1).
 const FFT_BINS_RAW = 1024
@@ -64,8 +84,25 @@ const ANALYSIS_CACHE_MAX = 50
 const TABLE_BARS_FPS = 60
 const TABLE_BARS_BANDS = 5
 const TABLE_BARS_DISPLAY_GAIN = 2.8
-const PLAYBACK_MEMORY_RESERVE_BYTES = 512 * 1024 * 1024
-const PLAYBACK_MEMORY_MAX_TRACK_BYTES = 2 * 1024 * 1024 * 1024
+const PRELOAD_MEMORY_TIMEOUT_MS = 1000
+
+function noBufferTelemetry(): ProgressiveBufferTelemetry {
+  return {
+    bufferedBytes: null,
+    totalBytes: null,
+    bufferedSec: null,
+    bufferComplete: false,
+  }
+}
+
+function completeBufferTelemetry(sizeBytes: number | null, durationSec: number | null | undefined): ProgressiveBufferTelemetry {
+  return {
+    bufferedBytes: sizeBytes,
+    totalBytes: sizeBytes,
+    bufferedSec: durationSec ?? null,
+    bufferComplete: sizeBytes != null,
+  }
+}
 
 export type PlaybackStatus = 'stopped' | 'playing' | 'paused' | 'loading'
 
@@ -82,6 +119,81 @@ interface CreatedStream {
   handle: HSTREAM
   info: StreamInfo
   memoryBuffer: Buffer | null
+  progressive: ProgressiveStreamState | null
+}
+
+export type StreamCreateFailureReason = StreamLoadFailureReason
+export interface StreamCreateResult {
+  stream: CreatedStream | null
+  source: StreamLoadSource | 'none'
+  reason: StreamCreateFailureReason | null
+  sizeBytes: number | null
+  durationMs: number
+  attemptedMemory: boolean
+  buffer: ProgressiveBufferTelemetry
+}
+
+interface StreamLoadTelemetry {
+  source: StreamLoadSource
+  reason: StreamLoadFailureReason | null
+  sizeBytes: number | null
+  durationMs: number
+  attemptedMemory: boolean
+  buffer: ProgressiveBufferTelemetry
+}
+
+interface AdoptStreamOptions {
+  shouldPlay?: boolean
+  startPositionSec?: number
+  restoreStatus?: PlaybackStatus
+  // Optional source metadata when this stream was created as part of a known
+  // load attempt (e.g. memory promotion).
+  sourceResult?: {
+    source: StreamLoadSource
+    reason: StreamLoadFailureReason | null
+    sizeBytes: number | null
+    durationMs: number
+    attemptedMemory: boolean
+    buffer?: ProgressiveBufferTelemetry
+  }
+}
+
+export interface StreamLoadResult {
+  source: StreamLoadSource
+  reason: StreamLoadFailureReason | null
+  durationMs: number
+  sizeBytes: number | null
+  attemptedMemory: boolean
+  streamInfo: StreamInfo | null
+  bufferedBytes: number | null
+  totalBytes: number | null
+  bufferedSec: number | null
+  bufferComplete: boolean
+}
+
+interface LoadOptions {
+  estimatedDurationSec?: number | null
+}
+
+interface CreateStreamOptions {
+  memoryOnly?: boolean
+  skipMemory?: boolean
+  memoryReadTimeoutMs?: number
+  allowProgressive?: boolean
+  estimatedDurationSec?: number | null
+}
+
+interface ProgressiveStreamState {
+  handle: HSTREAM
+  path: string
+  totalBytes: number
+  bufferedBytes: number
+  durationSec: number | null
+  initialBytes: number
+  complete: boolean
+  aborted: boolean
+  fileHandle: FileHandle
+  callbacks: RegisteredFileProcs
 }
 
 let engine: AudioEngine | null = null
@@ -106,6 +218,17 @@ export class AudioEngine {
   private meterEnabled = false
   private levelBuf: Float32Array = new Float32Array(2)
   private currentMemoryBuffer: Buffer | null = null
+  private currentStreamSource: StreamLoadSource = 'none'
+  private currentStreamLoadResult: StreamLoadTelemetry = {
+    source: 'none',
+    reason: null,
+    sizeBytes: null,
+    durationMs: 0,
+    attemptedMemory: false,
+    buffer: noBufferTelemetry(),
+  }
+  private currentProgressiveStream: ProgressiveStreamState | null = null
+  private progressiveStreamsByHandle = new Map<HSTREAM, ProgressiveStreamState>()
   private analysisCache = new Map<string, PlaybackAnalysisResult>()
   private tableBarsCache = new Map<string, PlaybackTableBarsResult>()
   private getInfo: ReturnType<typeof makeChannelGetInfo> | null = null
@@ -141,22 +264,82 @@ export class AudioEngine {
   // Free the current stream (if any) and clear cached info.
   private freeCurrent(): void {
     if (this.currentStream !== 0) {
-      const bass = loadBass()
-      bass.StreamFree(this.currentStream)
+      this.freeStream(this.currentStream)
       this.currentStream = 0
     }
     this.currentPath = null
     this.streamInfo = null
+    this.currentStreamSource = 'none'
+    this.resetCurrentStreamLoadResult()
     this.currentMemoryBuffer = null
+    this.currentProgressiveStream = null
     this.stopProgressTimer()
     this.setStatus('stopped')
   }
 
-  load(path: string): StreamInfo {
-    this.ensureInit()
+  private resetCurrentStreamLoadResult(): void {
+    this.currentStreamLoadResult = {
+      source: 'none',
+      reason: null,
+      sizeBytes: null,
+      durationMs: 0,
+      attemptedMemory: false,
+      buffer: noBufferTelemetry(),
+    }
+  }
 
-    const created = this.createStream(path)
-    if (!created) throw new Error(`Failed to load ${path}: not enough memory`)
+  private updateCurrentStreamSource(nextSource: StreamLoadSource): void {
+    const path = this.currentPath
+    this.currentStreamSource = nextSource
+    broadcast('audio:stream-source-changed', { source: this.currentStreamSource, currentPath: path })
+  }
+
+  private setCurrentStreamLoadResult(sourceResult: {
+    source: StreamLoadSource
+    reason: StreamLoadFailureReason | null
+    sizeBytes: number | null
+    durationMs: number
+    attemptedMemory: boolean
+    buffer?: ProgressiveBufferTelemetry
+  }): void {
+    this.currentStreamLoadResult = {
+      source: sourceResult.source,
+      reason: sourceResult.reason,
+      sizeBytes: sourceResult.sizeBytes,
+      durationMs: sourceResult.durationMs,
+      attemptedMemory: sourceResult.attemptedMemory,
+      buffer: sourceResult.buffer ?? noBufferTelemetry(),
+    }
+  }
+
+  async load(path: string, options: LoadOptions = {}): Promise<StreamLoadResult> {
+    this.ensureInit()
+    this.setStatus('loading')
+
+    const createdResult = await this.createStream(path, {
+      allowProgressive: true,
+      estimatedDurationSec: options.estimatedDurationSec ?? null,
+    })
+    if (!createdResult.stream) {
+      this.currentPath = path
+      this.currentStream = 0
+      this.currentMemoryBuffer = null
+      this.streamInfo = null
+      this.currentProgressiveStream = null
+      this.setCurrentStreamLoadResult({
+        source: 'none',
+        reason: createdResult.reason,
+        sizeBytes: createdResult.sizeBytes,
+        durationMs: createdResult.durationMs,
+        attemptedMemory: createdResult.attemptedMemory,
+        buffer: createdResult.buffer,
+      })
+      this.currentStreamSource = 'none'
+      this.stopProgressTimer()
+      this.setStatus('stopped')
+      throw new Error(`Failed to load ${path}: ${createdResult.reason ?? 'unknown reason'}`)
+    }
+    const created = createdResult.stream
     const { handle, info } = created
     const old = this.releaseCurrent()
     if (old.handle !== 0) this.freeStream(old.handle)
@@ -164,13 +347,86 @@ export class AudioEngine {
     this.currentStream = handle
     this.currentPath = path
     this.currentMemoryBuffer = created.memoryBuffer
+    this.currentProgressiveStream = created.progressive
+    this.currentStreamSource = createdResult.source
+    this.setCurrentStreamLoadResult({
+      source: this.currentStreamSource,
+      reason: null,
+      sizeBytes: createdResult.sizeBytes,
+      durationMs: createdResult.durationMs,
+      attemptedMemory: createdResult.attemptedMemory,
+      buffer: createdResult.buffer,
+    })
 
     // Apply current volume to the freshly created stream.
     loadBass().ChannelSetAttribute(handle, BASS_ATTRIB_VOL, this.volume)
+    this.updateCurrentStreamSource(this.currentStreamSource)
 
     this.streamInfo = info
     this.setStatus('paused')
-    return info
+    return this.getCurrentStreamLoadResult()
+  }
+
+  async promoteCurrentToMemory(): Promise<StreamLoadResult> {
+    this.ensureInit()
+    if (this.currentStream === 0 || !this.currentPath || !this.streamInfo) {
+      return this.getCurrentStreamLoadResult()
+    }
+    if (this.currentStreamSource !== 'file') return this.getCurrentStreamLoadResult()
+
+    const currentPosition = this.getPosition()
+    const restoreStatus = this.getStatus()
+    const shouldPlay = restoreStatus === 'playing'
+    const createResult = await this.createStream(this.currentPath, {
+      memoryOnly: true,
+      memoryReadTimeoutMs: PRELOAD_MEMORY_TIMEOUT_MS,
+    })
+
+    if (!createResult.stream || createResult.source !== 'memory') {
+      this.setCurrentStreamLoadResult({
+        source: this.currentStreamSource,
+        reason: createResult.reason,
+        sizeBytes: createResult.sizeBytes,
+        durationMs: createResult.durationMs,
+        attemptedMemory: createResult.attemptedMemory,
+        buffer: createResult.buffer,
+      })
+      return this.getCurrentStreamLoadResult()
+    }
+
+    const old = this.releaseCurrent()
+    if (old.handle !== 0) this.freeStream(old.handle)
+    this.adoptStream(createResult.stream.handle, this.currentPath, createResult.stream.memoryBuffer, {
+      startPositionSec: currentPosition,
+      shouldPlay,
+      restoreStatus,
+      sourceResult: {
+        source: 'memory',
+        reason: null,
+        sizeBytes: createResult.sizeBytes,
+        durationMs: createResult.durationMs,
+        attemptedMemory: true,
+        buffer: createResult.buffer,
+      },
+    })
+    this.updateCurrentStreamSource('memory')
+    return this.getCurrentStreamLoadResult()
+  }
+
+  getCurrentStreamSource(): StreamLoadSource { return this.currentStreamSource }
+  getCurrentStreamLoadResult(): StreamLoadResult {
+    return {
+      source: this.currentStreamLoadResult.source,
+      reason: this.currentStreamLoadResult.reason,
+      sizeBytes: this.currentStreamLoadResult.sizeBytes,
+      durationMs: this.currentStreamLoadResult.durationMs,
+      attemptedMemory: this.currentStreamLoadResult.attemptedMemory,
+      streamInfo: this.streamInfo,
+      bufferedBytes: this.currentStreamLoadResult.buffer.bufferedBytes,
+      totalBytes: this.currentStreamLoadResult.buffer.totalBytes,
+      bufferedSec: this.currentStreamLoadResult.buffer.bufferedSec,
+      bufferComplete: this.currentStreamLoadResult.buffer.bufferComplete,
+    }
   }
 
   private computeStreamInfo(handle: HSTREAM): StreamInfo {
@@ -340,12 +596,15 @@ export class AudioEngine {
     const bass = loadBass()
     if (this.currentStream !== 0) {
       try { bass.ChannelStop(this.currentStream) } catch { /* may already be stopped */ }
-      try { bass.StreamFree(this.currentStream) } catch { /* best-effort */ }
+      try { this.freeStream(this.currentStream) } catch { /* best-effort */ }
       this.currentStream = 0
     }
     this.currentPath = null
     this.streamInfo = null
     this.currentMemoryBuffer = null
+    this.currentProgressiveStream = null
+    this.currentStreamSource = 'none'
+    this.resetCurrentStreamLoadResult()
     this.stopProgressTimer()
     this.setStatus('stopped')
     // BASS_Free targets the current device; ensure we're on the right one
@@ -437,106 +696,561 @@ export class AudioEngine {
     this.currentPath = null
     this.streamInfo = null
     this.currentMemoryBuffer = null
+    this.currentStreamSource = 'none'
+    this.currentProgressiveStream = null
+    this.resetCurrentStreamLoadResult()
     this.stopProgressTimer()
     return out
   }
 
   // Adopt a preloaded stream as the current one (used by GaplessController
   // when swapping).
-  adoptStream(handle: HSTREAM, path: string, memoryBuffer: Buffer | null = null): StreamInfo {
+  adoptStream(handle: HSTREAM, path: string, memoryBuffer: Buffer | null = null, options: AdoptStreamOptions = {}): StreamInfo {
+    const shouldPlay = options.shouldPlay ?? true
+    const startPosition = options.startPositionSec ?? 0
+    const restoreStatus = options.restoreStatus ?? (shouldPlay ? 'playing' : 'paused')
+
     let info: StreamInfo
     try {
       info = this.computeStreamInfo(handle)
     } catch (err) {
-      const bass = loadBass()
-      bass.StreamFree(handle)
+      this.freeStream(handle)
       throw new Error(`Adopted stream is no longer valid: ${(err as Error).message}`)
     }
     this.currentStream = handle
     this.currentPath = path
     this.currentMemoryBuffer = memoryBuffer
+    this.currentProgressiveStream = this.progressiveStreamsByHandle.get(handle) ?? null
+    this.currentStreamSource = options.sourceResult?.source ?? (memoryBuffer ? 'memory' : 'file')
+    this.setCurrentStreamLoadResult({
+      source: options.sourceResult?.source ?? this.currentStreamSource,
+      reason: options.sourceResult?.reason ?? null,
+      sizeBytes: options.sourceResult?.sizeBytes ?? Number(info.durationBytes),
+      durationMs: options.sourceResult?.durationMs ?? 0,
+      attemptedMemory: options.sourceResult?.attemptedMemory ?? memoryBuffer != null,
+      buffer: options.sourceResult?.buffer ?? completeBufferTelemetry(memoryBuffer ? memoryBuffer.byteLength : null, info.duration),
+    })
     this.streamInfo = info
     const bass = loadBass()
+    const clampedStart = Math.max(0, Math.min(startPosition, info.duration))
+    const startBytes = BigInt(Math.floor(clampedStart * info.bytesPerSecond))
+
+    if (startBytes > 0n) bass.ChannelSetPosition(handle, startBytes, BASS_POS_BYTE)
     // Set volume before starting playback so the swap doesn't blip to full
     // volume for a frame. Start playback BEFORE setStatus/startProgressTimer:
     // syncFftTimer() queries BASS for the live channel state, so the channel
     // must already be playing or it would stop the FFT timer (visualizer
     // freezes after a gapless swap).
     bass.ChannelSetAttribute(handle, BASS_ATTRIB_VOL, this.volume)
-    const playStarted = bass.ChannelPlay(handle, 0)
-    if (!playStarted) {
-      const code = bass.ErrorGetCode()
-      bass.StreamFree(handle)
-      this.currentStream = 0
-      this.currentPath = null
-      this.currentMemoryBuffer = null
-      this.streamInfo = null
-      this.setStatus('stopped')
-      throw new Error(`Failed to start playback after gapless swap: ${bassErrorName(code)} (${code})`)
+
+    if (shouldPlay) {
+      const playStarted = bass.ChannelPlay(handle, 0)
+      if (!playStarted) {
+        const code = bass.ErrorGetCode()
+        this.freeStream(handle)
+        this.currentStream = 0
+        this.currentPath = null
+        this.currentMemoryBuffer = null
+        this.streamInfo = null
+        this.currentStreamSource = 'none'
+        this.resetCurrentStreamLoadResult()
+        this.currentStreamLoadResult.reason = 'file-stream-failed'
+        this.setStatus('stopped')
+        throw new Error(`Failed to start playback after gapless swap: ${bassErrorName(code)} (${code})`)
+      }
+      this.setStatus('playing')
+      this.startProgressTimer()
+    } else {
+      this.setStatus(restoreStatus)
+      this.stopProgressTimer()
     }
-    this.setStatus('playing')
-    this.startProgressTimer()
+    this.updateCurrentStreamSource(this.currentStreamSource)
     return info
   }
 
   // Create a stream for playback. We prefer a full in-memory file buffer so
   // playback is detached from slow/removable storage after the initial read.
-  createStream(path: string, options: { memoryOnly?: boolean } = {}): CreatedStream | null {
+  async createStream(
+    path: string,
+    options: CreateStreamOptions = {},
+  ): Promise<StreamCreateResult> {
     this.ensureInit()
-    const memoryStream = this.createMemoryStream(path)
-    if (memoryStream) return memoryStream
-    if (options.memoryOnly) return null
-    return this.createFileStream(path)
+    const start = Date.now()
+    const fileStats = await this.getAudioFileStats(path, start)
+    if (!fileStats.ok) return fileStats.result
+
+    const fileSizeBytes = fileStats.sizeBytes
+    const memoryResult = options.skipMemory
+      ? {
+        stream: null,
+        source: 'none',
+        reason: 'memory-skipped',
+        sizeBytes: fileSizeBytes,
+        durationMs: 0,
+        attemptedMemory: false,
+        buffer: noBufferTelemetry(),
+      } as StreamCreateResult
+      : await this.createMemoryStream(path, fileSizeBytes, options.memoryReadTimeoutMs)
+
+    if (memoryResult.stream) {
+      return memoryResult
+    }
+    if (options.memoryOnly) {
+      return {
+        ...memoryResult,
+        source: memoryResult.source,
+      }
+    }
+
+    if (options.allowProgressive && memoryResult.reason === 'memory-timeout') {
+      const progressiveStream = await this.createProgressiveStream(
+        path,
+        fileSizeBytes,
+        options.estimatedDurationSec ?? null,
+        start,
+      )
+      if (progressiveStream.stream) return progressiveStream
+    }
+
+    const fileStream = this.createFileStream(path)
+    return {
+      stream: fileStream,
+      source: fileStream ? 'file' : 'none',
+      reason: fileStream ? null : (memoryResult.reason ?? 'file-stream-failed'),
+      sizeBytes: memoryResult.sizeBytes ?? fileSizeBytes,
+      durationMs: Date.now() - start,
+      attemptedMemory: memoryResult.attemptedMemory,
+      buffer: noBufferTelemetry(),
+    }
   }
 
-  private createMemoryStream(path: string): CreatedStream | null {
-    let stats
+  private async getAudioFileStats(path: string, start: number): Promise<
+    | { ok: true; stats: Awaited<ReturnType<typeof stat>>; sizeBytes: number }
+    | { ok: false; result: StreamCreateResult }
+  > {
     try {
-      stats = statSync(path)
+      const stats = await stat(path)
+      if (!stats.isFile()) {
+        return {
+          ok: false,
+          result: {
+            stream: null,
+            source: 'none',
+            reason: 'not-a-file',
+            sizeBytes: stats.size,
+            durationMs: Date.now() - start,
+            attemptedMemory: true,
+            buffer: noBufferTelemetry(),
+          },
+        }
+      }
+      return { ok: true, stats, sizeBytes: Number(stats.size) }
     } catch {
-      return null
+      return {
+        ok: false,
+        result: {
+          stream: null,
+          source: 'none',
+          reason: 'file-stat-failed',
+          sizeBytes: null,
+          durationMs: Date.now() - start,
+          attemptedMemory: true,
+          buffer: noBufferTelemetry(),
+        },
+      }
     }
-    if (!stats.isFile()) return null
-    if (!this.canFitPlaybackFileInMemory(stats.size)) return null
-
-    let buffer: Buffer
-    try {
-      buffer = readFileSync(path)
-    } catch (err) {
-      console.warn(`[audio] memory stream read failed for ${path}:`, (err as Error).message)
-      return null
-    }
-    if (buffer.byteLength === 0) return null
-
-    const bass = loadBass()
-    const handle = bass.StreamCreateFileMemory(BASS_FILE_MEM, buffer, 0n, BigInt(buffer.byteLength), BASS_STREAM_PRESCAN | BASS_SAMPLE_FLOAT)
-    if (handle === 0) {
-      return null
-    }
-    return { handle, info: this.computeStreamInfo(handle), memoryBuffer: buffer }
   }
 
-  private createFileStream(path: string): CreatedStream {
+  private async createMemoryStream(path: string, sizeBytes: number, timeoutMs = PRELOAD_MEMORY_TIMEOUT_MS): Promise<StreamCreateResult> {
+    const start = Date.now()
+
+    const memoryDecision = this.canUseMemoryForPlayback(sizeBytes)
+    if (!memoryDecision.canUse) {
+      console.info('[audio] preload memory rejected', {
+        path,
+        reason: memoryDecision.reason,
+        sizeBytes,
+        freeMem: freemem(),
+        totalMem: totalmem(),
+        reserveBytes: Math.max(PLAYBACK_MEMORY_RESERVE_BYTES, Math.floor(totalmem() * 0.05)),
+      })
+      return {
+        stream: null,
+        source: 'none',
+        reason: memoryDecision.reason,
+        sizeBytes: memoryDecision.sizeBytes,
+        durationMs: Date.now() - start,
+        attemptedMemory: true,
+        buffer: noBufferTelemetry(),
+      }
+    }
+    if (sizeBytes <= 0) {
+      return {
+        stream: null,
+        source: 'none',
+        reason: 'memory-empty',
+        sizeBytes: null,
+        durationMs: Date.now() - start,
+        attemptedMemory: true,
+        buffer: noBufferTelemetry(),
+      }
+    }
+
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+
+    try {
+      const signal = controller.signal
+      const buffer = await readFile(path, { signal })
+      if (buffer.byteLength === 0) {
+        return {
+          stream: null,
+          source: 'none',
+          reason: 'memory-empty',
+          sizeBytes: null,
+          durationMs: Date.now() - start,
+          attemptedMemory: true,
+          buffer: noBufferTelemetry(),
+        }
+      }
+
+      const bass = loadBass()
+      const handle = bass.StreamCreateFileMemory(
+        BASS_FILE_MEM,
+        buffer,
+        0n,
+        BigInt(buffer.byteLength),
+        BASS_STREAM_PRESCAN | BASS_SAMPLE_FLOAT,
+      )
+      if (handle === 0) {
+        return {
+          stream: null,
+          source: 'none',
+          reason: 'memory-stream-failed',
+          sizeBytes: buffer.byteLength,
+          durationMs: Date.now() - start,
+          attemptedMemory: true,
+          buffer: noBufferTelemetry(),
+        }
+      }
+
+      const info = this.computeStreamInfo(handle)
+      return {
+        stream: { handle, info, memoryBuffer: buffer, progressive: null },
+        source: 'memory',
+        reason: null,
+        sizeBytes: buffer.byteLength,
+        durationMs: Date.now() - start,
+        attemptedMemory: true,
+        buffer: completeBufferTelemetry(buffer.byteLength, info.duration),
+      }
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        return {
+          stream: null,
+          source: 'none',
+          reason: 'memory-timeout',
+          sizeBytes: null,
+          durationMs: Date.now() - start,
+          attemptedMemory: true,
+          buffer: noBufferTelemetry(),
+        }
+      }
+      console.warn(`[audio] memory stream read failed for ${path}:`, (err as Error).message)
+      return {
+        stream: null,
+        source: 'none',
+        reason: 'memory-read-failed',
+        sizeBytes: null,
+        durationMs: Date.now() - start,
+        attemptedMemory: true,
+        buffer: noBufferTelemetry(),
+      }
+    } finally {
+      clearTimeout(timeoutId)
+    }
+
+  }
+
+  private async createProgressiveStream(
+    path: string,
+    sizeBytes: number,
+    estimatedDurationSec: number | null,
+    overallStart: number,
+  ): Promise<StreamCreateResult> {
+    const memoryDecision = this.canUseMemoryForPlayback(sizeBytes)
+    if (!memoryDecision.canUse || sizeBytes <= 0) {
+      return {
+        stream: null,
+        source: 'none',
+        reason: memoryDecision.reason ?? 'memory-size-limit',
+        sizeBytes,
+        durationMs: Date.now() - overallStart,
+        attemptedMemory: true,
+        buffer: noBufferTelemetry(),
+      }
+    }
+
+    const initialBytes = calculateProgressiveInitialBytes({
+      fileSizeBytes: sizeBytes,
+      durationSec: estimatedDurationSec,
+    })
+    if (initialBytes <= 0) {
+      return {
+        stream: null,
+        source: 'none',
+        reason: 'memory-empty',
+        sizeBytes,
+        durationMs: Date.now() - overallStart,
+        attemptedMemory: true,
+        buffer: noBufferTelemetry(),
+      }
+    }
+
+    let fileHandle: FileHandle | null = null
+    let callbacks: RegisteredFileProcs | null = null
+    let handle: HSTREAM = 0
+    const initialBuffer = Buffer.allocUnsafe(initialBytes)
+    let initialBufferLength = 0
+    let initialReadOffset = 0
+
+    try {
+      fileHandle = await open(path, 'r')
+      initialBufferLength = await this.readIntoBuffer(fileHandle, initialBuffer, 0, initialBytes)
+      if (initialBufferLength <= 0) {
+        await fileHandle.close().catch(() => undefined)
+        return {
+          stream: null,
+          source: 'none',
+          reason: 'memory-empty',
+          sizeBytes,
+          durationMs: Date.now() - overallStart,
+          attemptedMemory: true,
+          buffer: noBufferTelemetry(),
+        }
+      }
+
+      callbacks = registerFileProcs({
+        close: () => undefined,
+        length: () => BigInt(sizeBytes),
+        read: (bufferPtr, requestedLength) => {
+          const remaining = initialBufferLength - initialReadOffset
+          if (remaining <= 0) return 0
+          const bytesToCopy = Math.min(requestedLength, remaining)
+          copyBufferToPointer(bufferPtr, initialBuffer.subarray(initialReadOffset, initialReadOffset + bytesToCopy))
+          initialReadOffset += bytesToCopy
+          return bytesToCopy
+        },
+        seek: offset => {
+          const next = Number(offset)
+          if (!Number.isSafeInteger(next) || next < 0 || next > initialBufferLength) return false
+          initialReadOffset = next
+          return true
+        },
+      })
+
+      const bass = loadBass()
+      handle = bass.StreamCreateFileUser(
+        STREAMFILE_BUFFERPUSH,
+        BASS_SAMPLE_FLOAT,
+        callbacks.procs,
+        0n,
+      )
+      if (handle === 0) {
+        callbacks.unregister()
+        await fileHandle.close().catch(() => undefined)
+        return {
+          stream: null,
+          source: 'none',
+          reason: 'progressive-stream-failed',
+          sizeBytes,
+          durationMs: Date.now() - overallStart,
+          attemptedMemory: true,
+          buffer: noBufferTelemetry(),
+        }
+      }
+
+      const info = this.computeStreamInfo(handle)
+      const durationSec = Number.isFinite(estimatedDurationSec ?? NaN) && (estimatedDurationSec ?? 0) > 0
+        ? estimatedDurationSec
+        : info.duration
+      const state: ProgressiveStreamState = {
+        handle,
+        path,
+        totalBytes: sizeBytes,
+        bufferedBytes: initialBufferLength,
+        durationSec,
+        initialBytes: initialBufferLength,
+        complete: initialBufferLength >= sizeBytes,
+        aborted: false,
+        fileHandle,
+        callbacks,
+      }
+      this.progressiveStreamsByHandle.set(handle, state)
+      this.startProgressivePump(state)
+
+      const buffer = this.progressiveTelemetry(state)
+      return {
+        stream: { handle, info, memoryBuffer: null, progressive: state },
+        source: state.complete ? 'memory' : 'progressive',
+        reason: null,
+        sizeBytes,
+        durationMs: Date.now() - overallStart,
+        attemptedMemory: true,
+        buffer,
+      }
+    } catch (err) {
+      console.warn(`[audio] progressive stream failed for ${path}:`, (err as Error).message)
+      if (handle !== 0 && this.progressiveStreamsByHandle.has(handle)) {
+        this.freeStream(handle)
+      } else {
+        if (handle !== 0) {
+          try { loadBass().StreamFree(handle) } catch { /* best-effort */ }
+        }
+        callbacks?.unregister()
+        if (fileHandle) await fileHandle.close().catch(() => undefined)
+      }
+      return {
+        stream: null,
+        source: 'none',
+        reason: 'progressive-read-failed',
+        sizeBytes,
+        durationMs: Date.now() - overallStart,
+        attemptedMemory: true,
+        buffer: noBufferTelemetry(),
+      }
+    }
+  }
+
+  private async readIntoBuffer(fileHandle: FileHandle, target: Buffer, position: number, wantedBytes: number): Promise<number> {
+    let bytesReadTotal = 0
+    while (bytesReadTotal < wantedBytes) {
+      const { bytesRead } = await fileHandle.read(
+        target,
+        bytesReadTotal,
+        wantedBytes - bytesReadTotal,
+        position + bytesReadTotal,
+      )
+      if (bytesRead <= 0) break
+      bytesReadTotal += bytesRead
+    }
+    return bytesReadTotal
+  }
+
+  private progressiveTelemetry(state: ProgressiveStreamState): ProgressiveBufferTelemetry {
+    return {
+      bufferedBytes: state.bufferedBytes,
+      totalBytes: state.totalBytes,
+      bufferedSec: estimateBufferedSeconds(state.bufferedBytes, state.totalBytes, state.durationSec),
+      bufferComplete: state.complete,
+    }
+  }
+
+  private updateProgressiveBufferTelemetry(state: ProgressiveStreamState): void {
+    const buffer = this.progressiveTelemetry(state)
+    if (this.currentStream === state.handle && this.currentProgressiveStream === state) {
+      this.currentStreamLoadResult = {
+        ...this.currentStreamLoadResult,
+        buffer,
+      }
+      broadcast('audio:buffer-progress', {
+        currentPath: state.path,
+        source: this.currentStreamLoadResult.source,
+        ...buffer,
+      })
+    }
+  }
+
+  private startProgressivePump(state: ProgressiveStreamState): void {
+    void pumpProgressiveChunks({
+      totalBytes: state.totalBytes,
+      startOffset: state.initialBytes,
+      isAborted: () => state.aborted || !this.progressiveStreamsByHandle.has(state.handle),
+      readChunk: async (offset, length) => {
+        const buffer = Buffer.allocUnsafe(length)
+        const bytesRead = await this.readIntoBuffer(state.fileHandle, buffer, offset, length)
+        return bytesRead === buffer.byteLength ? buffer : buffer.subarray(0, bytesRead)
+      },
+      writeChunk: chunk => {
+        const written = loadBass().StreamPutFileData(state.handle, chunk, chunk.byteLength)
+        return written === 0xFFFFFFFF ? -1 : written
+      },
+      writeEnd: () => {
+        loadBass().StreamPutFileData(state.handle, null, BASS_FILEDATA_END)
+      },
+      onProgress: bufferedBytes => {
+        state.bufferedBytes = bufferedBytes
+        this.updateProgressiveBufferTelemetry(state)
+      },
+    }).then(() => {
+      if (state.aborted || !this.progressiveStreamsByHandle.has(state.handle)) return
+      state.complete = true
+      state.bufferedBytes = state.totalBytes
+      this.updateProgressiveBufferTelemetry(state)
+      if (this.currentStream === state.handle && this.currentProgressiveStream === state) {
+        this.currentStreamLoadResult = {
+          ...this.currentStreamLoadResult,
+          source: 'memory',
+          reason: null,
+          buffer: this.progressiveTelemetry(state),
+        }
+        this.updateCurrentStreamSource('memory')
+      }
+      void state.fileHandle.close().catch(() => undefined)
+    }).catch(err => {
+      if (state.aborted || !this.progressiveStreamsByHandle.has(state.handle)) return
+      console.warn(`[audio] progressive buffer failed for ${state.path}:`, (err as Error).message)
+      if (this.currentStream === state.handle && this.currentProgressiveStream === state) {
+        this.currentStreamLoadResult = {
+          ...this.currentStreamLoadResult,
+          reason: 'progressive-read-failed',
+        }
+        this.currentStream = 0
+        this.currentPath = null
+        this.streamInfo = null
+        this.currentMemoryBuffer = null
+        this.currentStreamSource = 'none'
+        this.currentProgressiveStream = null
+        this.stopProgressTimer()
+        this.setStatus('stopped')
+      }
+      this.freeStream(state.handle)
+    })
+  }
+
+  private createFileStream(path: string): CreatedStream | null {
     const bass = loadBass()
     const handle = bass.StreamCreateFile(BASS_FILE_NAME, path, 0n, 0n, BASS_STREAM_PRESCAN | BASS_SAMPLE_FLOAT)
-    if (handle === 0) {
-      const code = bass.ErrorGetCode()
-      throw new Error(`Failed to load ${path}: ${bassErrorName(code)} (${code})`)
-    }
-    return { handle, info: this.computeStreamInfo(handle), memoryBuffer: null }
+    if (handle === 0) return null
+    return { handle, info: this.computeStreamInfo(handle), memoryBuffer: null, progressive: null }
+  }
+
+  private canUseMemoryForPlayback(size: number): { canUse: boolean; reason: StreamCreateFailureReason | null; sizeBytes: number } {
+    return decidePlaybackMemoryUse({
+      fileSizeBytes: size,
+      freeMemBytes: freemem(),
+      totalMemBytes: totalmem(),
+      reserveBytes: PLAYBACK_MEMORY_RESERVE_BYTES,
+    })
   }
 
   private canFitPlaybackFileInMemory(bytes: number): boolean {
-    if (!Number.isSafeInteger(bytes) || bytes <= 0) return false
-    if (bytes > PLAYBACK_MEMORY_MAX_TRACK_BYTES) return false
-    const reserve = Math.max(PLAYBACK_MEMORY_RESERVE_BYTES, Math.floor(totalmem() * 0.05))
-    return freemem() - bytes > reserve
+    const evalResult = this.canUseMemoryForPlayback(bytes)
+    return evalResult.canUse
   }
 
   freeStream(handle: HSTREAM): void {
     if (handle === 0) return
     const bass = loadBass()
     bass.StreamFree(handle)
+    const progressive = this.progressiveStreamsByHandle.get(handle)
+    if (progressive) {
+      progressive.aborted = true
+      this.progressiveStreamsByHandle.delete(handle)
+      if (this.currentProgressiveStream === progressive) this.currentProgressiveStream = null
+      try { progressive.callbacks.unregister() } catch { /* already unregistered */ }
+      void progressive.fileHandle.close().catch(() => undefined)
+    }
   }
 
   private setStatus(status: PlaybackStatus): void {

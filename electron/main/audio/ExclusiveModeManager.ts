@@ -278,7 +278,7 @@ export class ExclusiveModeManager {
   private async restorePlayback(snap: PlaybackSnapshot): Promise<void> {
     if (!snap.path) return
     try {
-      this.engine.load(snap.path)
+      await this.engine.load(snap.path)
       this.engine.setVolume(snap.volume)
       getEQManager().reapply(this.engine.getCurrentStream())
       if (snap.positionSec > 0) this.engine.seek(snap.positionSec)

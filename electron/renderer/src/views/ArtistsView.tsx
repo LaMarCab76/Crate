@@ -60,16 +60,6 @@ export function ArtistsView({ onSelect }: { onSelect?: (ar: Artist) => void }) {
         <div className="actions list-toolbar">
           <ListPrefsMenu buttonLabel="Filtro" menuTitle="Artists" onReset={() => setPrefs(defaults.artists)}>
             <div className="list-prefs-row">
-              <div className="list-prefs-label">Buscar</div>
-              <input
-                className="list-input"
-                value={prefs.query}
-                onChange={e => setPrefs({ query: e.target.value })}
-                placeholder="Buscar artista"
-                aria-label="Buscar artista"
-              />
-            </div>
-            <div className="list-prefs-row">
               <div className="list-prefs-label">Ordenar por</div>
               <div className="list-prefs-row-inline">
                 <select

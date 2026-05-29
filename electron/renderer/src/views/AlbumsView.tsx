@@ -102,15 +102,6 @@ export function AlbumsView({
         <div className="actions list-toolbar">
           <ListPrefsMenu buttonLabel="Filtro" menuTitle="Albums" onReset={() => setPrefs(defaults.albums)}>
             <div className="list-prefs-row">
-              <div className="list-prefs-label">Buscar</div>
-              <input
-                className="list-input"
-                value={prefs.query}
-                placeholder="Título, artista o género"
-                onChange={e => setPrefs({ query: e.target.value })}
-              />
-            </div>
-            <div className="list-prefs-row">
               <div className="list-prefs-label">Ordenar por</div>
               <div className="list-prefs-row-inline">
                 <select

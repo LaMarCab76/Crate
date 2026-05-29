@@ -25,6 +25,7 @@ import {
 } from './adapters'
 import { usePlaybackStore } from './playbackStore'
 import { useQueueStore } from './queueStore'
+import { runTrackDeletionLifecycle } from '@renderer/utils/trackDeletionLifecycle'
 
 const TRACK_NO_WITHOUT = Number.MAX_SAFE_INTEGER
 const DISC_NO_WITHOUT = Number.MAX_SAFE_INTEGER
@@ -165,6 +166,9 @@ interface LibraryState {
   removeFolder(id: number, options?: RemoveFolderOptions): Promise<void>
   pickFolder(): Promise<string | null>
   dismissMetadataCompletionPrompt(): void
+  deletingTrackIds: Set<number>
+  markDeletingTracks(ids: number[]): void
+  clearDeletingTracks(ids: number[]): void
 }
 
 export const useLibraryStore = create<LibraryState>((set, get) => ({
@@ -180,6 +184,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   error: null,
   importing: null,
   metadataCompletionPrompt: null,
+  deletingTrackIds: new Set<number>(),
 
   async refresh() {
     if (get().loading) return
@@ -317,6 +322,22 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
 
   dismissMetadataCompletionPrompt() {
     set({ metadataCompletionPrompt: null })
+  },
+
+  markDeletingTracks(ids) {
+    set(s => {
+      const next = new Set(s.deletingTrackIds)
+      for (const id of ids) next.add(id)
+      return { deletingTrackIds: next }
+    })
+  },
+
+  clearDeletingTracks(ids) {
+    set(s => {
+      const next = new Set(s.deletingTrackIds)
+      for (const id of ids) next.delete(id)
+      return { deletingTrackIds: next }
+    })
   },
 }))
 
@@ -538,6 +559,83 @@ export async function trashTracks(trackDbIds: number[]): Promise<TrashTracksResu
   return result
 }
 
+export const TRACK_DELETE_ROW_MS = 240
+export const TRACK_DELETE_ROW_EASE = 'cubic-bezier(0.4, 0, 0.2, 1)'
+const TRACK_DELETE_VOLUME_FADE_MS = 130
+const TRACK_DELETE_PLAYER_CLOSE_MS = 280
+
+function delay(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve()
+  return new Promise(resolve => window.setTimeout(resolve, ms))
+}
+
+function getTrackDeleteVisualDelayMs(): number {
+  if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+    return 0
+  }
+  return TRACK_DELETE_ROW_MS
+}
+
+function fadeAudioVolume(fromVol: number, toVol: number, durationMs: number): Promise<void> {
+  const start = performance.now()
+  return new Promise(resolve => {
+    const tick = () => {
+      const progress = Math.min(1, (performance.now() - start) / durationMs)
+      void window.api.audio.setVolume(fromVol + (toVol - fromVol) * progress)
+      if (progress < 1) requestAnimationFrame(tick)
+      else resolve()
+    }
+    requestAnimationFrame(tick)
+  })
+}
+
+export async function trashTracksWithAnimation(trackDbIds: number[]): Promise<void> {
+  const ids = uniqueTrackDbIds(trackDbIds)
+  if (ids.length === 0) return
+  const idSet = new Set(ids)
+
+  useLibraryStore.getState().markDeletingTracks(ids)
+
+  const currentTrack = usePlaybackStore.getState().currentTrack
+  const isPlayingDeleted = currentTrack?.dbId != null && idSet.has(currentTrack.dbId)
+  const queueState = useQueueStore.getState()
+  const hasNext = isPlayingDeleted && (queueState.currentIndex + 1) < queueState.tracks.length
+
+  const prepareBeforeDelete = async () => {
+    if (!isPlayingDeleted) return
+
+    if (hasNext) {
+      await useQueueStore.getState().next()
+      return
+    }
+
+    const originalVol = usePlaybackStore.getState().volume
+    await fadeAudioVolume(originalVol, 0, TRACK_DELETE_VOLUME_FADE_MS)
+    await window.api.audio.stop()
+    await window.api.audio.clearNext()
+    usePlaybackStore.setState({
+      status: 'stopped',
+      currentTrack: null,
+      streamInfo: null,
+      positionSec: 0,
+      durationSec: 0,
+    })
+    // Restore engine volume so the next playback session isn't silent.
+    await window.api.audio.setVolume(originalVol)
+    await delay(TRACK_DELETE_PLAYER_CLOSE_MS)
+  }
+
+  await runTrackDeletionLifecycle({
+    visualDelayMs: getTrackDeleteVisualDelayMs(),
+    wait: delay,
+    prepareBeforeDelete,
+    deleteTracks: () => window.api.tracks.trash(ids),
+    afterDelete: result => pruneDeletedTracksFromQueue(result.trashedTrackIds),
+    refresh: () => useLibraryStore.getState().refresh(),
+    cleanup: () => useLibraryStore.getState().clearDeletingTracks(ids),
+  })
+}
+
 let libraryListenerCleanups: Array<() => void> | null = null
 
 function initializeLibraryListeners(): void {
@@ -550,7 +648,10 @@ function initializeLibraryListeners(): void {
   const scheduleRefresh = () => {
     if (refreshDebounce) window.clearTimeout(refreshDebounce)
     refreshDebounce = window.setTimeout(() => {
-      useLibraryStore.getState().refresh()
+      // Skip while deletion animations are in progress; trashTracksWithAnimation
+      // triggers the refresh itself after animations complete.
+      if (useLibraryStore.getState().deletingTrackIds.size > 0) return
+      void useLibraryStore.getState().refresh()
     }, 200)
   }
 
@@ -605,6 +706,8 @@ export function useVisibleAlbums(): Album[] {
 export function useVisibleArtists(): Artist[] {
   return useLibraryStore(s => s.artists)
 }
+
+export const useDeletingTrackIds = (): Set<number> => useLibraryStore(s => s.deletingTrackIds)
 
 // Memoize filtered favorites by source-array identity so subscribers don't
 // re-run `filter` on every store notification — the lists only need to be

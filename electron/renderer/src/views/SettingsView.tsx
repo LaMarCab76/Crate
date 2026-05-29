@@ -15,6 +15,11 @@ import type { LibraryScanEvent, LibraryScanLogPayload, LibraryScanRun, PlaybackC
 import { COLOR_PRESETS } from '@renderer/utils/colorPresets'
 import { clearPlaybackTableBarsMemoryCache } from '@renderer/utils/playbackTableBars'
 import { basenameForPath } from '@renderer/utils/devicePaths'
+import {
+  UP_NEXT_TOAST_END_SEC_MIN,
+  UP_NEXT_TOAST_START_SEC_MAX,
+  UP_NEXT_TOAST_START_SEC_MIN,
+} from '@renderer/utils/upNextToast'
 
 interface Props {
   tweak: Tweak
@@ -481,6 +486,40 @@ export function SettingsView({ tweak, setTweak }: Props) {
               </span>
             </div>
           )}
+          <div className="set-row">
+            <div>
+              <div className="lbl">Aviso de siguiente tema</div>
+              <div className="sub">Visible entre {tweak.upNextToastStartSec}s y {tweak.upNextToastEndSec}s antes del final.</div>
+            </div>
+            <div className="up-next-window-controls">
+              <label>
+                <span>Desde</span>
+                <input
+                  type="number"
+                  className="number-input up-next-window-input"
+                  min={UP_NEXT_TOAST_START_SEC_MIN}
+                  max={UP_NEXT_TOAST_START_SEC_MAX}
+                  step={1}
+                  value={tweak.upNextToastStartSec}
+                  onChange={e => setTweak('upNextToastStartSec', Number(e.target.value))}
+                  aria-label="Segundos antes del final para mostrar el aviso de siguiente tema"
+                />
+              </label>
+              <label>
+                <span>Hasta</span>
+                <input
+                  type="number"
+                  className="number-input up-next-window-input"
+                  min={UP_NEXT_TOAST_END_SEC_MIN}
+                  max={Math.max(UP_NEXT_TOAST_END_SEC_MIN, tweak.upNextToastStartSec - 1)}
+                  step={1}
+                  value={tweak.upNextToastEndSec}
+                  onChange={e => setTweak('upNextToastEndSec', Number(e.target.value))}
+                  aria-label="Segundos antes del final para ocultar el aviso de siguiente tema"
+                />
+              </label>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -490,7 +529,7 @@ export function SettingsView({ tweak, setTweak }: Props) {
           <div className="set-row">
             <div>
               <div className="lbl">Crossfade</div>
-              <div className="sub">Smoothly mix between songs. Currently {tweak.crossfade}s.</div>
+              <div className="sub">Bajar y subir rápido (segundos). {tweak.crossfade === 0 ? 'Sin transición' : `Total: ${tweak.crossfade}s`}</div>
             </div>
             <input
               type="range" min={0} max={12} step={1}

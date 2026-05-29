@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { Track } from '@shared/types/library'
 import { useVirtualRows } from '@renderer/utils/useVirtualRows'
 import { Artwork } from './Artwork'
@@ -6,7 +6,12 @@ import { CodecStrip } from './CodecStrip'
 import { Icon } from './Icon'
 import { fmtFileSize, fmtTime } from '@renderer/utils/format'
 import { extractDominantColor } from '@renderer/utils/colorExtract'
-import { useAlbums } from '@renderer/stores/libraryStore'
+import {
+  TRACK_DELETE_ROW_EASE,
+  TRACK_DELETE_ROW_MS,
+  useAlbums,
+  useDeletingTrackIds,
+} from '@renderer/stores/libraryStore'
 import { toggleTrackFavorite } from '@renderer/stores/libraryStore'
 import { useQueueStore } from '@renderer/stores/queueStore'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
@@ -102,6 +107,112 @@ export function TrackTable({
   onRefreshMetadata,
 }: TrackTableProps) {
   const albums = useAlbums()
+  const deletingIds = useDeletingTrackIds()
+  const rowRefs = useRef(new Map<number, HTMLTableRowElement>())
+  const animatedRowsRef = useRef(new Map<number, { row: HTMLTableRowElement; cells: HTMLTableCellElement[] }>())
+
+  // Collapse-to-zero animation for deleted rows. CSS alone can't shrink table
+  // row layout space, so we drive height + cell height + cell padding with JS
+  // transitions. Each <td>'s height must be locked and transitioned to 0
+  // alongside the <tr>; otherwise the cell content keeps the row at its
+  // natural content height and the row only "half-collapses", which causes a
+  // visible jump when the row is finally removed from the DOM.
+  // The <tr> cannot be animated reliably with pure CSS-only transitions in every
+  // table layout, so we lock geometry in one frame and apply the animated state
+  // in the next frame to avoid mid-frame style thrash.
+  useEffect(() => {
+    const restoreRowDeletionAnimation = (row: HTMLTableRowElement, cells: HTMLTableCellElement[]) => {
+      for (const td of cells) {
+        td.style.transition = ''
+        td.style.height = ''
+        td.style.paddingTop = ''
+        td.style.paddingBottom = ''
+        td.style.overflow = ''
+        td.style.boxSizing = ''
+      }
+      row.style.transition = ''
+      row.style.height = ''
+      row.style.opacity = ''
+      row.style.removeProperty('--track-delete-row-duration')
+      row.style.removeProperty('--track-delete-row-ease')
+      row.removeAttribute('data-animating')
+    }
+
+    for (const [dbId, animated] of animatedRowsRef.current) {
+      if (deletingIds.has(dbId)) continue
+      restoreRowDeletionAnimation(animated.row, animated.cells)
+      animatedRowsRef.current.delete(dbId)
+    }
+
+    if (deletingIds.size === 0) return
+
+    for (const dbId of deletingIds) {
+      const row = rowRefs.current.get(dbId)
+      if (!row || row.dataset.animating === 'true' || animatedRowsRef.current.has(dbId)) continue
+      row.dataset.animating = 'true'
+
+      const h = row.getBoundingClientRect().height
+      const cells = Array.from(row.cells)
+      animatedRowsRef.current.set(dbId, { row, cells })
+      cells.forEach(td => {
+        const cs = window.getComputedStyle(td)
+        td.style.boxSizing = 'border-box'
+        td.style.height = `${td.getBoundingClientRect().height}px`
+        td.style.paddingTop = cs.paddingTop
+        td.style.paddingBottom = cs.paddingBottom
+        td.style.overflow = 'hidden'
+      })
+      row.style.height = `${h}px`
+      // Force layout flush so the browser registers the locked values.
+      void row.offsetHeight
+
+      row.style.setProperty('--track-delete-row-duration', `${TRACK_DELETE_ROW_MS}ms`)
+      row.style.setProperty('--track-delete-row-ease', TRACK_DELETE_ROW_EASE)
+      row.style.opacity = '1'
+
+      let finished = false
+      const finalize = () => {
+        if (finished) return
+        finished = true
+        row.style.height = '0'
+        row.style.opacity = '0'
+        cells.forEach(td => {
+          td.style.height = '0'
+          td.style.paddingTop = '0'
+          td.style.paddingBottom = '0'
+        })
+      }
+
+      const cleanupTransition = () => {
+        row.removeEventListener('transitionend', onTransitionEnd)
+        window.clearTimeout(fallback)
+        finalize()
+      }
+
+      const onTransitionEnd = (event: TransitionEvent) => {
+        if (event.target !== row || event.propertyName !== 'height') return
+        cleanupTransition()
+      }
+
+      const fallback = window.setTimeout(cleanupTransition, TRACK_DELETE_ROW_MS + 80)
+      row.addEventListener('transitionend', onTransitionEnd, { once: true })
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          row.style.height = '0'
+          row.style.opacity = '0'
+          cells.forEach(td => {
+            td.style.transition = `height var(--track-delete-row-duration) var(--track-delete-row-ease), padding-top var(--track-delete-row-duration) var(--track-delete-row-ease), padding-bottom var(--track-delete-row-duration) var(--track-delete-row-ease)`
+            td.style.height = '0'
+            td.style.paddingTop = '0'
+            td.style.paddingBottom = '0'
+          })
+          row.style.transition = `height var(--track-delete-row-duration) var(--track-delete-row-ease), opacity var(--track-delete-row-duration) var(--track-delete-row-ease)`
+        })
+      })
+    }
+  }, [deletingIds])
+
   // O(1) album lookups instead of an albums.find() scan per rendered row.
   const albumById = useMemo(() => {
     const m = new Map<string, (typeof albums)[number]>()
@@ -181,11 +292,18 @@ export function TrackTable({
             const pathValue = t.path ?? ''
             const canRefresh = t.dbId != null
             const displayTrackNumber = showTrackNo ? (t.no || i + 1) : null
+            const isDeleting = t.dbId != null && deletingIds.has(t.dbId)
             return (
               <tr
-                ref={k === 0 ? measureRow : undefined}
+                ref={el => {
+                  if (k === 0) measureRow(el)
+                  if (t.dbId != null) {
+                    if (el) rowRefs.current.set(t.dbId, el)
+                    else rowRefs.current.delete(t.dbId)
+                  }
+                }}
                 key={t.id}
-                className={isP ? 'playing' : ''}
+                className={[isP ? 'playing' : '', isDeleting ? 'deleting' : ''].filter(Boolean).join(' ')}
                 style={isP ? playingRowStyle : undefined}
                 onContextMenu={e => trackActions.openTrackMenu(e, t)}
                 onDoubleClick={() => { void playNow(t, playbackTracks) }}

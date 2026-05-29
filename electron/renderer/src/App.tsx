@@ -22,12 +22,13 @@ import { ImportView } from './views/ImportView'
 import { GenresView } from './views/GenresView'
 import { DevicesView } from './views/DevicesView'
 import { DeviceLibraryView, type DeviceLibrarySection } from './views/DeviceLibraryView'
-import { useTweaks } from './stores/settingsStore'
+import { useTweaks, useListPrefsStore } from './stores/settingsStore'
 import { useAlbumByUiId, useFavoriteTracks, useLibraryStore } from './stores/libraryStore'
 import { usePlaybackStore } from './stores/playbackStore'
 import { useDeviceStore } from './stores/deviceStore'
 import { installAutoHideScrollbars } from './utils/autoHideScrollbars'
 import { extractDominantColor } from './utils/colorExtract'
+import { vivify } from './utils/colorAdjust'
 
 export type View =
   | { kind: 'library' }
@@ -54,6 +55,11 @@ const LYRICS_SIDE_PANE_EXIT_MS = 340
 const SIDEBAR_WIDTH_DEFAULT = 240
 const SIDEBAR_WIDTH_MIN = 180
 const SIDEBAR_WIDTH_MAX = 420
+
+const LYRICS_SIDE_WIDTH_STORAGE_KEY = 'crate.layout.lyricsSideWidth.v1'
+const LYRICS_SIDE_WIDTH_DEFAULT = 380
+const LYRICS_SIDE_WIDTH_MIN = 300
+const LYRICS_SIDE_WIDTH_MAX = 620
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
@@ -209,6 +215,7 @@ export default function App() {
   const [idx, setIdx] = useState(0)
   const [expanded, setExpanded] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [searchScope, setSearchScope] = useState<'global' | 'view'>('view')
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [playerPaneOpen, setPlayerPaneOpen] = useState(() =>
     loadPersistedBool(PLAYER_PANE_OPEN_STORAGE_KEY, true)
@@ -219,6 +226,11 @@ export default function App() {
   )
   const [isResizingSidebar, setIsResizingSidebar] = useState(false)
   const sidebarWidthRef = useRef(sidebarWidth)
+  const [lyricsSideWidth, setLyricsSideWidth] = useState(() =>
+    loadPersistedWidth(LYRICS_SIDE_WIDTH_STORAGE_KEY, LYRICS_SIDE_WIDTH_DEFAULT, LYRICS_SIDE_WIDTH_MIN, LYRICS_SIDE_WIDTH_MAX)
+  )
+  const [isResizingLyricsSide, setIsResizingLyricsSide] = useState(false)
+  const lyricsSideWidthRef = useRef(lyricsSideWidth)
   const contentRef = useRef<HTMLDivElement>(null)
   const frameRef = useRef<HTMLDivElement>(null)
   const scrollPositionsRef = useRef(new Map<number, number>())
@@ -228,6 +240,9 @@ export default function App() {
   const viewAlbumTrackCount = viewAlbum?.tracks.length ?? 0
   const viewAlbumFallbackTint = viewAlbum?.palette[1] ?? null
   const viewAlbumArtworkPath = viewAlbum?.artworkPath ?? null
+
+  const listPrefs = useListPrefsStore(s => s.listPrefs)
+  const rawSetListPrefs = useListPrefsStore(s => s.setListPrefs)
 
   const refresh = useLibraryStore(s => s.refresh)
   const loaded = useLibraryStore(s => s.loaded)
@@ -254,12 +269,35 @@ export default function App() {
   const [albumTint, setAlbumTint] = useState<string | null>(null)
   const playingArtworkPath = nowAlbum?.artworkPath ?? nowTrack?.artworkPath ?? null
   const isPlaying = playbackStatus === 'playing'
-  const contentTint = viewAlbum ? (albumTint ?? viewAlbumFallbackTint) : null
   const deviceProgressVisible = scanProgress != null || syncProgress != null
+
+  // Which listPrefs key corresponds to the current view for contextual search.
+  // Views that don't support text filtering (album detail, artist detail, recent,
+  // settings, etc.) return null and the scope toggle is hidden.
+  const currentViewQueryKind = (() => {
+    switch (view.kind) {
+      case 'library': return 'library' as const
+      case 'albums': return 'albums' as const
+      case 'artists': return 'artists' as const
+      case 'genres': return 'genres' as const
+      case 'playlist': return 'playlist' as const
+      case 'favoriteTracks': return 'favoriteTracks' as const
+      default: return null
+    }
+  })()
+  const viewQueryable = currentViewQueryKind !== null
+  const viewQuery = currentViewQueryKind ? (listPrefs[currentViewQueryKind].query ?? '') : ''
+  const setViewQuery = (q: string) => {
+    if (currentViewQueryKind) rawSetListPrefs(currentViewQueryKind, { query: q })
+  }
 
   useEffect(() => {
     sidebarWidthRef.current = sidebarWidth
   }, [sidebarWidth])
+
+  useEffect(() => {
+    lyricsSideWidthRef.current = lyricsSideWidth
+  }, [lyricsSideWidth])
 
   useEffect(() => {
     try {
@@ -399,28 +437,48 @@ export default function App() {
   }, [tweak])
 
   // Extract dominant color from the currently playing album's artwork (with
-  // track artwork as fallback). It becomes the global --bg-tint so the whole
-  // chrome follows the music.
+  // track artwork as fallback). Vivified so quiet covers still produce a
+  // visibly saturated tint.
   useEffect(() => {
     if (!playingArtworkPath) { setPlayingTint(null); return }
     let cancelled = false
     const src = `crate://artwork/${encodeURIComponent(playingArtworkPath)}`
     void extractDominantColor(src).then(hex => {
-      if (!cancelled) setPlayingTint(hex)
+      if (!cancelled) setPlayingTint(vivify(hex))
     })
     return () => { cancelled = true }
   }, [playingArtworkPath])
 
-  // Global background tint follows the currently playing album. Clears when
-  // playback isn't actively running so the base dark background shows.
+  // Global background tint: when an album is open it follows the album being
+  // viewed; otherwise it falls back to the currently playing track. When
+  // neither applies the chrome returns to its neutral base.
   useEffect(() => {
     const root = document.documentElement
-    if (isPlaying && playingTint) {
-      root.style.setProperty('--bg-tint', playingTint)
+    const viewedTint = viewAlbum ? (albumTint ?? vivify(viewAlbumFallbackTint)) : null
+    const next = viewedTint ?? (isPlaying ? playingTint : null)
+    if (next) {
+      root.style.setProperty('--bg-tint', next)
     } else {
       root.style.removeProperty('--bg-tint')
     }
-  }, [playingTint, isPlaying])
+  }, [viewAlbum, albumTint, viewAlbumFallbackTint, playingTint, isPlaying])
+
+  // Propagate --np-tint to :root so both the player pane and the lyrics side
+  // pane share the same artwork-based tint. PlayerPane's own inline style
+  // continues to override on that element (same value), while LyricsSidePane
+  // picks up this global value since it's a DOM sibling, not a descendant.
+  useEffect(() => {
+    const root = document.documentElement
+    const tint =
+      tweak.playerTintSource === 'artwork' ? playingTint
+      : (tweak.playerTintSource === 'preset' || tweak.playerTintSource === 'custom') ? tweak.playerTintColor
+      : null
+    if (tint) {
+      root.style.setProperty('--np-tint', tint)
+    } else {
+      root.style.removeProperty('--np-tint')
+    }
+  }, [tweak.playerTintSource, tweak.playerTintColor, playingTint])
 
   // If the open album becomes empty after deletion, return to previous view.
   useEffect(() => {
@@ -437,22 +495,24 @@ export default function App() {
     }
   }, [viewAlbum, idx, viewedAlbum?.tracks.length, viewedAlbum, viewAlbumTrackCount])
 
-  // Album view tint should always follow the album being shown, independent of
-  // now-playing/mini-player tinting.
+  // Album view tint follows the album being shown (independent of playback).
+  // Vivified so it lands in the same saturated/mid-lightness range as the
+  // playing-track tint.
   useEffect(() => {
     if (!viewAlbum) {
       setAlbumTint(null)
       return
     }
 
-    setAlbumTint(viewAlbumFallbackTint)
+    setAlbumTint(vivify(viewAlbumFallbackTint))
 
     if (!viewAlbumArtworkPath) return
 
     let cancelled = false
     const src = `crate://artwork/${encodeURIComponent(viewAlbumArtworkPath)}`
     void extractDominantColor(src).then(hex => {
-      if (!cancelled && hex) setAlbumTint(hex)
+      const tint = vivify(hex)
+      if (!cancelled && tint) setAlbumTint(tint)
     })
 
     return () => {
@@ -502,6 +562,37 @@ export default function App() {
     }
 
     setIsResizingSidebar(true)
+    document.body.style.userSelect = 'none'
+    document.addEventListener('pointermove', onMove)
+    document.addEventListener('pointerup', stop)
+  }
+
+  const beginLyricsSideResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!showLyricsSidePane) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+
+    const onMove = (e: globalThis.PointerEvent) => {
+      const frame = frameRef.current
+      if (!frame) return
+      const rect = frame.getBoundingClientRect()
+      const nextWidth = clamp(Math.round(rect.right - e.clientX), LYRICS_SIDE_WIDTH_MIN, LYRICS_SIDE_WIDTH_MAX)
+      lyricsSideWidthRef.current = nextWidth
+      setLyricsSideWidth(nextWidth)
+    }
+
+    const stop = () => {
+      document.removeEventListener('pointermove', onMove)
+      document.removeEventListener('pointerup', stop)
+      document.body.style.userSelect = ''
+      setIsResizingLyricsSide(false)
+
+      try {
+        window.localStorage.setItem(LYRICS_SIDE_WIDTH_STORAGE_KEY, String(lyricsSideWidthRef.current))
+      } catch { /* ignore */ }
+    }
+
+    setIsResizingLyricsSide(true)
     document.body.style.userSelect = 'none'
     document.addEventListener('pointermove', onMove)
     document.addEventListener('pointerup', stop)
@@ -572,7 +663,7 @@ export default function App() {
       <div className="window">
         <div
           ref={frameRef}
-          className={`frame ${isResizingSidebar ? 'layout-resizing-sidebar' : ''}`}
+          className={`frame ${isResizingSidebar ? 'layout-resizing-sidebar' : ''} ${isResizingLyricsSide ? 'layout-resizing-lyrics-side' : ''}`}
           style={{
             '--sb-w': `${sidebarWidth}px`,
           } as CSSProperties}
@@ -591,6 +682,7 @@ export default function App() {
           {sidebarOpen && (
             <div
               className={`layout-resize-handle sidebar-resize-handle ${isResizingSidebar ? 'active' : ''}`}
+              style={{ left: `${sidebarWidth}px` }}
               onPointerDown={beginSidebarResize}
               aria-hidden
             />
@@ -606,6 +698,11 @@ export default function App() {
               onNavigate={navigate}
               searchQuery={searchQuery}
               onSearchQueryChange={setSearchQuery}
+              searchScope={searchScope}
+              onSearchScopeChange={setSearchScope}
+              viewQuery={viewQuery}
+              onViewQueryChange={setViewQuery}
+              viewQueryable={viewQueryable}
               sidebarOpen={sidebarOpen}
               onToggleSidebar={() => setSidebarOpen(open => !open)}
               playerPaneOpen={isPlayerPaneOpen}
@@ -615,7 +712,6 @@ export default function App() {
             <div
               ref={contentRef}
               className="content"
-              style={contentTint ? ({ '--bg-tint': contentTint } as CSSProperties) : undefined}
             >
               {renderContent()}
             </div>
@@ -643,9 +739,19 @@ export default function App() {
             />
           )}
 
+          {showLyricsSidePane && playerPaneVisible && (
+            <div
+              className={`layout-resize-handle lyrics-side-resize-handle ${isResizingLyricsSide ? 'active' : ''}`}
+              style={{ right: `${lyricsSideWidth}px` }}
+              onPointerDown={beginLyricsSideResize}
+              aria-hidden
+            />
+          )}
+
           {lyricsSidePaneVisible && (
             <LyricsSidePane
               closing={lyricsSidePaneClosing || !showLyricsSidePane}
+              width={lyricsSideWidth}
               onClose={() => setLyricsSidePaneOpen(false)}
             />
           )}

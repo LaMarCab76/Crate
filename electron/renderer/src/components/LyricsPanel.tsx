@@ -284,6 +284,7 @@ function LyricsPanelContent({
   const [dragOver, setDragOver] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
   const [offsetOpen, setOffsetOpen] = useState(false)
+  const [toolbarOpen, setToolbarOpen] = useState(false)
   const [measureTick, setMeasureTick] = useState(0)
   const [lineSplits, setLineSplits] = useState<Map<number, LyricsLineSplit>>(() => new Map())
 
@@ -742,12 +743,24 @@ function LyricsPanelContent({
                   aria-current={isActive ? 'true' : undefined}
                   onClick={() => seekToLine(line.timeSec)}
                 >
-                  {split ? (
-                    <span className="lyr-line-split">
-                      <span className="lyr-line-split-part">{split.first}</span>
-                      <span className="lyr-line-split-part">{split.second}</span>
+                  <span className="lyr-line-stack">
+                    <span className="lyr-line-visible">
+                      {split ? (
+                        <span className="lyr-line-split">
+                          <span className="lyr-line-split-part">{split.first}</span>
+                          <span className="lyr-line-split-part">{split.second}</span>
+                        </span>
+                      ) : line.text}
                     </span>
-                  ) : line.text}
+                    <span className="lyr-line-ghost" aria-hidden="true">
+                      {split ? (
+                        <span className="lyr-line-split">
+                          <span className="lyr-line-split-part">{split.first}</span>
+                          <span className="lyr-line-split-part">{split.second}</span>
+                        </span>
+                      ) : line.text}
+                    </span>
+                  </span>
                 </li>
               )
               if (!waitBefore) return lineNode
@@ -781,49 +794,62 @@ function LyricsPanelContent({
       {renderCompactHeader()}
       <div className="lyr-body">{renderBody()}</div>
 
-      {showActions && hasTrack && showSynced && parsed && (
-        <div className={`lyr-offset-shell ${offsetOpen ? 'open' : ''}`}>
-          <button
-            type="button"
-            className="lyr-offset-toggle"
-            title={offsetOpen ? 'Ocultar desfasaje' : 'Mostrar desfasaje'}
-            aria-expanded={offsetOpen}
-            onClick={() => setOffsetOpen(open => !open)}
-          >
-            <span>Desfasaje</span>
-            <strong>{formatOffsetMs(effectiveOffsetMs)}</strong>
-            <Icon name={offsetOpen ? 'chevD' : 'chevR'} size={12} />
-          </button>
-          {offsetOpen && (
+      {showActions && hasTrack && hasLyrics && (
+        <div className="lyr-bottom-bar">
+          {toolbarOpen && offsetOpen && showSynced && parsed && (
             <LyricsOffsetControl
               trackOffsetMs={trackOffsetMs}
               globalOffsetMs={globalOffsetMs}
               busy={busy}
             />
           )}
-        </div>
-      )}
-
-      {showActions && hasTrack && hasLyrics && (
-        <div className="lyr-actions">
-          <button type="button" className="tb-icon-btn" title="Buscar online" disabled={searching} onClick={() => void useLyricsStore.getState().searchOnline()}>
-            <Icon name="search" size={14} />
-          </button>
-          <button type="button" className="tb-icon-btn" title="Rebuscar" onClick={() => void useLyricsStore.getState().fetchOnline(true)}>
-            <Icon name="rotate" size={14} />
-          </button>
-          <button type="button" className="tb-icon-btn" title="Importar .lrc" disabled={busy} onClick={() => void useLyricsStore.getState().importFromFile()}>
-            <Icon name="download" size={14} />
-          </button>
-          <button type="button" className="tb-icon-btn" title="Editar" onClick={() => setEditorOpen(true)}>
-            <Icon name="edit" size={14} />
-          </button>
-          <button type="button" className="tb-icon-btn" title="Exportar .lrc" disabled={busy} onClick={() => void useLyricsStore.getState().exportToFile()}>
-            <Icon name="save" size={14} />
-          </button>
-          <button type="button" className="tb-icon-btn" title="Quitar letras" disabled={busy} onClick={() => void useLyricsStore.getState().remove()}>
-            <Icon name="trash" size={14} />
-          </button>
+          <div className="lyr-strip">
+            {toolbarOpen && (
+              <>
+                <button type="button" className="tb-icon-btn" title="Buscar online" disabled={searching} onClick={() => void useLyricsStore.getState().searchOnline()}>
+                  <Icon name="search" size={14} />
+                </button>
+                <button type="button" className="tb-icon-btn" title="Rebuscar" onClick={() => void useLyricsStore.getState().fetchOnline(true)}>
+                  <Icon name="rotate" size={14} />
+                </button>
+                <button type="button" className="tb-icon-btn" title="Importar .lrc" disabled={busy} onClick={() => void useLyricsStore.getState().importFromFile()}>
+                  <Icon name="download" size={14} />
+                </button>
+                <button type="button" className="tb-icon-btn" title="Editar" onClick={() => setEditorOpen(true)}>
+                  <Icon name="edit" size={14} />
+                </button>
+                <button type="button" className="tb-icon-btn" title="Exportar .lrc" disabled={busy} onClick={() => void useLyricsStore.getState().exportToFile()}>
+                  <Icon name="save" size={14} />
+                </button>
+                <button type="button" className="tb-icon-btn" title="Quitar letras" disabled={busy} onClick={() => void useLyricsStore.getState().remove()}>
+                  <Icon name="trash" size={14} />
+                </button>
+                {showSynced && parsed && (
+                  <button
+                    type="button"
+                    className={`lyr-offset-btn${offsetOpen ? ' active' : ''}`}
+                    title={offsetOpen ? 'Ocultar desfasaje' : 'Mostrar desfasaje'}
+                    onClick={() => setOffsetOpen(o => !o)}
+                  >
+                    <Icon name="sliders" size={11} />
+                    <span>{formatOffsetMs(effectiveOffsetMs)}</span>
+                  </button>
+                )}
+              </>
+            )}
+            <div className="lyr-strip-spacer" />
+            <button
+              type="button"
+              className="tb-icon-btn lyr-strip-toggle"
+              title={toolbarOpen ? 'Ocultar controles' : 'Mostrar controles'}
+              onClick={() => {
+                if (toolbarOpen) setOffsetOpen(false)
+                setToolbarOpen(o => !o)
+              }}
+            >
+              <Icon name={toolbarOpen ? 'chevD' : 'chevU'} size={11} />
+            </button>
+          </div>
         </div>
       )}
 

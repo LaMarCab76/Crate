@@ -13,6 +13,7 @@ import { usePlaybackStore } from '@renderer/stores/playbackStore'
 import { useQueueStore } from '@renderer/stores/queueStore'
 import { useTweakStore } from '@renderer/stores/settingsStore'
 import { extractDominantColor } from '@renderer/utils/colorExtract'
+import { vivify } from '@renderer/utils/colorAdjust'
 import type { AudioOutputDevice, ExclusiveModeState } from '@shared/types/ipc-contract'
 import type { Album, Artist, Track } from '@shared/types/library'
 
@@ -42,6 +43,8 @@ export function PlayerBottomBar({
   const positionSec = usePlaybackStore(s => s.positionSec)
   const durationSec = usePlaybackStore(s => s.durationSec)
   const volume = usePlaybackStore(s => s.volume)
+  const streamSource = usePlaybackStore(s => s.streamSource)
+  const streamSourceState = usePlaybackStore(s => s.streamSourceState)
   const togglePlay = useQueueStore(s => s.togglePlay)
   const seek = useQueueStore(s => s.seek)
   const next = useQueueStore(s => s.next)
@@ -86,7 +89,7 @@ export function PlayerBottomBar({
     let cancelled = false
     const src = `crate://artwork/${encodeURIComponent(artworkPath)}`
     void extractDominantColor(src).then(hex => {
-      if (!cancelled) setArtworkTint(hex)
+      if (!cancelled) setArtworkTint(vivify(hex))
     })
     return () => { cancelled = true }
   }, [playerTintSource, artworkPath])
@@ -133,6 +136,17 @@ export function PlayerBottomBar({
   const displayPositionSec = dragProgress !== null ? dragProgress * durationSec : positionSec
   const canOpenAlbum = album != null && onOpenAlbum != null && !album.id.startsWith('a-unresolved-')
   const canOpenArtist = artist != null && onOpenArtist != null
+
+  const streamSourceLabel = streamSource === 'memory'
+    ? streamSourceState === 'promoting'
+      ? 'Memoria (promoción en curso)'
+      : streamSourceState === 'promoted'
+        ? 'Memoria (promoción exitosa)'
+        : 'Memoria'
+    : streamSource === 'file'
+      ? 'Disco'
+      : 'Sin memoria'
+  const streamSourceClass = streamSource === 'memory' ? 'is-memory' : streamSource === 'file' ? 'is-file' : 'is-none'
 
   const onProgressMouseDown = (e: MouseEvent<HTMLDivElement>) => {
     if (durationSec <= 0) return
@@ -325,6 +339,9 @@ export function PlayerBottomBar({
             </div>
             <div className="pp-quality-chip">
               <CodecStrip track={track} compact />
+            </div>
+            <div className={`stream-source-badge ${streamSourceClass}`}>
+              {streamSourceLabel}
             </div>
           </div>
         </div>

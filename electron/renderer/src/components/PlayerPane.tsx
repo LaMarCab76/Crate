@@ -9,14 +9,18 @@ import { UpNextToast } from './UpNextToast'
 import { TrackLoadingOverlay } from './TrackLoadingOverlay'
 import { fmtTime } from '@renderer/utils/format'
 import {
+  TRACK_DELETE_ROW_EASE,
+  TRACK_DELETE_ROW_MS,
   toggleTrackFavorite,
   useAlbumByUiId,
   useArtistByUiId,
+  useDeletingTrackIds,
 } from '@renderer/stores/libraryStore'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
 import { useQueueHistory, useQueueStore, useQueueUpNext } from '@renderer/stores/queueStore'
 import { useTweakStore } from '@renderer/stores/settingsStore'
 import { extractDominantColor } from '@renderer/utils/colorExtract'
+import { vivify } from '@renderer/utils/colorAdjust'
 import type { AudioOutputDevice, ExclusiveModeState } from '@shared/types/ipc-contract'
 import type { Album, Artist, Track } from '@shared/types/library'
 
@@ -54,6 +58,8 @@ export function PlayerPane({
   const positionSec = usePlaybackStore(s => s.positionSec)
   const durationSec = usePlaybackStore(s => s.durationSec)
   const volume = usePlaybackStore(s => s.volume)
+  const streamSource = usePlaybackStore(s => s.streamSource)
+  const streamSourceState = usePlaybackStore(s => s.streamSourceState)
   const queueNext = useQueueUpNext()
   const queueHistory = useQueueHistory()
   const togglePlay = useQueueStore(s => s.togglePlay)
@@ -128,6 +134,10 @@ export function PlayerPane({
     if (hh > 0) return `${hh}:${mm.toString().padStart(2, '0')}:${ss.toString().padStart(2, '0')}`
     return `${mm}:${ss.toString().padStart(2, '0')}`
   }, [totalQueueRemainingSec])
+  const queueDeleteStyle = {
+    '--track-delete-row-duration': `${TRACK_DELETE_ROW_MS}ms`,
+    '--track-delete-row-ease': TRACK_DELETE_ROW_EASE,
+  } as CSSProperties
 
   useEffect(() => {
     if (!isOpen) {
@@ -144,7 +154,7 @@ export function PlayerPane({
     let cancelled = false
     const src = `crate://artwork/${encodeURIComponent(artworkPath)}`
     void extractDominantColor(src).then(hex => {
-      if (!cancelled) setArtworkTint(hex)
+      if (!cancelled) setArtworkTint(vivify(hex))
     })
     return () => { cancelled = true }
   }, [playerTintSource, artworkPath])
@@ -254,6 +264,17 @@ export function PlayerPane({
 
   const canOpenAlbum = album != null && onOpenAlbum != null && !album.id.startsWith('a-unresolved-')
   const canOpenArtist = artist != null && onOpenArtist != null
+
+  const streamSourceLabel = streamSource === 'memory'
+    ? streamSourceState === 'promoting'
+      ? 'Memoria (promoción en curso)'
+      : streamSourceState === 'promoted'
+        ? 'Memoria (promoción exitosa)'
+        : 'Memoria'
+    : streamSource === 'file'
+      ? 'Disco'
+      : 'Sin memoria'
+  const streamSourceClass = streamSource === 'memory' ? 'is-memory' : streamSource === 'file' ? 'is-file' : 'is-none'
 
   const selectOutputDevice = async (device: AudioOutputDevice) => {
     if (device.isCurrent) {
@@ -413,6 +434,9 @@ export function PlayerPane({
                     </div>
                     <div className="pp-quality-chip">
                       <CodecStrip track={track} compact />
+                    </div>
+                    <div className={`stream-source-badge ${streamSourceClass}`}>
+                      {streamSourceLabel}
                     </div>
                   </div>
                 </div>
@@ -578,7 +602,7 @@ export function PlayerPane({
                     <div className="queue-remaining">{totalQueueRemainingText} remaining</div>
                   </div>
                 </div>
-                <div className="queue-list">
+                <div className="queue-list" style={queueDeleteStyle}>
                   <div className="queue-section-label">Playing from · {displayAlbum?.title ?? '—'}</div>
                   <div className="queue-item now">
                     <div className="art"><Artwork album={displayAlbum} /></div>
@@ -611,8 +635,13 @@ export function PlayerPane({
 
 function QueueItem({ track, dim }: { track: Track; dim?: boolean }) {
   const album = useAlbumByUiId(track.albumId)
+  const deletingIds = useDeletingTrackIds()
+  const isDeleting = track.dbId != null && deletingIds.has(track.dbId)
   return (
-    <div className="queue-item" style={dim ? { opacity: 0.55 } : undefined}>
+    <div
+      className={`queue-item${isDeleting ? ' deleting' : ''}`}
+      style={dim && !isDeleting ? { opacity: 0.55 } : undefined}
+    >
       <div className="art"><Artwork album={album} /></div>
       <div>
         <div className="t">{track.t}</div>
