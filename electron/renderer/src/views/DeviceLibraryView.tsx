@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type DragEvent } from 'react'
-import { Icon } from '@renderer/components/Icon'
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
+import { Icon, type IconName } from '@renderer/components/Icon'
 import { useDeviceLibrary, useDeviceStore, useRockboxThemeLibrary } from '@renderer/stores/deviceStore'
 import { fmtFileSize, fmtTime } from '@renderer/utils/format'
 import type {
@@ -11,14 +11,44 @@ import type {
   RockboxThemeSummary,
 } from '@shared/types/device-sync'
 
-export type DeviceLibrarySection = 'tracks' | 'albums' | 'artists' | 'playlists' | 'rockboxThemes'
+// Tracks/albums/artists are merged into a single "library" section with an
+// in-view switcher; playlists and rockbox themes stay as their own sections.
+export type DeviceLibrarySection = 'library' | 'playlists' | 'rockboxThemes'
 
 const SECTION_TITLES: Record<DeviceLibrarySection, string> = {
-  tracks: 'Temas',
-  albums: 'Álbumes',
-  artists: 'Artistas',
+  library: 'Biblioteca',
   playlists: 'Playlists',
   rockboxThemes: 'Rockbox Themes',
+}
+
+export type DeviceLibraryView = 'albums' | 'artists' | 'tracks'
+
+const DEVICE_LIB_VIEW_STORAGE_KEY = 'crate.device.libraryView.v1'
+
+const DEVICE_LIB_VIEWS: Array<{ value: DeviceLibraryView; label: string; icon: IconName }> = [
+  { value: 'albums', label: 'Álbumes', icon: 'album' },
+  { value: 'artists', label: 'Artistas', icon: 'artist' },
+  { value: 'tracks', label: 'Temas', icon: 'song' },
+]
+
+function loadDeviceLibView(): DeviceLibraryView {
+  if (typeof window === 'undefined') return 'albums'
+  try {
+    const raw = window.localStorage.getItem(DEVICE_LIB_VIEW_STORAGE_KEY)
+    if (raw === 'albums' || raw === 'artists' || raw === 'tracks') return raw
+  } catch {
+    /* ignore */
+  }
+  return 'albums'
+}
+
+function persistDeviceLibView(view: DeviceLibraryView): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(DEVICE_LIB_VIEW_STORAGE_KEY, view)
+  } catch {
+    /* ignore */
+  }
 }
 
 function TrackRows({ tracks }: { tracks: DeviceTrack[] }) {
@@ -148,22 +178,119 @@ function ThemeScanNotice({
   )
 }
 
-function ThemeRows({ themes, scan }: { themes: RockboxThemeSummary[]; scan: RockboxThemeScanDiagnostic }) {
+function ThemeFilePill({ label, value, missing = false }: { label: string; value: string | null; missing?: boolean }) {
+  return (
+    <span className={`device-theme-file-pill ${value ? 'present' : ''} ${missing ? 'missing' : ''}`}>
+      <em>{label}</em>
+      <strong>{value || '-'}</strong>
+    </span>
+  )
+}
+
+function ThemePreview({ theme }: { theme: RockboxThemeSummary | null }) {
+  if (!theme) {
+    return (
+      <aside className="device-theme-preview empty">
+        <Icon name="sparkle" size={24} />
+        <strong>Sin theme seleccionado</strong>
+        <span>Importá o seleccioná un theme Rockbox para ver sus archivos.</span>
+      </aside>
+    )
+  }
+  const hasMissingFiles = theme.missingFiles.length > 0
+  return (
+    <aside className="device-theme-preview">
+      <div className="device-theme-preview-device">
+        <div className="device-theme-preview-screen">
+          <span>{theme.name}</span>
+          <strong>{theme.wpsPath ? 'WPS ready' : 'No WPS'}</strong>
+          <em>{theme.backdropPath ? 'Backdrop linked' : 'Default backdrop'}</em>
+        </div>
+      </div>
+      <div className="device-theme-preview-main">
+        <div className="device-theme-preview-head">
+          <div>
+            <h2>{theme.name}</h2>
+            <span>{theme.configPath} · {theme.fileCount} archivos detectados</span>
+          </div>
+          <b className={hasMissingFiles ? 'warning' : 'ok'}>{hasMissingFiles ? `${theme.missingFiles.length} faltantes` : 'Completo'}</b>
+        </div>
+        <div className="device-theme-file-grid">
+          <ThemeFilePill label="WPS" value={theme.wpsPath} />
+          <ThemeFilePill label="SBS" value={theme.sbsPath} />
+          <ThemeFilePill label="FMS" value={theme.fmsPath} />
+          <ThemeFilePill label="Font" value={theme.font} missing={theme.font != null && theme.missingFiles.includes(theme.font)} />
+          <ThemeFilePill label="Backdrop" value={theme.backdropPath} />
+          <ThemeFilePill label="Icons" value={theme.iconsetPath ?? theme.viewerIconsetPath} />
+        </div>
+        {hasMissingFiles && (
+          <div className="device-theme-missing-list">
+            <span>Archivos referenciados que no existen</span>
+            {theme.missingFiles.slice(0, 5).map(path => <code key={path}>{path}</code>)}
+            {theme.missingFiles.length > 5 && <em>{theme.missingFiles.length - 5} más</em>}
+          </div>
+        )}
+      </div>
+    </aside>
+  )
+}
+
+function ThemeRows({
+  themes,
+  scan,
+  selectedThemeId,
+  onSelect,
+  onDelete,
+  loading,
+}: {
+  themes: RockboxThemeSummary[]
+  scan: RockboxThemeScanDiagnostic
+  selectedThemeId: string | null
+  onSelect: (themeId: string) => void
+  onDelete: (theme: RockboxThemeSummary) => void
+  loading: boolean
+}) {
   if (themes.length === 0) {
     return <div className="device-empty">{scan.message ?? 'No hay temas Rockbox instalados.'}</div>
   }
   return (
     <div className="device-entity-table">
       {themes.map(theme => (
-        <div className="device-theme-row" key={theme.id}>
+        <div
+          className={`device-theme-row ${selectedThemeId === theme.id ? 'active' : ''}`}
+          key={theme.id}
+          role="button"
+          tabIndex={0}
+          onClick={() => onSelect(theme.id)}
+          onKeyDown={event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              onSelect(theme.id)
+            }
+          }}
+        >
           <Icon name="sparkle" size={16} />
           <span className="device-entity-main">
             <strong>{theme.name}</strong>
-            <em>{theme.configPath}</em>
+            <em>{theme.configPath} · {theme.fileCount} archivos</em>
           </span>
           <span>{theme.wpsPath ? 'WPS' : '-'}</span>
           <span>{theme.sbsPath ? 'SBS' : '-'}</span>
-          <span>{theme.font ?? '-'}</span>
+          <span className={theme.missingFiles.length > 0 ? 'device-theme-row-warning' : ''}>
+            {theme.missingFiles.length > 0 ? `${theme.missingFiles.length} faltantes` : theme.font ?? '-'}
+          </span>
+          <button
+            className="btn icon"
+            type="button"
+            disabled={loading}
+            title="Eliminar theme"
+            onClick={event => {
+              event.stopPropagation()
+              onDelete(theme)
+            }}
+          >
+            <Icon name="trash" size={12} />
+          </button>
         </div>
       ))}
     </div>
@@ -184,11 +311,20 @@ export function DeviceLibraryView({
   const loadDeviceLibrary = useDeviceStore(s => s.loadDeviceLibrary)
   const loadRockboxThemes = useDeviceStore(s => s.loadRockboxThemes)
   const installRockboxThemes = useDeviceStore(s => s.installRockboxThemes)
+  const deleteRockboxTheme = useDeviceStore(s => s.deleteRockboxTheme)
   const themeInstallResult = useDeviceStore(s => s.themeInstallResult)
   const library = useDeviceLibrary(deviceId)
   const rockboxThemeLibrary = useRockboxThemeLibrary(deviceId)
   const [dragOver, setDragOver] = useState(false)
+  const [selectedThemeId, setSelectedThemeId] = useState<string | null>(null)
+  const [libView, setLibView] = useState<DeviceLibraryView>(() => loadDeviceLibView())
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const isRockboxSection = section === 'rockboxThemes'
+
+  const changeLibView = (view: DeviceLibraryView) => {
+    setLibView(view)
+    persistDeviceLibView(view)
+  }
 
   useEffect(() => {
     if (devices.length === 0) void load()
@@ -215,6 +351,12 @@ export function DeviceLibraryView({
     }
   }
 
+  useEffect(() => {
+    if (!isRockboxSection || !rockboxThemeLibrary) return
+    if (selectedThemeId && rockboxThemeLibrary.themes.some(theme => theme.id === selectedThemeId)) return
+    setSelectedThemeId(rockboxThemeLibrary.themes[0]?.id ?? null)
+  }, [isRockboxSection, rockboxThemeLibrary, selectedThemeId])
+
   const onDrop = async (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault()
     setDragOver(false)
@@ -227,9 +369,32 @@ export function DeviceLibraryView({
     }
   }
 
+  const onPickThemeFiles = async (files: FileList | null) => {
+    const picked = Array.from(files ?? [])
+    if (picked.length === 0) return
+    try {
+      await installRockboxThemes(deviceId, picked)
+    } catch {
+      /* store surfaces the error */
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  const removeTheme = async (theme: RockboxThemeSummary) => {
+    const confirmed = window.confirm(`Eliminar "${theme.name}" de Rockbox? Se borra el .cfg y skins asociados, no fuentes compartidas.`)
+    if (!confirmed) return
+    try {
+      await deleteRockboxTheme(deviceId, theme.id)
+    } catch {
+      /* store surfaces the error */
+    }
+  }
+
   function renderSection() {
     if (isRockboxSection) {
       if (!rockboxThemeLibrary) return <div className="device-empty large">Cargando themes...</div>
+      const selectedTheme = rockboxThemeLibrary.themes.find(theme => theme.id === selectedThemeId) ?? rockboxThemeLibrary.themes[0] ?? null
       return (
         <div
           className={`device-theme-panel ${dragOver ? 'drag-over' : ''}`}
@@ -246,6 +411,16 @@ export function DeviceLibraryView({
               <strong>Soltá carpetas o ZIP de Rockbox</strong>
               <span>Se instalan dentro de .rockbox/themes, .rockbox/wps, fonts, icons y backdrops.</span>
             </div>
+            <button className="btn" type="button" disabled={loading} onClick={() => fileInputRef.current?.click()}>
+              <Icon name="folder" size={13} /> Importar
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden-file-input"
+              onChange={event => { void onPickThemeFiles(event.target.files) }}
+            />
           </div>
           {themeInstallResult && (
             <div className={themeInstallResult.failed > 0 ? 'device-error inline' : 'sync-result-ok'}>
@@ -253,18 +428,28 @@ export function DeviceLibraryView({
             </div>
           )}
           <ThemeScanNotice scan={rockboxThemeLibrary.scan} themeCount={rockboxThemeLibrary.themes.length} />
-          <ThemeRows themes={rockboxThemeLibrary.themes} scan={rockboxThemeLibrary.scan} />
+          <div className="device-theme-workbench">
+            <ThemeRows
+              themes={rockboxThemeLibrary.themes}
+              scan={rockboxThemeLibrary.scan}
+              selectedThemeId={selectedTheme?.id ?? null}
+              onSelect={setSelectedThemeId}
+              onDelete={theme => { void removeTheme(theme) }}
+              loading={loading}
+            />
+            <ThemePreview theme={selectedTheme} />
+          </div>
         </div>
       )
     }
     if (!library) return <div className="device-empty large">Cargando dispositivo...</div>
     switch (section) {
-      case 'tracks':
-        return <TrackRows tracks={library.tracks} />
-      case 'albums':
-        return <AlbumRows albums={library.albums} />
-      case 'artists':
-        return <ArtistRows artists={library.artists} />
+      case 'library':
+        return libView === 'albums'
+          ? <AlbumRows albums={library.albums} />
+          : libView === 'artists'
+            ? <ArtistRows artists={library.artists} />
+            : <TrackRows tracks={library.tracks} />
       case 'playlists':
         return <PlaylistRows playlists={library.playlists} />
     }
@@ -280,6 +465,23 @@ export function DeviceLibraryView({
           </div>
         </div>
         <div className="actions">
+          {section === 'library' && (
+            <div className="device-lib-view-switch" role="tablist" aria-label="Vista de biblioteca">
+              {DEVICE_LIB_VIEWS.map(item => (
+                <button
+                  key={item.value}
+                  className={libView === item.value ? 'active' : ''}
+                  type="button"
+                  role="tab"
+                  aria-selected={libView === item.value}
+                  title={item.label}
+                  onClick={() => changeLibView(item.value)}
+                >
+                  <Icon name={item.icon} size={13} /> {item.label}
+                </button>
+              ))}
+            </div>
+          )}
           <button className="btn" type="button" disabled={loading} onClick={refresh}>
             <Icon name="rotate" size={13} /> Actualizar
           </button>

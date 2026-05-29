@@ -40,15 +40,18 @@ import type {
   DeviceConnectPayload,
   DeviceLibraryResult,
   DeviceMusicRootPickResult,
+  DeviceOverviewResult,
   DevicePendingJournal,
   DeviceRecord,
   DeviceScanProgressEvent,
   DeviceScanResult,
   DeviceSettingsUpdate,
+  DeviceSyncApplySelection,
   DeviceSyncApplyResult,
   DeviceSyncPlan,
   DeviceSyncPlanRequest,
   DeviceSyncProgressEvent,
+  RockboxThemeDeleteResult,
   DeviceVolumeSnapshot,
   RockboxThemeInstallResult,
   RockboxThemeLibraryResult,
@@ -294,6 +297,8 @@ const api: Api = {
       ipcRenderer.invoke('devices:updateSettings', deviceId, settings) as Promise<DeviceRecord>,
     list: () =>
       ipcRenderer.invoke('devices:list') as Promise<DeviceRecord[]>,
+    overview: (deviceId: string) =>
+      ipcRenderer.invoke('devices:overview', deviceId) as Promise<DeviceOverviewResult>,
     scan: (deviceId: string) =>
       ipcRenderer.invoke('devices:scan', deviceId) as Promise<DeviceScanResult>,
     library: (deviceId: string) =>
@@ -302,8 +307,8 @@ const api: Api = {
       ipcRenderer.invoke('devices:rockboxThemes', deviceId) as Promise<RockboxThemeLibraryResult>,
     planSync: (payload: DeviceSyncPlanRequest) =>
       ipcRenderer.invoke('devices:planSync', payload) as Promise<DeviceSyncPlan>,
-    applySync: (planId: string) =>
-      ipcRenderer.invoke('devices:applySync', planId) as Promise<DeviceSyncApplyResult>,
+    applySync: (planId: string, selection?: DeviceSyncApplySelection) =>
+      ipcRenderer.invoke('devices:applySync', planId, selection) as Promise<DeviceSyncApplyResult>,
     installRockboxThemesFromFiles: (deviceId: string, files: unknown[]) => {
       const paths = files
         .map(file => {
@@ -316,6 +321,8 @@ const api: Api = {
         .filter(path => path.trim().length > 0)
       return ipcRenderer.invoke('devices:rockboxThemes:install', deviceId, paths) as Promise<RockboxThemeInstallResult>
     },
+    deleteRockboxTheme: (deviceId: string, themeId: string) =>
+      ipcRenderer.invoke('devices:rockboxThemes:delete', deviceId, themeId) as Promise<RockboxThemeDeleteResult>,
     listPendingJournals: () =>
       ipcRenderer.invoke('devices:listPendingJournals') as Promise<DevicePendingJournal[]>,
     resumeJournal: (journalId: string) =>

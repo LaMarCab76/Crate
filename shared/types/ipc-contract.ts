@@ -14,16 +14,19 @@ import type {
   DeviceConnectPayload,
   DeviceLibraryResult,
   DeviceMusicRootPickResult,
+  DeviceOverviewResult,
   DevicePendingJournal,
   DeviceRecord,
   DeviceScanProgressEvent,
   DeviceScanResult,
   DeviceSettingsUpdate,
+  DeviceSyncApplySelection,
   DeviceSyncApplyResult,
   DeviceSyncPlan,
   DeviceSyncPlanRequest,
   DeviceSyncProgressEvent,
   DeviceVolumeSnapshot,
+  RockboxThemeDeleteResult,
   RockboxThemeInstallResult,
   RockboxThemeLibraryResult,
 } from './device-sync'
@@ -347,6 +350,7 @@ export interface ProgressEvent {
 export interface BufferProgressEvent {
   currentPath: string | null
   source: StreamLoadSource
+  reason: StreamLoadFailureReason | null
   bufferedBytes: number | null
   totalBytes: number | null
   bufferedSec: number | null
@@ -543,12 +547,14 @@ export interface DevicesApi {
   connect(payload: DeviceConnectPayload): Promise<DeviceRecord>
   updateSettings(deviceId: string, settings: DeviceSettingsUpdate): Promise<DeviceRecord>
   list(): Promise<DeviceRecord[]>
+  overview(deviceId: string): Promise<DeviceOverviewResult>
   scan(deviceId: string): Promise<DeviceScanResult>
   library(deviceId: string): Promise<DeviceLibraryResult>
   rockboxThemes(deviceId: string): Promise<RockboxThemeLibraryResult>
   planSync(payload: DeviceSyncPlanRequest): Promise<DeviceSyncPlan>
-  applySync(planId: string): Promise<DeviceSyncApplyResult>
+  applySync(planId: string, selection?: DeviceSyncApplySelection): Promise<DeviceSyncApplyResult>
   installRockboxThemesFromFiles(deviceId: string, files: unknown[]): Promise<RockboxThemeInstallResult>
+  deleteRockboxTheme(deviceId: string, themeId: string): Promise<RockboxThemeDeleteResult>
   listPendingJournals(): Promise<DevicePendingJournal[]>
   resumeJournal(journalId: string): Promise<DeviceSyncApplyResult>
   discardJournal(journalId: string): Promise<void>

@@ -21,6 +21,7 @@ import { SettingsView } from './views/SettingsView'
 import { ImportView } from './views/ImportView'
 import { GenresView } from './views/GenresView'
 import { DevicesView } from './views/DevicesView'
+import { DeviceSyncView } from './views/DeviceSyncView'
 import { DeviceLibraryView, type DeviceLibrarySection } from './views/DeviceLibraryView'
 import { useTweaks, useListPrefsStore } from './stores/settingsStore'
 import { useAlbumByUiId, useFavoriteTracks, useLibraryStore } from './stores/libraryStore'
@@ -40,7 +41,7 @@ export type View =
   | { kind: 'settings' }
   | { kind: 'import' }
   | { kind: 'devices' }
-  | { kind: 'device'; deviceId: string; section: 'dashboard' | DeviceLibrarySection }
+  | { kind: 'device'; deviceId: string; section: 'dashboard' | 'sync' | DeviceLibrarySection }
   | { kind: 'album'; album: Album }
   | { kind: 'artist'; artist: Artist }
   | { kind: 'playlist'; playlist: Playlist }
@@ -648,9 +649,9 @@ export default function App() {
       case 'devices':
         return <DevicesView />
       case 'device':
-        return view.section === 'dashboard'
-          ? <DevicesView deviceId={view.deviceId} />
-          : <DeviceLibraryView deviceId={view.deviceId} section={view.section} />
+        if (view.section === 'dashboard') return <DevicesView deviceId={view.deviceId} />
+        if (view.section === 'sync') return <DeviceSyncView deviceId={view.deviceId} />
+        return <DeviceLibraryView deviceId={view.deviceId} section={view.section} />
       case 'genres':
         return <GenresView onSelectAlbum={al => navigate({ kind: 'album', album: al })} />
       default:

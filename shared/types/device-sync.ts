@@ -116,6 +116,19 @@ export interface DeviceStorageSummary {
   error: string | null
 }
 
+export interface DeviceCapacitySummary {
+  totalBytes: number
+  usedBytes: number
+  freeBytes: number
+  scannedAt: string
+  error: string | null
+}
+
+export interface DeviceOverviewResult {
+  device: DeviceRecord
+  capacity: DeviceCapacitySummary
+}
+
 export interface DeviceScanResult {
   device: DeviceRecord
   tracks: DeviceTrack[]
@@ -160,6 +173,11 @@ export interface RockboxThemeSummary {
   sbsPath: string | null
   fmsPath: string | null
   font: string | null
+  backdropPath: string | null
+  iconsetPath: string | null
+  viewerIconsetPath: string | null
+  fileCount: number
+  missingFiles: string[]
   updatedAt: string | null
 }
 
@@ -213,6 +231,22 @@ export interface RockboxThemeInstallResult {
   scan: RockboxThemeScanDiagnostic
 }
 
+export interface RockboxThemeDeleteFileResult {
+  path: string
+  status: 'deleted' | 'missing' | 'failed'
+  error: string | null
+}
+
+export interface RockboxThemeDeleteResult {
+  themeId: string
+  deleted: number
+  missing: number
+  failed: number
+  files: RockboxThemeDeleteFileResult[]
+  themes: RockboxThemeSummary[]
+  scan: RockboxThemeScanDiagnostic
+}
+
 export interface DeviceScanProgressEvent {
   deviceId: string
   scanned: number
@@ -255,10 +289,26 @@ export interface DeviceSyncAction {
   title: string
   artist: string
   album: string
+  pcPath: string | null
+  pcRelativePath: string | null
+  pcBytes: number | null
+  devicePath: string | null
+  deviceRelativePath: string | null
+  deviceBytes: number | null
   sourcePath: string | null
   destinationPath: string | null
   bytes: number
   reason: string
+}
+
+export interface DeviceSyncConflictResolution {
+  actionId: string
+  kind: DeviceSyncActionKind
+}
+
+export interface DeviceSyncApplySelection {
+  actionIds?: string[]
+  conflictResolutions?: DeviceSyncConflictResolution[]
 }
 
 export interface DeviceSyncPlanRequest {

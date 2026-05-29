@@ -45,10 +45,9 @@ function titleForView(view: View): string {
   if (view.kind === 'artist') return view.artist.name
   if (view.kind === 'playlist') return view.playlist.name
   if (view.kind === 'device') {
-    if (view.section === 'dashboard') return 'Device Sync'
-    if (view.section === 'tracks') return 'Device Songs'
-    if (view.section === 'albums') return 'Device Albums'
-    if (view.section === 'artists') return 'Device Artists'
+    if (view.section === 'dashboard') return 'Device'
+    if (view.section === 'sync') return 'Device Sync'
+    if (view.section === 'library') return 'Device Library'
     if (view.section === 'playlists') return 'Device Playlists'
     return 'Rockbox Themes'
   }

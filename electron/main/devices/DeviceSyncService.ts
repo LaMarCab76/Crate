@@ -40,15 +40,18 @@ import type {
   DeviceArtistSummary,
   DeviceCandidate,
   DeviceConnectPayload,
+  DeviceCapacitySummary,
   DeviceJournalStatus,
   DeviceLibraryResult,
   DeviceMusicRootPickResult,
+  DeviceOverviewResult,
   DevicePlaylistSummary,
   DevicePendingJournal,
   DevicePortableState,
   DeviceRecord,
   DeviceScanResult,
   DeviceScanSummary,
+  DeviceSyncApplySelection,
   DeviceSettingsUpdate,
   DeviceStorageSummary,
   DeviceSyncAction,
@@ -65,6 +68,8 @@ import type {
   DeviceVersionInfo,
   DeviceVolumeSnapshot,
   PcTrack,
+  RockboxThemeDeleteFileResult,
+  RockboxThemeDeleteResult,
   RockboxThemeInstallResult,
   RockboxThemeInstallSourceResult,
   RockboxThemeLibraryResult,
@@ -216,6 +221,7 @@ interface SyncJournalYaml {
   status: DeviceJournalStatus
   phase: DeviceSyncPhase | null
   plan: DeviceSyncPlan
+  writeCompleteState?: boolean
   deviceRoot: string
   deviceMusicRoot: string
   startedAt: string
@@ -483,6 +489,16 @@ function emptyStorageSummary(error: string | null = null): DeviceStorageSummary 
     musicBytes: 0,
     rockboxBytes: 0,
     otherBytes: 0,
+    scannedAt: nowIso(),
+    error,
+  }
+}
+
+function emptyCapacitySummary(error: string | null = null): DeviceCapacitySummary {
+  return {
+    totalBytes: 0,
+    usedBytes: 0,
+    freeBytes: 0,
     scannedAt: nowIso(),
     error,
   }
@@ -852,6 +868,18 @@ export class DeviceSyncService {
     }
   }
 
+  async overview(deviceId: string): Promise<DeviceOverviewResult> {
+    const stored = this.getDeviceRow(deviceId)
+    if (!stored) throw new Error('Device is not connected')
+    const row = existsSync(stored.root_path)
+      ? this.refreshDeviceRockboxState(stored)
+      : stored
+    return {
+      device: this.rowToRecord(row),
+      capacity: await this.deviceCapacity(row),
+    }
+  }
+
   async deviceLibrary(deviceId: string): Promise<DeviceLibraryResult> {
     const row = this.requireDevice(deviceId)
     const scan = await this.scanDeviceRow(row, false)
@@ -903,6 +931,39 @@ export class DeviceSyncService {
       device,
       themes: rockboxThemeResult.themes,
       scan: rockboxThemeResult.scan,
+    }
+  }
+
+  async deleteRockboxTheme(deviceId: string, themeId: string): Promise<RockboxThemeDeleteResult> {
+    const row = this.requireDevice(deviceId)
+    const rockboxRoot = join(row.root_path, ROCKBOX_DIR)
+    const before = await scanRockboxThemes(row.root_path)
+    const theme = before.themes.find(item => item.id === themeId)
+    if (!theme) throw new Error('Rockbox theme was not found')
+
+    const candidatePaths = new Set<string>([
+      theme.configPath,
+      theme.wpsPath ?? '',
+      theme.sbsPath ?? '',
+      theme.fmsPath ?? '',
+    ].filter(Boolean))
+    const themeAssetDir = `wps/${sanitizeThemeName(theme.name)}`
+    if (existsSync(fromPosix(rockboxRoot, themeAssetDir))) candidatePaths.add(themeAssetDir)
+
+    const files: RockboxThemeDeleteFileResult[] = []
+    for (const relativePath of [...candidatePaths]) {
+      files.push(await this.deleteRockboxThemePath(rockboxRoot, relativePath))
+    }
+
+    const after = await scanRockboxThemes(row.root_path)
+    return {
+      themeId,
+      deleted: files.filter(file => file.status === 'deleted').length,
+      missing: files.filter(file => file.status === 'missing').length,
+      failed: files.filter(file => file.status === 'failed').length,
+      files,
+      themes: after.themes,
+      scan: after.scan,
     }
   }
 
@@ -981,26 +1042,80 @@ export class DeviceSyncService {
     }
   }
 
-  async applySync(planId: string): Promise<DeviceSyncApplyResult> {
+  private planForSelection(
+    plan: DeviceSyncPlan,
+    selection: DeviceSyncApplySelection | undefined,
+    deviceMusicRoot: string,
+  ): DeviceSyncPlan {
+    if (!selection) return plan
+
+    const selectedIds = new Set(selection.actionIds ?? [])
+    const hasExplicitSelection = Array.isArray(selection.actionIds)
+    const resolutions = new Map(
+      (selection.conflictResolutions ?? []).map(item => [item.actionId, item.kind]),
+    )
+    const actions: DeviceSyncAction[] = []
+
+    for (const action of plan.actions) {
+      const resolution = resolutions.get(action.id)
+      if (resolution && resolution !== 'skip_conflict') {
+        if (hasExplicitSelection && !selectedIds.has(action.id)) continue
+        actions.push(this.resolvePlanAction(action, resolution, deviceMusicRoot, plan.pcTargetPath))
+        continue
+      }
+
+      if (action.kind === 'skip_conflict') continue
+      if (!hasExplicitSelection || selectedIds.has(action.id)) actions.push(action)
+    }
+
+    return {
+      ...plan,
+      actions,
+      summary: summaryFor(actions, plan.summary.pcBefore, plan.summary.deviceBefore),
+    }
+  }
+
+  private selectionCoversPlan(plan: DeviceSyncPlan, selection: DeviceSyncApplySelection | undefined): boolean {
+    const selectedIds = new Set(selection?.actionIds ?? [])
+    const hasExplicitSelection = Array.isArray(selection?.actionIds)
+    const resolutions = new Map(
+      (selection?.conflictResolutions ?? []).map(item => [item.actionId, item.kind]),
+    )
+
+    for (const action of plan.actions) {
+      if (action.kind === 'skip_conflict') {
+        const resolution = resolutions.get(action.id)
+        if (!resolution || resolution === 'skip_conflict') return false
+      } else if (hasExplicitSelection && !selectedIds.has(action.id)) {
+        return false
+      }
+    }
+
+    return true
+  }
+
+  async applySync(planId: string, selection?: DeviceSyncApplySelection): Promise<DeviceSyncApplyResult> {
     this.purgeExpiredPlans()
     const cached = this.planCache.get(planId)
-    if (!cached) throw new Error('Sync plan expired. Create a new preview before applying.')
+    if (!cached) throw new Error('Sync plan expired. Create a new plan before applying.')
 
     const { plan, deviceRoot, deviceMusicRoot } = cached
     const row = this.requireDevice(plan.deviceId)
     await this.assertPortableStateWritable(row)
+    const executablePlan = this.planForSelection(plan, selection, deviceMusicRoot)
+    const writeCompleteState = this.selectionCoversPlan(plan, selection)
     const runId = randomUUID()
     const startedAt = nowIso()
-    const journal = this.createSyncJournal(runId, plan, deviceRoot, deviceMusicRoot, startedAt)
+    const journal = this.createSyncJournal(runId, executablePlan, deviceRoot, deviceMusicRoot, startedAt, writeCompleteState)
     const journalPath = this.journalPath(deviceRoot, journal.id)
     try {
       await writeYamlFile(journalPath, journal)
     } catch (err) {
       throw this.syncPortableWriteError(err)
     }
-    this.upsertSyncRun(runId, plan, startedAt)
+    this.upsertSyncRun(runId, executablePlan, startedAt)
 
-    const result = await this.executeJournal(row, plan, deviceRoot, deviceMusicRoot, journalPath, journal, cached.deviceFiles)
+    const result = await this.executeJournal(row, executablePlan, deviceRoot, deviceMusicRoot, journalPath, journal, cached.deviceFiles, writeCompleteState)
     if (result.failed.length === 0) this.planCache.delete(plan.id)
     return result
   }
@@ -1030,7 +1145,16 @@ export class DeviceSyncService {
     await writeYamlFile(found.path, journal)
     this.upsertSyncRun(journal.runId, journal.plan, journal.startedAt)
 
-    return this.executeJournal(row, journal.plan, row.root_path, deviceMusicRoot, found.path, journal)
+    return this.executeJournal(
+      row,
+      journal.plan,
+      row.root_path,
+      deviceMusicRoot,
+      found.path,
+      journal,
+      undefined,
+      journal.writeCompleteState ?? true,
+    )
   }
 
   async discardJournal(journalId: string): Promise<void> {
@@ -1084,6 +1208,7 @@ export class DeviceSyncService {
     deviceRoot: string,
     deviceMusicRoot: string,
     startedAt: string,
+    writeCompleteState: boolean,
   ): SyncJournalYaml {
     return {
       version: DEVICE_STATE_VERSION,
@@ -1093,6 +1218,7 @@ export class DeviceSyncService {
       status: 'running',
       phase: null,
       plan,
+      writeCompleteState,
       deviceRoot,
       deviceMusicRoot,
       startedAt,
@@ -1240,6 +1366,7 @@ export class DeviceSyncService {
     journalPath: string,
     journal: SyncJournalYaml,
     deviceFilesHint?: string[],
+    writeCompleteState = true,
   ): Promise<DeviceSyncApplyResult> {
     const affectedPcFolderIds = new Set<number>()
     try {
@@ -1288,7 +1415,7 @@ export class DeviceSyncService {
 
       if (failed.length === 0) {
         this.broadcastSyncProgress(plan, 'writing_state', journal.actions.length, journal.actions.length)
-        await this.writeSuccessfulState(row, plan, result)
+        await this.writeSuccessfulState(row, plan, result, writeCompleteState)
         this.finishSyncRun(journal.runId, 'success', completedAt, result)
         journal.status = 'completed'
         journal.phase = 'complete'
@@ -1676,6 +1803,28 @@ export class DeviceSyncService {
     }
   }
 
+  private async deviceCapacity(row: DeviceRow): Promise<DeviceCapacitySummary> {
+    if (!existsSync(row.root_path)) {
+      return emptyCapacitySummary('Device is offline')
+    }
+
+    try {
+      const fsStats = await statfs(row.root_path)
+      const blockSize = Math.max(0, Number(fsStats.bsize) || 0)
+      const totalBytes = Math.max(0, Number(fsStats.blocks) * blockSize)
+      const freeBytes = Math.max(0, Number(fsStats.bavail) * blockSize)
+      return {
+        totalBytes,
+        usedBytes: Math.max(0, totalBytes - freeBytes),
+        freeBytes,
+        scannedAt: nowIso(),
+        error: null,
+      }
+    } catch (err) {
+      return emptyCapacitySummary(errorMessage(err))
+    }
+  }
+
   private resolvePlaylistEntry(
     rawEntry: string,
     playlistPath: string,
@@ -1770,6 +1919,25 @@ export class DeviceSyncService {
       }
     } finally {
       if (tempDir) await rm(tempDir, { recursive: true, force: true }).catch(() => undefined)
+    }
+  }
+
+  private async deleteRockboxThemePath(rockboxRoot: string, relativePath: string): Promise<RockboxThemeDeleteFileResult> {
+    const normalized = relativePath.split('\\').join('/').replace(/^\/+/, '')
+    const target = fromPosix(rockboxRoot, normalized)
+    try {
+      assertInside(resolve(rockboxRoot), resolve(target))
+      if (!existsSync(target)) {
+        return { path: normalized, status: 'missing', error: null }
+      }
+      await rm(target, { recursive: true, force: false })
+      return { path: normalized, status: 'deleted', error: null }
+    } catch (err) {
+      return {
+        path: normalized,
+        status: 'failed',
+        error: err instanceof Error ? err.message : String(err),
+      }
     }
   }
 
@@ -2463,12 +2631,85 @@ export class DeviceSyncService {
       title: detailTrack?.title ?? relativePath,
       artist: detailTrack?.artist ?? '',
       album: detailTrack?.album ?? '',
+      pcPath: pc?.absolutePath ?? null,
+      pcRelativePath: pc?.relativePath ?? null,
+      pcBytes: pc?.fileSize ?? null,
+      devicePath: device?.absolutePath ?? null,
+      deviceRelativePath: device?.relativePath ?? null,
+      deviceBytes: device?.fileSize ?? null,
       sourcePath,
       destinationPath,
       bytes: kind === 'delete_device' || kind === 'delete_pc' || kind === 'skip_conflict'
         ? 0
         : detailTrack?.fileSize ?? 0,
       reason,
+    }
+  }
+
+  private resolvePlanAction(
+    action: DeviceSyncAction,
+    kind: DeviceSyncActionKind,
+    deviceMusicRoot: string,
+    pcTargetPath: string,
+  ): DeviceSyncAction {
+    if (kind === 'skip_conflict') return action
+    const allowedKinds: DeviceSyncActionKind[] =
+      action.pcPath && action.devicePath
+        ? ['replace_device', 'replace_pc']
+        : action.pcPath
+          ? ['copy_pc_to_device', 'delete_pc']
+          : action.devicePath
+            ? ['copy_device_to_pc', 'delete_device']
+            : []
+    if (!allowedKinds.includes(kind)) {
+      throw new Error(`Invalid resolution ${kind} for ${action.relativePath}`)
+    }
+
+    const pcRelativePath = action.pcRelativePath ?? action.relativePath
+    const deviceRelativePath = action.deviceRelativePath ?? action.relativePath
+    const pcDestination = action.pcPath ?? fromPosix(pcTargetPath, deviceRelativePath)
+    const deviceDestination = action.devicePath ?? fromPosix(deviceMusicRoot, pcRelativePath)
+    const sourcePath =
+      kind === 'copy_pc_to_device' || kind === 'replace_device' || kind === 'delete_pc'
+        ? action.pcPath
+        : action.devicePath
+    const destinationPath =
+      kind === 'copy_pc_to_device'
+        ? deviceDestination
+        : kind === 'replace_device'
+          ? deviceDestination
+          : kind === 'copy_device_to_pc'
+            ? pcDestination
+            : kind === 'replace_pc'
+              ? pcDestination
+              : null
+    const relativePath =
+      kind === 'copy_pc_to_device' || kind === 'replace_device' || kind === 'delete_pc'
+        ? pcRelativePath
+        : deviceRelativePath
+    const bytes =
+      kind === 'copy_pc_to_device' || kind === 'replace_device'
+        ? action.pcBytes ?? action.bytes
+        : kind === 'copy_device_to_pc' || kind === 'replace_pc'
+          ? action.deviceBytes ?? action.bytes
+          : 0
+
+    if ((kind === 'copy_pc_to_device' || kind === 'replace_device' || kind === 'delete_pc') && !action.pcPath) {
+      throw new Error(`Cannot resolve ${kind}: PC file is missing`)
+    }
+    if ((kind === 'copy_device_to_pc' || kind === 'replace_pc' || kind === 'delete_device') && !action.devicePath) {
+      throw new Error(`Cannot resolve ${kind}: device file is missing`)
+    }
+
+    return {
+      ...action,
+      id: action.id,
+      kind,
+      relativePath,
+      sourcePath,
+      destinationPath,
+      bytes,
+      reason: `${action.reason} · user selected ${kind}`,
     }
   }
 
@@ -2636,7 +2877,12 @@ export class DeviceSyncService {
     await getImportService().scan(folder.id, folder.path)
   }
 
-  private async writeSuccessfulState(row: DeviceRow, plan: DeviceSyncPlan, result: DeviceSyncApplyResult): Promise<void> {
+  private async writeSuccessfulState(
+    row: DeviceRow,
+    plan: DeviceSyncPlan,
+    result: DeviceSyncApplyResult,
+    writeCompleteState: boolean,
+  ): Promise<void> {
     const freshRow = this.getDeviceRow(row.id) ?? row
     try {
       await access(freshRow.root_path)
@@ -2683,7 +2929,9 @@ export class DeviceSyncService {
         createdAt: existingDevice?.createdAt ?? row.created_at,
         updatedAt: completedAt,
       } satisfies DeviceYaml)
-      await writeYamlFile(join(stateDir, 'library-state.yaml'), state)
+      if (writeCompleteState) {
+        await writeYamlFile(join(stateDir, 'library-state.yaml'), state)
+      }
       await writeYamlFile(join(stateDir, 'sync-runs', `${completedAt.replace(/[:.]/g, '-')}-${plan.id}.yaml`), {
         version: DEVICE_STATE_VERSION,
         plan,

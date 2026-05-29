@@ -26,6 +26,22 @@ interface Props {
   setTweak: <K extends keyof Tweak>(key: K, value: Tweak[K]) => void
 }
 
+type SettingsMainTab = 'apariencia' | 'reproduccion' | 'dispositivos' | 'almacenamiento'
+type PlaybackSubTab = 'general' | 'eq' | 'letras'
+
+const SETTINGS_TABS: Array<{ id: SettingsMainTab; label: string }> = [
+  { id: 'apariencia', label: 'Apariencia' },
+  { id: 'reproduccion', label: 'Reproducción' },
+  { id: 'dispositivos', label: 'Dispositivos' },
+  { id: 'almacenamiento', label: 'Almacenamiento local' },
+]
+
+const PLAYBACK_TABS: Array<{ id: PlaybackSubTab; label: string }> = [
+  { id: 'general', label: 'Reproducción' },
+  { id: 'eq', label: 'Eq' },
+  { id: 'letras', label: 'Letras' },
+]
+
 function DeviceDetectionPanel({ tweak, setTweak }: Props) {
   const devices = useDeviceStore(s => s.devices)
   const candidates = useDeviceStore(s => s.candidates)
@@ -359,77 +375,125 @@ function LibraryFoldersPanel() {
   )
 }
 
-export function SettingsView({ tweak, setTweak }: Props) {
-  const [libraryLogOpen, setLibraryLogOpen] = useState(false)
-
+function SettingsSectionNav({
+  activeTab,
+  playbackSubTab,
+  onTabChange,
+  onPlaybackSubTabChange,
+}: {
+  activeTab: SettingsMainTab
+  playbackSubTab: PlaybackSubTab
+  onTabChange: (tab: SettingsMainTab) => void
+  onPlaybackSubTabChange: (tab: PlaybackSubTab) => void
+}) {
   return (
-    <div className="settings">
-      <h1>Preferences</h1>
+    <>
+      <div className="settings-nav" role="tablist" aria-label="Secciones de preferencias">
+        {SETTINGS_TABS.map(tab => (
+          <button
+            key={tab.id}
+            type="button"
+            className={`settings-nav-tab ${activeTab === tab.id ? 'active' : ''}`}
+            role="tab"
+            aria-selected={activeTab === tab.id}
+            aria-controls="settings-content"
+            onClick={() => onTabChange(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      {activeTab === 'reproduccion' && (
+        <div className="settings-nav settings-subnav" role="tablist" aria-label="Subsecciones de reproducción">
+          {PLAYBACK_TABS.map(tab => (
+            <button
+              key={tab.id}
+              type="button"
+              className={`settings-nav-tab settings-nav-tab-sub ${playbackSubTab === tab.id ? 'active' : ''}`}
+              role="tab"
+              aria-selected={playbackSubTab === tab.id}
+              aria-controls="settings-content"
+              onClick={() => onPlaybackSubTabChange(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </>
+  )
+}
 
-      <div className="set-section">
-        <h2>Appearance</h2>
-        <div className="set-card">
-          <div className="set-row">
-            <div>
-              <div className="lbl">Theme</div>
-              <div className="sub">Switch between light & dark interface.</div>
-            </div>
-            <div className="rule-row" style={{ margin: 0 }}>
-              <div
-                className="select"
-                style={{ background: !tweak.dark ? 'var(--bg-selected)' : 'var(--bg-elev)' }}
-                onClick={() => setTweak('dark', false)}
-                role="button" tabIndex={0}
-              >
-                Light
-              </div>
-              <div
-                className="select"
-                style={{ background: tweak.dark ? 'var(--bg-selected)' : 'var(--bg-elev)' }}
-                onClick={() => setTweak('dark', true)}
-                role="button" tabIndex={0}
-              >
-                Dark
-              </div>
-            </div>
+function AppearanceSection({ tweak, setTweak }: Props) {
+  return (
+    <section className="set-section">
+      <h2>Apariencia</h2>
+      <div className="set-card">
+        <div className="set-row">
+          <div>
+            <div className="lbl">Theme</div>
+            <div className="sub">Switch between light & dark interface.</div>
           </div>
-          <div className="set-row">
-            <div>
-              <div className="lbl">Density</div>
-              <div className="sub">Row height in lists & tables.</div>
-            </div>
-            <div className="rule-row" style={{ margin: 0 }}>
-              {(['compact', 'regular', 'comfy'] as const).map(d => (
-                <div
-                  key={d}
-                  className="select"
-                  style={{ background: tweak.density === d ? 'var(--bg-selected)' : 'var(--bg-elev)' }}
-                  onClick={() => setTweak('density', d)}
-                  role="button" tabIndex={0}
-                >
-                  {d}
-                </div>
-              ))}
-            </div>
-          </div>
-          <div className="set-row">
-            <div>
-              <div className="lbl">Translucent sidebar</div>
-              <div className="sub">Vibrancy blur behind the navigation pane.</div>
+          <div className="rule-row" style={{ margin: 0 }}>
+            <div
+              className="select"
+              style={{ background: !tweak.dark ? 'var(--bg-selected)' : 'var(--bg-elev)' }}
+              onClick={() => setTweak('dark', false)}
+              role="button" tabIndex={0}
+            >
+              Light
             </div>
             <div
-              className={`toggle ${tweak.translucent ? 'on' : ''}`}
-              onClick={() => setTweak('translucent', !tweak.translucent)}
-              role="switch"
-              aria-checked={tweak.translucent}
-              tabIndex={0}
-            />
+              className="select"
+              style={{ background: tweak.dark ? 'var(--bg-selected)' : 'var(--bg-elev)' }}
+              onClick={() => setTweak('dark', true)}
+              role="button" tabIndex={0}
+            >
+              Dark
+            </div>
           </div>
-
+        </div>
+        <div className="set-row">
+          <div>
+            <div className="lbl">Density</div>
+            <div className="sub">Row height in lists & tables.</div>
+          </div>
+          <div className="rule-row" style={{ margin: 0 }}>
+            {(['compact', 'regular', 'comfy'] as const).map(d => (
+              <div
+                key={d}
+                className="select"
+                style={{ background: tweak.density === d ? 'var(--bg-selected)' : 'var(--bg-elev)' }}
+                onClick={() => setTweak('density', d)}
+                role="button" tabIndex={0}
+              >
+                {d}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="set-row">
+          <div>
+            <div className="lbl">Translucent sidebar</div>
+            <div className="sub">Vibrancy blur behind the navigation pane.</div>
+          </div>
+          <div
+            className={`toggle ${tweak.translucent ? 'on' : ''}`}
+            onClick={() => setTweak('translucent', !tweak.translucent)}
+            role="switch"
+            aria-checked={tweak.translucent}
+            tabIndex={0}
+          />
         </div>
       </div>
+    </section>
+  )
+}
 
-      <div className="set-section">
+function PlaybackGeneralSection({ tweak, setTweak }: Props) {
+  return (
+    <>
+      <section className="set-section">
         <h2>Now Playing</h2>
         <div className="set-card">
           <div className="set-row">
@@ -521,9 +585,8 @@ export function SettingsView({ tweak, setTweak }: Props) {
             </div>
           </div>
         </div>
-      </div>
-
-      <div className="set-section">
+      </section>
+      <section className="set-section">
         <h2>Playback</h2>
         <div className="set-card">
           <div className="set-row">
@@ -565,88 +628,159 @@ export function SettingsView({ tweak, setTweak }: Props) {
             />
           </div>
         </div>
-      </div>
-
-      <div className="set-section">
+      </section>
+      <section className="set-section">
         <h2>Playback Cache</h2>
         <PlaybackCachePanel />
-      </div>
+      </section>
+    </>
+  )
+}
 
-      <div className="set-section">
-        <h2>Dispositivos</h2>
-        <DeviceDetectionPanel tweak={tweak} setTweak={setTweak} />
-      </div>
+function PlaybackEqSection() {
+  return (
+    <section className="set-section">
+      <h2>Equalizer</h2>
+      <EqPanel />
+    </section>
+  )
+}
 
-      <div className="set-section">
-        <h2>Library</h2>
-        <LibraryFoldersPanel />
-        <div className="set-card">
-          <div className="set-row">
+function PlaybackLyricsSection({ tweak, setTweak }: Props) {
+  return (
+    <section className="set-section">
+      <h2>Lyrics</h2>
+      <div className="set-card">
+        <LyricsGlobalOffsetSetting tweak={tweak} setTweak={setTweak} />
+        {([
+          ['lyricsAutoFetch', 'Buscar letras automáticamente', 'Al reproducir, busca letras en línea (LRCLIB) si no hay en caché.'],
+          ['lyricsPreferSynced', 'Preferir letras sincronizadas', 'Usa la versión con tiempos cuando esté disponible.'],
+          ['lyricsCacheLocal', 'Guardar letras en caché local', 'Cachea los resultados en la base de datos.'],
+        ] as const).map(([key, label, sub]) => (
+          <div className="set-row" key={key}>
             <div>
-              <div className="lbl">Keep portable backup in folder</div>
-              <div className="sub">
-                Saves your plays, favorites, ratings and EQ settings into a hidden{' '}
-                <code style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>.crate/library.yaml</code>
-                {' '}inside each library folder. When you reconnect the folder elsewhere those
-                are merged back automatically.
-              </div>
+              <div className="lbl">{label}</div>
+              <div className="sub">{sub}</div>
             </div>
             <div
-              className={`toggle ${tweak.libraryBackup ? 'on' : ''}`}
-              onClick={() => setTweak('libraryBackup', !tweak.libraryBackup)}
+              className={`toggle ${tweak[key] ? 'on' : ''}`}
+              onClick={() => setTweak(key, !tweak[key])}
               role="switch"
-              aria-checked={tweak.libraryBackup}
+              aria-checked={tweak[key]}
               tabIndex={0}
             />
           </div>
-          <div className="set-row">
-            <div>
-              <div className="lbl">Registro de análisis</div>
-              <div className="sub">Historial de análisis, cambios y archivos omitidos por biblioteca.</div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function DevicesSection({ tweak, setTweak }: Props) {
+  return (
+    <section className="set-section">
+      <h2>Dispositivos</h2>
+      <DeviceDetectionPanel tweak={tweak} setTweak={setTweak} />
+    </section>
+  )
+}
+
+function StorageSection({
+  tweak,
+  setTweak,
+  libraryLogOpen,
+  setLibraryLogOpen,
+}: {
+  tweak: Tweak
+  setTweak: <K extends keyof Tweak>(key: K, value: Tweak[K]) => void
+  libraryLogOpen: boolean
+  setLibraryLogOpen: (value: boolean | ((value: boolean) => boolean)) => void
+}) {
+  return (
+    <section className="set-section">
+      <h2>Almacenamiento local</h2>
+      <LibraryFoldersPanel />
+      <div className="set-card">
+        <div className="set-row">
+          <div>
+            <div className="lbl">Keep portable backup in folder</div>
+            <div className="sub">
+              Saves your plays, favorites, ratings and EQ settings into a hidden{' '}
+              <code style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>.crate/library.yaml</code>
+              {' '}inside each library folder. When you reconnect the folder elsewhere those
+              are merged back automatically.
             </div>
-            <button className="btn" type="button" onClick={() => setLibraryLogOpen(true)}>
-              <Icon name="list" size={13} /> Ver registros
-            </button>
           </div>
+          <div
+            className={`toggle ${tweak.libraryBackup ? 'on' : ''}`}
+            onClick={() => setTweak('libraryBackup', !tweak.libraryBackup)}
+            role="switch"
+            aria-checked={tweak.libraryBackup}
+            tabIndex={0}
+          />
         </div>
-        {libraryLogOpen && (
-          <ModalShell title="Registro de biblioteca" onClose={() => setLibraryLogOpen(false)}>
-            <div className="library-log-modal">
-              <LibraryScanLogPanel tweak={tweak} setTweak={setTweak} />
-            </div>
-          </ModalShell>
+        <div className="set-row">
+          <div>
+            <div className="lbl">Registro de análisis</div>
+            <div className="sub">Historial de análisis, cambios y archivos omitidos por biblioteca.</div>
+          </div>
+          <button className="btn" type="button" onClick={() => setLibraryLogOpen(true)}>
+            <Icon name="list" size={13} /> Ver registros
+          </button>
+        </div>
+      </div>
+      {libraryLogOpen && (
+        <ModalShell title="Registro de biblioteca" onClose={() => setLibraryLogOpen(false)}>
+          <div className="library-log-modal">
+            <LibraryScanLogPanel tweak={tweak} setTweak={setTweak} />
+          </div>
+        </ModalShell>
+      )}
+    </section>
+  )
+}
+
+export function SettingsView({ tweak, setTweak }: Props) {
+  const [libraryLogOpen, setLibraryLogOpen] = useState(false)
+  const [mainTab, setMainTab] = useState<SettingsMainTab>('apariencia')
+  const [playbackSubTab, setPlaybackSubTab] = useState<PlaybackSubTab>('general')
+
+  const switchMainTab = (tab: SettingsMainTab) => {
+    setMainTab(tab)
+  }
+
+  return (
+    <div className="settings">
+      <h1>Preferences</h1>
+      <SettingsSectionNav
+        activeTab={mainTab}
+        playbackSubTab={playbackSubTab}
+        onTabChange={switchMainTab}
+        onPlaybackSubTabChange={setPlaybackSubTab}
+      />
+      <div id="settings-content">
+        {mainTab === 'apariencia' ? (
+          <AppearanceSection tweak={tweak} setTweak={setTweak} />
+        ) : mainTab === 'reproduccion' ? (
+          <div className="settings-tab-content">
+            {playbackSubTab === 'general' ? (
+              <PlaybackGeneralSection tweak={tweak} setTweak={setTweak} />
+            ) : playbackSubTab === 'eq' ? (
+              <PlaybackEqSection />
+            ) : (
+              <PlaybackLyricsSection tweak={tweak} setTweak={setTweak} />
+            )}
+          </div>
+        ) : mainTab === 'dispositivos' ? (
+          <DevicesSection tweak={tweak} setTweak={setTweak} />
+        ) : (
+          <StorageSection
+            tweak={tweak}
+            setTweak={setTweak}
+            libraryLogOpen={libraryLogOpen}
+            setLibraryLogOpen={setLibraryLogOpen}
+          />
         )}
-      </div>
-
-      <div className="set-section">
-        <h2>Lyrics</h2>
-        <div className="set-card">
-          <LyricsGlobalOffsetSetting tweak={tweak} setTweak={setTweak} />
-          {([
-            ['lyricsAutoFetch', 'Buscar letras automáticamente', 'Al reproducir, busca letras en línea (LRCLIB) si no hay en caché.'],
-            ['lyricsPreferSynced', 'Preferir letras sincronizadas', 'Usa la versión con tiempos cuando esté disponible.'],
-            ['lyricsCacheLocal', 'Guardar letras en caché local', 'Cachea los resultados en la base de datos.'],
-          ] as const).map(([key, label, sub]) => (
-            <div className="set-row" key={key}>
-              <div>
-                <div className="lbl">{label}</div>
-                <div className="sub">{sub}</div>
-              </div>
-              <div
-                className={`toggle ${tweak[key] ? 'on' : ''}`}
-                onClick={() => setTweak(key, !tweak[key])}
-                role="switch"
-                aria-checked={tweak[key]}
-                tabIndex={0}
-              />
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="set-section">
-        <h2>Equalizer</h2>
-        <EqPanel />
       </div>
     </div>
   )

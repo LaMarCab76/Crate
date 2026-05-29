@@ -58,8 +58,6 @@ export function PlayerPane({
   const positionSec = usePlaybackStore(s => s.positionSec)
   const durationSec = usePlaybackStore(s => s.durationSec)
   const volume = usePlaybackStore(s => s.volume)
-  const streamSource = usePlaybackStore(s => s.streamSource)
-  const streamSourceState = usePlaybackStore(s => s.streamSourceState)
   const queueNext = useQueueUpNext()
   const queueHistory = useQueueHistory()
   const togglePlay = useQueueStore(s => s.togglePlay)
@@ -265,17 +263,6 @@ export function PlayerPane({
   const canOpenAlbum = album != null && onOpenAlbum != null && !album.id.startsWith('a-unresolved-')
   const canOpenArtist = artist != null && onOpenArtist != null
 
-  const streamSourceLabel = streamSource === 'memory'
-    ? streamSourceState === 'promoting'
-      ? 'Memoria (promoción en curso)'
-      : streamSourceState === 'promoted'
-        ? 'Memoria (promoción exitosa)'
-        : 'Memoria'
-    : streamSource === 'file'
-      ? 'Disco'
-      : 'Sin memoria'
-  const streamSourceClass = streamSource === 'memory' ? 'is-memory' : streamSource === 'file' ? 'is-file' : 'is-none'
-
   const selectOutputDevice = async (device: AudioOutputDevice) => {
     if (device.isCurrent) {
       setDeviceMenuOpen(false)
@@ -434,9 +421,6 @@ export function PlayerPane({
                     </div>
                     <div className="pp-quality-chip">
                       <CodecStrip track={track} compact />
-                    </div>
-                    <div className={`stream-source-badge ${streamSourceClass}`}>
-                      {streamSourceLabel}
                     </div>
                   </div>
                 </div>

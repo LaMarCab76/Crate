@@ -16,6 +16,11 @@ export interface RockboxThemeSummary {
   sbsPath: string | null
   fmsPath: string | null
   font: string | null
+  backdropPath: string | null
+  iconsetPath: string | null
+  viewerIconsetPath: string | null
+  fileCount: number
+  missingFiles: string[]
   updatedAt: string | null
 }
 
@@ -72,6 +77,20 @@ function themeConfigValue(config: string, key: string): string | null {
   return match?.[1]?.replace(/^"|"$/g, '').trim() || null
 }
 
+function themeConfigValues(config: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const rawLine of config.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line || line.startsWith('#')) continue
+    const index = line.indexOf(':')
+    if (index <= 0) continue
+    const key = line.slice(0, index).trim().toLowerCase()
+    const value = line.slice(index + 1).trim().replace(/^"|"$/g, '')
+    if (key && value) out[key] = value
+  }
+  return out
+}
+
 function themeConfigPath(rockboxRoot: string, config: string, key: string, fallback: string | null): string | null {
   const raw = themeConfigValue(config, key)
   const candidates = [
@@ -85,6 +104,24 @@ function themeConfigPath(rockboxRoot: string, config: string, key: string, fallb
   }
 
   return raw && key === 'font' ? normalizeRockboxConfigPath(raw) : null
+}
+
+function themeConfigPathWithMissing(
+  rockboxRoot: string,
+  config: string,
+  key: string,
+  fallback: string | null,
+  missing: Set<string>,
+): string | null {
+  const resolvedPath = themeConfigPath(rockboxRoot, config, key, fallback)
+  const raw = themeConfigValue(config, key)
+  if (resolvedPath) {
+    const absolute = fromPosix(rockboxRoot, resolvedPath)
+    if (!existsSync(absolute)) missing.add(resolvedPath)
+  } else if (raw) {
+    missing.add(normalizeRockboxConfigPath(raw))
+  }
+  return resolvedPath
 }
 
 async function isDirectory(path: string): Promise<boolean | null> {
@@ -215,14 +252,57 @@ export async function scanRockboxThemes(deviceRoot: string): Promise<RockboxThem
       /* still show unreadable cfg files */
     }
     const configStat = await stat(configPath).catch(() => null)
+    const missingFiles = new Set<string>()
+    const configValues = themeConfigValues(config)
+    const wpsPath = themeConfigPathWithMissing(rockboxRoot, config, 'wps', `wps/${name}.wps`, missingFiles)
+    const sbsPath = themeConfigPathWithMissing(rockboxRoot, config, 'sbs', `wps/${name}.sbs`, missingFiles)
+    const fmsPath = themeConfigPathWithMissing(rockboxRoot, config, 'fms', `wps/${name}.fms`, missingFiles)
+    const font = themeConfigPathWithMissing(rockboxRoot, config, 'font', null, missingFiles)
+    const backdropPath = themeConfigPathWithMissing(rockboxRoot, config, 'backdrop', null, missingFiles)
+    const iconsetPath = themeConfigPathWithMissing(rockboxRoot, config, 'iconset', null, missingFiles)
+    const viewerIconsetPath = themeConfigPathWithMissing(rockboxRoot, config, 'viewers iconset', null, missingFiles)
+    const referencedFiles = new Set(
+      [
+        `themes/${entry.name}`,
+        wpsPath,
+        sbsPath,
+        fmsPath,
+        font,
+        backdropPath,
+        iconsetPath,
+        viewerIconsetPath,
+      ].filter((value): value is string => Boolean(value)),
+    )
+    for (const [key, value] of Object.entries(configValues)) {
+      if (
+        key.includes('file') ||
+        key.includes('font') ||
+        key.includes('iconset') ||
+        key.includes('backdrop') ||
+        key === 'wps' ||
+        key === 'sbs' ||
+        key === 'fms'
+      ) {
+        const normalized = normalizeRockboxConfigPath(value)
+        if (normalized && !referencedFiles.has(normalized)) {
+          const absolute = fromPosix(rockboxRoot, normalized)
+          if (isInside(rockboxRoot, resolve(absolute)) && existsSync(absolute)) referencedFiles.add(normalized)
+        }
+      }
+    }
     themes.push({
       id: idForValue(name),
       name,
       configPath: `themes/${entry.name}`,
-      wpsPath: themeConfigPath(rockboxRoot, config, 'wps', `wps/${name}.wps`),
-      sbsPath: themeConfigPath(rockboxRoot, config, 'sbs', `wps/${name}.sbs`),
-      fmsPath: themeConfigPath(rockboxRoot, config, 'fms', `wps/${name}.fms`),
-      font: themeConfigPath(rockboxRoot, config, 'font', null),
+      wpsPath,
+      sbsPath,
+      fmsPath,
+      font,
+      backdropPath,
+      iconsetPath,
+      viewerIconsetPath,
+      fileCount: referencedFiles.size,
+      missingFiles: [...missingFiles].sort((a, b) => a.localeCompare(b)),
       updatedAt: configStat?.mtime.toISOString() ?? null,
     })
   }

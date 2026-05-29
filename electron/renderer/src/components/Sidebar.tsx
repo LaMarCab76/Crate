@@ -196,9 +196,8 @@ export function Sidebar({
               </div>
               {!collapsed && (
                 <>
-                  <DeviceItem id={`dev-${device.id}-tracks`} icon="song" label="Temas" badge={device.trackCount || undefined} section={{ kind: 'device', deviceId: device.id, section: 'tracks' }} />
-                  <DeviceItem id={`dev-${device.id}-albums`} icon="album" label="Álbumes" section={{ kind: 'device', deviceId: device.id, section: 'albums' }} />
-                  <DeviceItem id={`dev-${device.id}-artists`} icon="artist" label="Artistas" section={{ kind: 'device', deviceId: device.id, section: 'artists' }} />
+                  <DeviceItem id={`dev-${device.id}-sync`} icon="sync" label="Sync" section={{ kind: 'device', deviceId: device.id, section: 'sync' }} />
+                  <DeviceItem id={`dev-${device.id}-library`} icon="album" label="Biblioteca" badge={device.trackCount || undefined} section={{ kind: 'device', deviceId: device.id, section: 'library' }} />
                   <DeviceItem id={`dev-${device.id}-playlists`} icon="queue" label="Playlists" section={{ kind: 'device', deviceId: device.id, section: 'playlists' }} />
                   {device.hasRockbox && (
                     <DeviceItem id={`dev-${device.id}-rockboxThemes`} icon="sparkle" label="Rockbox Themes" section={{ kind: 'device', deviceId: device.id, section: 'rockboxThemes' }} />

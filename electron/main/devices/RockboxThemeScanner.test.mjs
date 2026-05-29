@@ -19,13 +19,17 @@ test('lists valid direct Rockbox theme cfg files', async () => {
     mkdirSync(join(root, '.rockbox', 'themes'), { recursive: true })
     mkdirSync(join(root, '.rockbox', 'wps'), { recursive: true })
     mkdirSync(join(root, '.rockbox', 'fonts'), { recursive: true })
+    mkdirSync(join(root, '.rockbox', 'backdrops'), { recursive: true })
     writeFileSync(join(root, '.rockbox', 'wps', 'Foo.wps'), '')
     writeFileSync(join(root, '.rockbox', 'wps', 'Foo.sbs'), '')
     writeFileSync(join(root, '.rockbox', 'fonts', '08-Foo.fnt'), '')
+    writeFileSync(join(root, '.rockbox', 'backdrops', 'Foo.bmp'), '')
     writeFileSync(join(root, '.rockbox', 'themes', 'Foo.cfg'), [
       'wps: "/.rockbox/wps/Foo.wps"',
       'sbs: .rockbox/wps/Foo.sbs',
       'font: "/.rockbox/fonts/08-Foo.fnt"',
+      'backdrop: /.rockbox/backdrops/Foo.bmp',
+      'iconset: /.rockbox/icons/Missing.icons',
     ].join('\n'))
 
     const result = await scanRockboxThemes(root)
@@ -38,6 +42,9 @@ test('lists valid direct Rockbox theme cfg files', async () => {
     assert.equal(result.themes[0].wpsPath, 'wps/Foo.wps')
     assert.equal(result.themes[0].sbsPath, 'wps/Foo.sbs')
     assert.equal(result.themes[0].font, 'fonts/08-Foo.fnt')
+    assert.equal(result.themes[0].backdropPath, 'backdrops/Foo.bmp')
+    assert.equal(result.themes[0].fileCount, 5)
+    assert.deepEqual(result.themes[0].missingFiles, ['icons/Missing.icons'])
   } finally {
     cleanup(root)
   }

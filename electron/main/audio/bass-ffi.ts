@@ -19,7 +19,6 @@ export type HSTREAM = number
 export type HSYNC   = number
 export type HFX     = number
 export type HPLUGIN = number
-export type KoffiCallbackPtr = Parameters<typeof koffi.unregister>[0]
 
 export interface BassChannelInfo {
   freq: number
@@ -40,10 +39,6 @@ export interface BassDeviceInfo {
 
 // SYNCPROC signature: void (HSYNC handle, DWORD channel, DWORD data, void *user)
 export const SYNCPROC = koffi.proto('void SYNCPROC(uint32_t, uint32_t, uint32_t, void*)')
-export const FILECLOSEPROC = koffi.proto('void FILECLOSEPROC(void*)')
-export const FILELENPROC = koffi.proto('uint64_t FILELENPROC(void*)')
-export const FILEREADPROC = koffi.proto('uint32_t FILEREADPROC(void*, uint32_t, void*)')
-export const FILESEEKPROC = koffi.proto('int32_t FILESEEKPROC(uint64_t, void*)')
 
 // BASS_CHANNELINFO struct layout (see bass.h).
 const BASS_CHANNELINFO = koffi.struct('BASS_CHANNELINFO', {
@@ -62,13 +57,6 @@ const BASS_DEVICEINFO = koffi.struct('BASS_DEVICEINFO', {
   name:   'const char*',
   driver: 'const char*',
   flags:  'uint32_t',
-})
-
-const BASS_FILEPROCS = koffi.struct('BASS_FILEPROCS', {
-  close: 'FILECLOSEPROC *',
-  length: 'FILELENPROC *',
-  read: 'FILEREADPROC *',
-  seek: 'FILESEEKPROC *',
 })
 
 function nativeLibPath(name: string): string {
@@ -92,8 +80,6 @@ interface BassBindings {
   GetConfig: (option: number) => number
   StreamCreateFile: (filetype: number, file: string, offset: bigint, length: bigint, flags: number) => number
   StreamCreateFileMemory: (filetype: number, file: Buffer, offset: bigint, length: bigint, flags: number) => number
-  StreamCreateFileUser: (system: number, flags: number, procs: object, user: bigint) => number
-  StreamPutFileData: (handle: number, buffer: Buffer | null, length: number) => number
   StreamGetFilePosition: (handle: number, mode: number) => bigint
   StreamFree: (handle: number) => number
   ChannelPlay: (handle: number, restart: number) => number
@@ -136,8 +122,6 @@ export function loadBass(): BassBindings {
     GetConfig:          lib.func('uint32_t BASS_GetConfig(uint32_t)'),
     StreamCreateFile:   lib.func('uint32_t BASS_StreamCreateFile(int32_t, const char *, uint64_t, uint64_t, uint32_t)'),
     StreamCreateFileMemory: lib.func('BASS_StreamCreateFile', 'uint32_t', ['int32_t', 'const void *', 'uint64_t', 'uint64_t', 'uint32_t']),
-    StreamCreateFileUser: lib.func('uint32_t BASS_StreamCreateFileUser(uint32_t, uint32_t, BASS_FILEPROCS *, void *)'),
-    StreamPutFileData:  lib.func('uint32_t BASS_StreamPutFileData(uint32_t, const void *, uint32_t)'),
     StreamGetFilePosition: lib.func('uint64_t BASS_StreamGetFilePosition(uint32_t, uint32_t)'),
     StreamFree:         lib.func('int32_t BASS_StreamFree(uint32_t)'),
     ChannelPlay:        lib.func('int32_t BASS_ChannelPlay(uint32_t, int32_t)'),
@@ -162,52 +146,8 @@ export function loadBass(): BassBindings {
   // Force koffi to register the struct under the name used in func signatures above.
   void BASS_CHANNELINFO
   void BASS_DEVICEINFO
-  void BASS_FILEPROCS
 
   return bindings
-}
-
-export interface RegisteredFileProcs {
-  procs: {
-    close: KoffiCallbackPtr
-    length: KoffiCallbackPtr
-    read: KoffiCallbackPtr
-    seek: KoffiCallbackPtr
-  }
-  unregister(): void
-}
-
-export function copyBufferToPointer(ptr: bigint, source: Buffer): void {
-  if (source.byteLength === 0) return
-  try {
-    const view = new Uint8Array(koffi.view(ptr, source.byteLength))
-    source.copy(view)
-  } catch {
-    koffi.encode(ptr, 'uint8_t', Array.from(source), source.byteLength)
-  }
-}
-
-export function registerFileProcs(handlers: {
-  close: () => void
-  length: () => bigint
-  read: (bufferPtr: bigint, length: number) => number
-  seek: (offset: bigint) => boolean
-}): RegisteredFileProcs {
-  const procs = {
-    close: koffi.register(() => handlers.close(), koffi.pointer(FILECLOSEPROC)) as KoffiCallbackPtr,
-    length: koffi.register(() => handlers.length(), koffi.pointer(FILELENPROC)) as KoffiCallbackPtr,
-    read: koffi.register((bufferPtr: bigint, length: number) => handlers.read(bufferPtr, length), koffi.pointer(FILEREADPROC)) as KoffiCallbackPtr,
-    seek: koffi.register((offset: bigint) => handlers.seek(offset) ? 1 : 0, koffi.pointer(FILESEEKPROC)) as KoffiCallbackPtr,
-  }
-
-  return {
-    procs,
-    unregister() {
-      for (const cb of Object.values(procs)) {
-        try { koffi.unregister(cb) } catch { /* already unregistered */ }
-      }
-    },
-  }
 }
 
 // Helper to convert seconds → BASS byte position via the seconds-to-bytes API.

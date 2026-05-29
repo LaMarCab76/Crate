@@ -16,6 +16,7 @@ const koffi = require('koffi') as typeof import('koffi')
 
 import { BASS_SYNC_END, BASS_SYNC_ONETIME } from './bass-constants'
 import { loadBass, SYNCPROC, type HSTREAM, type HSYNC } from './bass-ffi'
+import { PRELOAD_MEMORY_TIMEOUT_MS } from './progressiveBuffering'
 import type {
   AudioEngine,
   StreamCreateResult,
@@ -211,7 +212,8 @@ export class GaplessController {
     const created = await this.engine.createStream(path, {
       skipMemory,
       memoryOnly: false,
-      memoryReadTimeoutMs: 1000,
+      memoryReadTimeoutMs: PRELOAD_MEMORY_TIMEOUT_MS,
+      isPreload: true,
     })
     const preloadData = this.createTelemetryFromResult(created)
 

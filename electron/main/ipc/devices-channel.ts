@@ -9,6 +9,8 @@ import {
 import type {
   DeviceConnectPayload,
   DeviceSettingsUpdate,
+  DeviceSyncApplySelection,
+  DeviceSyncActionKind,
   DeviceSyncPlanRequest,
 } from '@shared/types/device-sync'
 
@@ -113,6 +115,44 @@ function assertPathList(value: unknown): string[] {
   return value.map(path => assertNonEmptyString(path, 'file path'))
 }
 
+function assertActionKind(value: unknown): DeviceSyncActionKind {
+  if (
+    value === 'copy_pc_to_device' ||
+    value === 'copy_device_to_pc' ||
+    value === 'replace_device' ||
+    value === 'replace_pc' ||
+    value === 'delete_device' ||
+    value === 'delete_pc' ||
+    value === 'skip_conflict'
+  ) {
+    return value
+  }
+  throw new Error('Invalid sync action kind')
+}
+
+function assertApplySelection(value: unknown): DeviceSyncApplySelection | undefined {
+  if (value === undefined || value === null) return undefined
+  if (!value || typeof value !== 'object') throw new Error('Invalid sync selection')
+  const payload = value as DeviceSyncApplySelection
+  const actionIds = payload.actionIds === undefined
+    ? undefined
+    : Array.isArray(payload.actionIds)
+      ? payload.actionIds.map(id => assertNonEmptyString(id, 'sync action id'))
+      : (() => { throw new Error('Invalid sync action ids') })()
+  const conflictResolutions = payload.conflictResolutions === undefined
+    ? undefined
+    : Array.isArray(payload.conflictResolutions)
+      ? payload.conflictResolutions.map(item => {
+          if (!item || typeof item !== 'object') throw new Error('Invalid conflict resolution')
+          return {
+            actionId: assertNonEmptyString(item.actionId, 'conflict action id'),
+            kind: assertActionKind(item.kind),
+          }
+        })
+      : (() => { throw new Error('Invalid conflict resolutions') })()
+  return { actionIds, conflictResolutions }
+}
+
 export function registerDevicesChannel(): void {
   const service = getDeviceSyncService()
 
@@ -136,6 +176,9 @@ export function registerDevicesChannel(): void {
     ),
   )
   ipcMain.handle('devices:list', () => service.listDevices())
+  ipcMain.handle('devices:overview', (_, deviceId: unknown) =>
+    service.overview(assertNonEmptyString(deviceId, 'device id')),
+  )
   ipcMain.handle('devices:scan', (_, deviceId: unknown) =>
     service.scan(assertNonEmptyString(deviceId, 'device id')),
   )
@@ -148,13 +191,19 @@ export function registerDevicesChannel(): void {
   ipcMain.handle('devices:planSync', (_, payload: unknown) =>
     service.planSync(assertPlanRequest(payload)),
   )
-  ipcMain.handle('devices:applySync', (_, planId: unknown) =>
-    service.applySync(assertNonEmptyString(planId, 'plan id')),
+  ipcMain.handle('devices:applySync', (_, planId: unknown, selection: unknown) =>
+    service.applySync(assertNonEmptyString(planId, 'plan id'), assertApplySelection(selection)),
   )
   ipcMain.handle('devices:rockboxThemes:install', (_, deviceId: unknown, paths: unknown) =>
     service.installRockboxThemes(
       assertNonEmptyString(deviceId, 'device id'),
       assertPathList(paths),
+    ),
+  )
+  ipcMain.handle('devices:rockboxThemes:delete', (_, deviceId: unknown, themeId: unknown) =>
+    service.deleteRockboxTheme(
+      assertNonEmptyString(deviceId, 'device id'),
+      assertNonEmptyString(themeId, 'theme id'),
     ),
   )
   ipcMain.handle('devices:listPendingJournals', () => service.listPendingJournals())

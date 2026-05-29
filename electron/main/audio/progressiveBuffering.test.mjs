@@ -1,39 +1,13 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 import {
-  calculateProgressiveInitialBytes,
   decidePlaybackMemoryUse,
   estimateBufferedSeconds,
-  PROGRESSIVE_FALLBACK_INITIAL_BYTES,
-  PROGRESSIVE_MIN_INITIAL_BYTES,
-  PROGRESSIVE_START_WINDOW_SEC,
-  pumpProgressiveChunks,
+  PRELOAD_MEMORY_TIMEOUT_MS,
 } from './progressiveBuffering.ts'
 
-test('calculates the initial progressive window for 15 seconds', () => {
-  const fileSizeBytes = 100 * 1024 * 1024
-
-  assert.equal(
-    calculateProgressiveInitialBytes({ fileSizeBytes, durationSec: 100 }),
-    Math.ceil(fileSizeBytes * (PROGRESSIVE_START_WINDOW_SEC / 100)),
-  )
-
-  assert.equal(
-    calculateProgressiveInitialBytes({ fileSizeBytes, durationSec: 12 }),
-    fileSizeBytes,
-  )
-
-  assert.equal(
-    calculateProgressiveInitialBytes({ fileSizeBytes, durationSec: Number.NaN }),
-    PROGRESSIVE_FALLBACK_INITIAL_BYTES,
-  )
-
-  assert.equal(
-    calculateProgressiveInitialBytes({ fileSizeBytes, durationSec: 10_000 }),
-    PROGRESSIVE_MIN_INITIAL_BYTES,
-  )
-
-  assert.equal(calculateProgressiveInitialBytes({ fileSizeBytes: 0, durationSec: 120 }), 0)
+test('uses a tolerant memory preload timeout before the file fallback', () => {
+  assert.equal(PRELOAD_MEMORY_TIMEOUT_MS, 3000)
 })
 
 test('estimates buffered seconds with clamps and invalid metadata', () => {
@@ -81,55 +55,27 @@ test('applies playback memory fallback policy', () => {
   })
 })
 
-test('progressive pump pushes chunks, reports completion, and writes end marker', async () => {
-  const source = Buffer.from('abcdefghijklmnopqrstuvwxyz')
-  const written = []
-  const progress = []
-  let ended = false
-
-  await pumpProgressiveChunks({
-    totalBytes: source.byteLength,
-    startOffset: 5,
-    chunkBytes: 8,
-    waitMs: async () => undefined,
-    readChunk: async (offset, length) => source.subarray(offset, offset + length),
-    writeChunk: chunk => {
-      const accepted = Math.min(3, chunk.byteLength)
-      written.push(chunk.subarray(0, accepted).toString('utf8'))
-      return accepted
-    },
-    writeEnd: () => {
-      ended = true
-    },
-    onProgress: bytes => progress.push(bytes),
+test('allows small tracks under macOS-style low free memory when enough headroom remains', () => {
+  assert.deepEqual(decidePlaybackMemoryUse({
+    fileSizeBytes: 27_073_892,
+    freeMemBytes: 429_735_936,
+    totalMemBytes: 51_539_607_552,
+  }), {
+    canUse: true,
+    reason: null,
+    sizeBytes: 27_073_892,
   })
-
-  assert.equal(written.join(''), source.subarray(5).toString('utf8'))
-  assert.equal(progress.at(-1), source.byteLength)
-  assert.equal(ended, true)
 })
 
-test('progressive pump does not signal completion after read/write errors', async () => {
-  let cleanupCalled = false
-  let ended = false
-
-  await assert.rejects(async () => {
-    try {
-      await pumpProgressiveChunks({
-        totalBytes: 10,
-        startOffset: 0,
-        chunkBytes: 5,
-        readChunk: async () => Buffer.from('12345'),
-        writeChunk: () => -1,
-        writeEnd: () => {
-          ended = true
-        },
-      })
-    } finally {
-      cleanupCalled = true
-    }
-  }, /rejected buffered data/)
-
-  assert.equal(cleanupCalled, true)
-  assert.equal(ended, false)
+test('keeps large tracks out of memory under the same low-free-memory pressure', () => {
+  const sizeBytes = 200 * 1024 * 1024
+  assert.deepEqual(decidePlaybackMemoryUse({
+    fileSizeBytes: sizeBytes,
+    freeMemBytes: 429_735_936,
+    totalMemBytes: 51_539_607_552,
+  }), {
+    canUse: false,
+    reason: 'memory-size-limit',
+    sizeBytes,
+  })
 })

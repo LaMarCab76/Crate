@@ -110,6 +110,59 @@ async function fadeInTrack(token: number, targetVolume: number): Promise<void> {
   })
 }
 
+// Crossfade-aware track change. The next stream is prepared (loaded) BEFORE any
+// audible fade happens: preloadNext loads it into a separate slot while the
+// current track keeps playing at full volume (engine.load/preloadNext don't free
+// the current stream until the new one is ready). Only once the next track is
+// loaded do we perform the dip — fade out → swap → fade in — so the volume effect
+// lands tightly around the actual handoff instead of starting before the next
+// track has loaded (which would stretch the dip across the whole load and leave
+// dead air on a slow source).
+//
+// `commitNowPlaying` is invoked at the swap — the instant the new track becomes
+// audible — so the now-playing UI (title, artwork, queue index) flips together
+// with the sound instead of lagging behind until the fade-in finishes. It does
+// not run if a newer transition superseded this one before the swap.
+async function crossfadeToTrack(
+  track: Track,
+  token: number,
+  commitNowPlaying: (result: StreamLoadResult | null) => void,
+): Promise<void> {
+  if (!track.path) return
+  const fade = shouldApplyCrossfadeTransition()
+
+  // 1. Prepare the next stream without interrupting the current track.
+  const preloaded: PreloadNextResult = await window.api.audio.preloadNext(track.path, track.dbId ?? null)
+  if (token !== trackTransitionToken) return
+
+  // 2. Next track is ready — only now perform the fade-out dip (fadeOutCurrentTrack
+  //    self-guards, so this is a no-op when crossfade is off).
+  const previousVolume = await fadeOutCurrentTrack(token)
+  if (token !== trackTransitionToken) return
+
+  // 3. Hand off to the preloaded stream, or fall back to a direct load.
+  let result: StreamLoadResult | null = preloaded.streamInfo
+    ? await window.api.audio.swapNow(track.path)
+    : null
+  if (!result) {
+    await window.api.audio.clearNext()
+    result = await window.api.audio.load(track.path, track.dbId ?? null)
+    await window.api.audio.play()
+  }
+  if (token !== trackTransitionToken) return
+
+  // The new track is now audible. Commit the now-playing state and drop the
+  // loading overlay BEFORE the fade-in: finishTrackPreparation only runs after the
+  // awaited fade-in below, and the swap's setStatus('playing') is a no-op when the
+  // engine was already playing, so neither the overlay nor the title/artwork would
+  // otherwise update until the fade completes.
+  clearTrackLoadingOverlay(token)
+  commitNowPlaying(result)
+
+  // 4. Fade the new track back up to the pre-transition volume.
+  if (fade) await fadeInTrack(token, previousVolume)
+}
+
 function clearTrackLoadingOverlayTimer(): void {
   if (trackLoadingOverlayTimer == null || typeof window === 'undefined') return
   window.clearTimeout(trackLoadingOverlayTimer)
@@ -132,6 +185,15 @@ function beginTrackPreparation(target: Track, transitioning: boolean, showOverla
     }, TRACK_LOADING_OVERLAY_DELAY_MS)
   }
   return token
+}
+
+// Hide the loading overlay (and cancel its pending timer) without ending the
+// transition state — used at the swap point so the spinner clears the instant
+// the next track becomes audible, while the crossfade fade-in keeps running.
+function clearTrackLoadingOverlay(token: number): void {
+  if (token !== trackTransitionToken) return
+  clearTrackLoadingOverlayTimer()
+  usePlaybackStore.getState().setTrackLoading(false)
 }
 
 function finishTrackPreparation(token: number): void {
@@ -213,14 +275,17 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     const fadeTransition = shouldApplyCrossfadeTransition()
     cancelTrackPreparation()
     const token = beginTrackPreparation(track, true, true)
-    const previousVolume = await fadeOutCurrentTrack(token)
-    if (token !== trackTransitionToken) return
-    await window.api.audio.clearNext()
     set({ tracks, currentIndex: Math.max(0, currentIndex), history: [] })
     gaplessPreloadFiredFor = null
     try {
-      await loadAndPlay(track)
-      if (fadeTransition && token === trackTransitionToken) await fadeInTrack(token, previousVolume)
+      if (fadeTransition) {
+        await crossfadeToTrack(track, token, result => {
+          applyStreamLoadResultForTrack(track, result)
+        })
+      } else {
+        await window.api.audio.clearNext()
+        await loadAndPlay(track)
+      }
     } finally {
       finishTrackPreparation(token)
     }
@@ -246,28 +311,16 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     if (!next) return
     if (!next.path) return
 
-    const fadeTransition = shouldApplyCrossfadeTransition()
     const token = beginTrackPreparation(next, true, !opts?.auto)
-    const previousVolume = await fadeOutCurrentTrack(token)
-    if (token !== trackTransitionToken) return
     try {
-      const preloaded: PreloadNextResult = await window.api.audio.preloadNext(next.path, next.dbId ?? null)
-      let result: StreamLoadResult | null = preloaded.streamInfo ? await window.api.audio.swapNow(next.path) : null
-      if (!result) {
-        await window.api.audio.clearNext()
-        result = await window.api.audio.load(next.path, next.dbId ?? null)
-        await window.api.audio.play()
-      }
-
-      if (token !== trackTransitionToken) return
-
-      set({
-        currentIndex: nextIndex,
-        history: [...history, tracks[currentIndex]].filter(Boolean).slice(-50),
+      await crossfadeToTrack(next, token, result => {
+        set({
+          currentIndex: nextIndex,
+          history: [...history, tracks[currentIndex]].filter(Boolean).slice(-50),
+        })
+        applyStreamLoadResultForTrack(next, result)
+        gaplessPreloadFiredFor = null
       })
-      applyStreamLoadResultForTrack(next, result)
-      gaplessPreloadFiredFor = null
-      if (fadeTransition && token === trackTransitionToken) await fadeInTrack(token, previousVolume)
     } finally {
       finishTrackPreparation(token)
     }
@@ -286,20 +339,23 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     if (currentIndex <= 0) return
     const prev = tracks[currentIndex - 1]
     if (!prev) return
-    cancelTrackPreparation()
     const fadeTransition = shouldApplyCrossfadeTransition()
-    await window.api.audio.clearNext()
+    cancelTrackPreparation()
     const token = beginTrackPreparation(prev, true, true)
-    const previousVolume = await fadeOutCurrentTrack(token)
-    if (token !== trackTransitionToken) return
     set({
       currentIndex: currentIndex - 1,
       history: history.slice(0, -1),
     })
     gaplessPreloadFiredFor = null
     try {
-      await loadAndPlay(prev)
-      if (fadeTransition && token === trackTransitionToken) await fadeInTrack(token, previousVolume)
+      if (fadeTransition) {
+        await crossfadeToTrack(prev, token, result => {
+          applyStreamLoadResultForTrack(prev, result)
+        })
+      } else {
+        await window.api.audio.clearNext()
+        await loadAndPlay(prev)
+      }
     } finally {
       finishTrackPreparation(token)
     }
@@ -317,10 +373,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     if (!target?.path) return
     const fadeTransition = shouldApplyCrossfadeTransition()
     cancelTrackPreparation()
-    await window.api.audio.clearNext()
     const token = beginTrackPreparation(target, true, true)
-    const previousVolume = await fadeOutCurrentTrack(token)
-    if (token !== trackTransitionToken) return
     // Treat any track before the new index as already-played so back/forward
     // navigation stays consistent with the linear queue order.
     set({
@@ -329,8 +382,14 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     })
     gaplessPreloadFiredFor = null
     try {
-      await loadAndPlay(target)
-      if (fadeTransition && token === trackTransitionToken) await fadeInTrack(token, previousVolume)
+      if (fadeTransition) {
+        await crossfadeToTrack(target, token, result => {
+          applyStreamLoadResultForTrack(target, result)
+        })
+      } else {
+        await window.api.audio.clearNext()
+        await loadAndPlay(target)
+      }
     } finally {
       finishTrackPreparation(token)
     }

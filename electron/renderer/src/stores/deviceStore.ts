@@ -4,16 +4,19 @@ import type {
   DeviceConnectPayload,
   DeviceLibraryResult,
   DevicePendingJournal,
+  DeviceOverviewResult,
   DeviceRecord,
   DeviceScanProgressEvent,
   DeviceScanResult,
   DeviceSettingsUpdate,
+  DeviceSyncApplySelection,
   DeviceSyncApplyResult,
   DeviceSyncMode,
   DeviceSyncPlan,
   DeviceSyncProgressEvent,
   DeviceUnknownVolume,
   DeviceVolumeSnapshot,
+  RockboxThemeDeleteResult,
   RockboxThemeInstallResult,
   RockboxThemeLibraryResult,
 } from '@shared/types/device-sync'
@@ -24,6 +27,7 @@ interface DeviceState {
   unknownVolumes: DeviceUnknownVolume[]
   pendingJournals: DevicePendingJournal[]
   deviceLibraries: Record<string, DeviceLibraryResult>
+  deviceOverviews: Record<string, DeviceOverviewResult>
   rockboxThemeLibraries: Record<string, RockboxThemeLibraryResult>
   scanResult: DeviceScanResult | null
   plan: DeviceSyncPlan | null
@@ -40,13 +44,15 @@ interface DeviceState {
   ignoreVolume(rootPath: string): Promise<void>
   connect(payload: DeviceConnectPayload): Promise<DeviceRecord>
   updateSettings(deviceId: string, settings: DeviceSettingsUpdate): Promise<DeviceRecord>
+  loadDeviceOverview(deviceId: string, force?: boolean): Promise<DeviceOverviewResult>
   loadDeviceLibrary(deviceId: string, force?: boolean): Promise<DeviceLibraryResult>
   loadRockboxThemes(deviceId: string, force?: boolean): Promise<RockboxThemeLibraryResult>
   installRockboxThemes(deviceId: string, files: unknown[]): Promise<RockboxThemeInstallResult>
+  deleteRockboxTheme(deviceId: string, themeId: string): Promise<RockboxThemeDeleteResult>
   selectDevice(id: string): void
   scan(deviceId?: string): Promise<void>
   planSync(mode: DeviceSyncMode, pcTargetPath?: string): Promise<DeviceSyncPlan>
-  applyPlan(planId: string): Promise<DeviceSyncApplyResult>
+  applyPlan(planId: string, selection?: DeviceSyncApplySelection): Promise<DeviceSyncApplyResult>
   resumeJournal(journalId: string): Promise<DeviceSyncApplyResult>
   discardJournal(journalId: string): Promise<void>
   clearPlan(): void
@@ -76,6 +82,26 @@ function rockboxThemesFromLibrary(library: DeviceLibraryResult): RockboxThemeLib
   }
 }
 
+function overviewFromStorage(
+  device: DeviceRecord,
+  storage: DeviceScanResult['storage'],
+): DeviceOverviewResult {
+  return {
+    device,
+    capacity: {
+      totalBytes: storage.totalBytes,
+      usedBytes: storage.usedBytes,
+      freeBytes: storage.freeBytes,
+      scannedAt: storage.scannedAt,
+      error: storage.error,
+    },
+  }
+}
+
+function overviewFromScan(scanResult: DeviceScanResult): DeviceOverviewResult {
+  return overviewFromStorage(scanResult.device, scanResult.storage)
+}
+
 function canReuseDeviceLibrary(library: DeviceLibraryResult, device?: DeviceRecord): boolean {
   const storage = library.storage
   if (!storage) return false
@@ -90,6 +116,7 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
   unknownVolumes: [],
   pendingJournals: [],
   deviceLibraries: {},
+  deviceOverviews: {},
   rockboxThemeLibraries: {},
   scanResult: null,
   plan: null,
@@ -184,6 +211,9 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
         deviceLibraries: library
           ? { ...state.deviceLibraries, [device.id]: library }
           : state.deviceLibraries,
+        deviceOverviews: library
+          ? { ...state.deviceOverviews, [device.id]: overviewFromStorage(library.device, library.storage) }
+          : state.deviceOverviews,
         rockboxThemeLibraries: library
           ? { ...state.rockboxThemeLibraries, [device.id]: rockboxThemesFromLibrary(library) }
           : state.rockboxThemeLibraries,
@@ -209,12 +239,34 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
         deviceLibraries: state.deviceLibraries[device.id]
           ? { ...state.deviceLibraries, [device.id]: { ...state.deviceLibraries[device.id], device } }
           : state.deviceLibraries,
+        deviceOverviews: state.deviceOverviews[device.id]
+          ? { ...state.deviceOverviews, [device.id]: { ...state.deviceOverviews[device.id], device } }
+          : state.deviceOverviews,
         rockboxThemeLibraries: state.rockboxThemeLibraries[device.id]
           ? { ...state.rockboxThemeLibraries, [device.id]: { ...state.rockboxThemeLibraries[device.id], device } }
           : state.rockboxThemeLibraries,
         loading: false,
       }))
       return device
+    } catch (err) {
+      set({ loading: false, error: (err as Error).message })
+      throw err
+    }
+  },
+
+  async loadDeviceOverview(deviceId, force = false) {
+    const cached = get().deviceOverviews[deviceId]
+    if (cached && !force) return cached
+    set({ loading: true, error: null })
+    try {
+      const overview = await window.api.devices.overview(deviceId)
+      set(state => ({
+        devices: state.devices.map(device => device.id === overview.device.id ? overview.device : device),
+        deviceOverviews: { ...state.deviceOverviews, [deviceId]: overview },
+        selectedDeviceId: deviceId,
+        loading: false,
+      }))
+      return overview
     } catch (err) {
       set({ loading: false, error: (err as Error).message })
       throw err
@@ -231,6 +283,10 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
       const library = await window.api.devices.library(deviceId)
       set(state => ({
         deviceLibraries: { ...state.deviceLibraries, [deviceId]: library },
+        deviceOverviews: {
+          ...state.deviceOverviews,
+          [deviceId]: overviewFromStorage(library.device, library.storage),
+        },
         rockboxThemeLibraries: {
           ...state.rockboxThemeLibraries,
           [deviceId]: rockboxThemesFromLibrary(library),
@@ -322,6 +378,53 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     }
   },
 
+  async deleteRockboxTheme(deviceId, themeId) {
+    set({ loading: true, error: null, themeInstallResult: null })
+    try {
+      const result = await window.api.devices.deleteRockboxTheme(deviceId, themeId)
+      const devices = await window.api.devices.list()
+      set(state => {
+        const cachedDevice =
+          devices.find(device => device.id === deviceId) ??
+          state.rockboxThemeLibraries[deviceId]?.device ??
+          state.deviceLibraries[deviceId]?.device ??
+          state.devices.find(device => device.id === deviceId)
+        return {
+          devices,
+          deviceLibraries: state.deviceLibraries[deviceId]
+            ? {
+                ...state.deviceLibraries,
+                [deviceId]: {
+                  ...state.deviceLibraries[deviceId],
+                  rockboxThemes: result.themes,
+                  rockboxThemeScan: result.scan,
+                  summary: {
+                    ...state.deviceLibraries[deviceId].summary,
+                    rockboxThemeCount: result.themes.length,
+                  },
+                },
+              }
+            : state.deviceLibraries,
+          rockboxThemeLibraries: cachedDevice
+            ? {
+                ...state.rockboxThemeLibraries,
+                [deviceId]: {
+                  device: cachedDevice,
+                  themes: result.themes,
+                  scan: result.scan,
+                },
+              }
+            : state.rockboxThemeLibraries,
+          loading: false,
+        }
+      })
+      return result
+    } catch (err) {
+      set({ loading: false, error: (err as Error).message })
+      throw err
+    }
+  },
+
   selectDevice(id) {
     set({ selectedDeviceId: id, plan: null, scanResult: null, error: null })
   },
@@ -341,6 +444,7 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
         selectedDeviceId: id,
         loading: false,
         scanProgress: null,
+        deviceOverviews: { ...state.deviceOverviews, [id]: overviewFromScan(scanResult) },
         deviceLibraries: library
           ? { ...state.deviceLibraries, [id]: library }
           : state.deviceLibraries,
@@ -366,10 +470,10 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     }
   },
 
-  async applyPlan(planId) {
+  async applyPlan(planId, selection) {
     set({ loading: true, error: null })
     try {
-      const result = await window.api.devices.applySync(planId)
+      const result = await window.api.devices.applySync(planId, selection)
       const [devices, pendingJournals] = await Promise.all([
         window.api.devices.list(),
         window.api.devices.listPendingJournals(),
@@ -471,6 +575,12 @@ export function useSelectedDevice(): DeviceRecord | null {
 export function useDeviceLibrary(deviceId: string | null): DeviceLibraryResult | null {
   return useDeviceStore(state =>
     deviceId ? state.deviceLibraries[deviceId] ?? null : null,
+  )
+}
+
+export function useDeviceOverview(deviceId: string | null): DeviceOverviewResult | null {
+  return useDeviceStore(state =>
+    deviceId ? state.deviceOverviews[deviceId] ?? null : null,
   )
 }
 

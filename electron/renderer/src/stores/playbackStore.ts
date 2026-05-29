@@ -65,7 +65,7 @@ export const usePlaybackStore = create<PlaybackState>(set => ({
       streamInfo: info,
       durationSec: info?.duration ?? 0,
     }),
-  setStreamSource: source => set({ streamSource: source, streamSourceState: 'idle' }),
+  setStreamSource: source => set({ streamSource: source }),
   setStreamSourceState: streamSourceState => set({ streamSourceState }),
   setBufferProgress: progress => set(progress),
 }))
@@ -133,11 +133,26 @@ if (typeof window !== 'undefined' && window.api?.audio) {
     const state = usePlaybackStore.getState()
     if (currentPath && state.currentTrack?.path && state.currentTrack.path !== currentPath) return
     state.setStreamSource(source)
+    if (source !== 'file' || state.streamSourceState !== 'promoting') {
+      state.setStreamSourceState('idle')
+    }
   })
-  window.api.audio.onBufferProgress(({ currentPath, bufferedBytes, totalBytes, bufferedSec, bufferComplete }) => {
+  window.api.audio.onBufferProgress(({
+    currentPath,
+    source,
+    bufferedBytes,
+    totalBytes,
+    bufferedSec,
+    bufferComplete,
+    reason,
+  }) => {
     const state = usePlaybackStore.getState()
     if (currentPath && state.currentTrack?.path && state.currentTrack.path !== currentPath) return
+    state.setStreamSource(source)
     state.setBufferProgress({ bufferedBytes, totalBytes, bufferedSec, bufferComplete })
+    if (reason === 'progressive-read-failed') {
+      state.setStreamSourceState('promoting')
+    }
   })
 
   // When the in-store currentTrack changes, reset the play-count window so a

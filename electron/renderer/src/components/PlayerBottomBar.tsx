@@ -40,11 +40,11 @@ export function PlayerBottomBar({
   const [lastTrack, setLastTrack] = useState<Track | null>(() => currentTrack)
   const track = currentTrack ?? lastTrack
   const status = usePlaybackStore(s => s.status)
+  const streamSource = usePlaybackStore(s => s.streamSource)
+  const streamSourceState = usePlaybackStore(s => s.streamSourceState)
   const positionSec = usePlaybackStore(s => s.positionSec)
   const durationSec = usePlaybackStore(s => s.durationSec)
   const volume = usePlaybackStore(s => s.volume)
-  const streamSource = usePlaybackStore(s => s.streamSource)
-  const streamSourceState = usePlaybackStore(s => s.streamSourceState)
   const togglePlay = useQueueStore(s => s.togglePlay)
   const seek = useQueueStore(s => s.seek)
   const next = useQueueStore(s => s.next)
@@ -136,17 +136,7 @@ export function PlayerBottomBar({
   const displayPositionSec = dragProgress !== null ? dragProgress * durationSec : positionSec
   const canOpenAlbum = album != null && onOpenAlbum != null && !album.id.startsWith('a-unresolved-')
   const canOpenArtist = artist != null && onOpenArtist != null
-
-  const streamSourceLabel = streamSource === 'memory'
-    ? streamSourceState === 'promoting'
-      ? 'Memoria (promoción en curso)'
-      : streamSourceState === 'promoted'
-        ? 'Memoria (promoción exitosa)'
-        : 'Memoria'
-    : streamSource === 'file'
-      ? 'Disco'
-      : 'Sin memoria'
-  const streamSourceClass = streamSource === 'memory' ? 'is-memory' : streamSource === 'file' ? 'is-file' : 'is-none'
+  const showFallbackBadge = streamSource === 'file' && streamSourceState === 'promoting'
 
   const onProgressMouseDown = (e: MouseEvent<HTMLDivElement>) => {
     if (durationSec <= 0) return
@@ -340,9 +330,11 @@ export function PlayerBottomBar({
             <div className="pp-quality-chip">
               <CodecStrip track={track} compact />
             </div>
-            <div className={`stream-source-badge ${streamSourceClass}`}>
-              {streamSourceLabel}
-            </div>
+            {showFallbackBadge && (
+              <div className="stream-source-badge is-file" title="Streaming progresivo fallido; usando archivo">
+                Reanudando por archivo
+              </div>
+            )}
           </div>
         </div>
 
