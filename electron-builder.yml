@@ -6,6 +6,13 @@ directories:
   buildResources: electron-build
   output: release
 
+electronUpdaterCompatibility: ">=2.16"
+
+publish:
+  provider: github
+  owner: LaMarCab76
+  repo: LocalLibrary
+
 files:
   - out/**/*
   - package.json
@@ -27,6 +34,10 @@ mac:
   notarize: false
   target:
     - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
       arch:
         - x64
         - arm64

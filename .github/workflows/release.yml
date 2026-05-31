@@ -9,7 +9,7 @@ on:
       tag:
         description: Existing tag to publish
         required: true
-        default: v0.4.2
+        default: v0.4.3
 
 permissions:
   contents: write
@@ -29,6 +29,8 @@ jobs:
             artifact_paths: |
               release/*.dmg
               release/*.dmg.blockmap
+              release/*.zip
+              release/*.zip.blockmap
               release/latest-mac.yml
           - os: windows-latest
             platform_name: Windows

@@ -8,10 +8,15 @@ import { FolderRemovalConfirmModal } from '@renderer/components/FolderRemovalCon
 import { DeviceConnectModal, type DeviceConnectTarget } from '@renderer/components/DeviceConnectModal'
 import { useDeviceStore } from '@renderer/stores/deviceStore'
 import { useFolders, useLibraryStore } from '@renderer/stores/libraryStore'
-import { DEVICE_ARTWORK_EDGE_MAX, DEVICE_ARTWORK_EDGE_MIN } from '@shared/constants/device-sync'
 import { EQ_BAND_LABELS, EQ_GAIN_MAX, EQ_GAIN_MIN, EQ_GAIN_STEP } from '@shared/constants/equalizer'
 import { LYRICS_OFFSET_LIMIT_MS, clampLyricsOffsetMs } from '@shared/lyrics/lrc'
-import type { LibraryScanEvent, LibraryScanLogPayload, LibraryScanRun, PlaybackCacheStats } from '@shared/types/ipc-contract'
+import type {
+  AppUpdateState,
+  LibraryScanEvent,
+  LibraryScanLogPayload,
+  LibraryScanRun,
+  PlaybackCacheStats,
+} from '@shared/types/ipc-contract'
 import { COLOR_PRESETS } from '@renderer/utils/colorPresets'
 import { clearPlaybackTableBarsMemoryCache } from '@renderer/utils/playbackTableBars'
 import { basenameForPath } from '@renderer/utils/devicePaths'
@@ -34,23 +39,15 @@ interface Props {
   setTweak: <K extends keyof Tweak>(key: K, value: Tweak[K]) => void
 }
 
-type SettingsMainTab = 'apariencia' | 'reproduccion' | 'dispositivos' | 'almacenamiento'
-type PlaybackSubTab = 'general' | 'eq' | 'letras'
+export type SettingsMainTab = 'apariencia' | 'reproduccion' | 'bibliotecas' | 'actualizaciones'
+export type PlaybackSubTab = 'general' | 'eq' | 'letras'
 
-const SETTINGS_TABS: Array<{ id: SettingsMainTab; label: string }> = [
-  { id: 'apariencia', label: 'Apariencia' },
-  { id: 'reproduccion', label: 'Reproducción' },
-  { id: 'dispositivos', label: 'Dispositivos' },
-  { id: 'almacenamiento', label: 'Almacenamiento local' },
-]
+interface SettingsViewProps extends Props {
+  activeTab: SettingsMainTab
+  playbackSubTab: PlaybackSubTab
+}
 
-const PLAYBACK_TABS: Array<{ id: PlaybackSubTab; label: string }> = [
-  { id: 'general', label: 'Reproducción' },
-  { id: 'eq', label: 'Eq' },
-  { id: 'letras', label: 'Letras' },
-]
-
-function DeviceDetectionPanel({ tweak, setTweak }: Props) {
+function LibraryVolumeClassificationPanel({ tweak }: Pick<Props, 'tweak'>) {
   const devices = useDeviceStore(s => s.devices)
   const candidates = useDeviceStore(s => s.candidates)
   const unknownVolumes = useDeviceStore(s => s.unknownVolumes)
@@ -60,7 +57,6 @@ function DeviceDetectionPanel({ tweak, setTweak }: Props) {
   const ignoreVolume = useDeviceStore(s => s.ignoreVolume)
   const addFolder = useLibraryStore(s => s.addFolder)
   const folders = useFolders()
-  const [manualPath, setManualPath] = useState('')
   const [connectTarget, setConnectTarget] = useState<DeviceConnectTarget | null>(null)
 
   useEffect(() => {
@@ -69,12 +65,6 @@ function DeviceDetectionPanel({ tweak, setTweak }: Props) {
 
   const connectedRoots = useMemo(() => new Set(devices.map(device => device.rootPath)), [devices])
   const libraryRoots = useMemo(() => new Set(folders.map(folder => folder.path)), [folders])
-
-  const connectManual = async () => {
-    const rootPath = manualPath.trim()
-    if (!rootPath) return
-    setConnectTarget({ rootPath, name: basenameForPath(rootPath) })
-  }
 
   const pickDeviceRoot = async () => {
     const picked = await window.api.devices.pickRoot()
@@ -91,42 +81,20 @@ function DeviceDetectionPanel({ tweak, setTweak }: Props) {
   }
 
   return (
-    <div className="set-card device-settings-panel">
-      <div className="set-row">
+    <div className="set-card library-volumes-panel">
+      <div className="library-volumes-head">
         <div>
-          <div className="lbl">Default device artwork limit</div>
-          <div className="sub">Maximum embedded cover edge for newly connected MP3/DAP devices.</div>
+          <div className="lbl">Rutas de MP3 y volúmenes</div>
+          <div className="sub">Clasificá los volúmenes detectados como biblioteca local, MP3 o ignorados.</div>
         </div>
-        <input
-          type="number"
-          className="number-input"
-          min={DEVICE_ARTWORK_EDGE_MIN}
-          max={DEVICE_ARTWORK_EDGE_MAX}
-          step={1}
-          value={tweak.deviceArtworkMaxEdge}
-          onChange={e => setTweak('deviceArtworkMaxEdge', Number(e.target.value))}
-          aria-label="Default device artwork limit"
-        />
-      </div>
-
-      <div className="device-settings-actions">
-        <button className="btn" type="button" disabled={loading} onClick={() => void refreshVolumes()}>
-          <Icon name="rotate" size={13} /> Detectar ahora
-        </button>
-        <button className="btn primary" type="button" disabled={loading} onClick={() => void pickDeviceRoot()}>
-          <Icon name="device" size={13} /> Elegir carpeta/unidad
-        </button>
-      </div>
-
-      <div className="device-settings-manual">
-        <input
-          value={manualPath}
-          onChange={event => setManualPath(event.target.value)}
-          placeholder="/Volumes/iPod"
-        />
-        <button className="btn" type="button" disabled={loading || !manualPath.trim()} onClick={() => void connectManual()}>
-          Agregar DAP
-        </button>
+        <div className="device-settings-actions">
+          <button className="btn" type="button" disabled={loading} onClick={() => void refreshVolumes()}>
+            <Icon name="rotate" size={13} /> Detectar ahora
+          </button>
+          <button className="btn primary" type="button" disabled={loading} onClick={() => void pickDeviceRoot()}>
+            <Icon name="device" size={13} /> Elegir MP3
+          </button>
+        </div>
       </div>
 
       {error && <div className="device-error inline">{error}</div>}
@@ -135,7 +103,7 @@ function DeviceDetectionPanel({ tweak, setTweak }: Props) {
         <div>
           <h3>Conectados</h3>
           {devices.length === 0 ? (
-            <div className="device-empty compact">No hay dispositivos vinculados.</div>
+            <div className="device-empty compact">No hay MP3 vinculados.</div>
           ) : (
             <div className="device-settings-list">
               {devices.map(device => (
@@ -155,12 +123,12 @@ function DeviceDetectionPanel({ tweak, setTweak }: Props) {
         <div>
           <h3>Detectados</h3>
           {candidates.length === 0 ? (
-            <div className="device-empty compact">No hay candidatos Rockbox/Crate.</div>
+            <div className="device-empty compact">No hay MP3 candidatos.</div>
           ) : (
             <div className="device-settings-list">
               {candidates.map(candidate => (
                 <div className="device-settings-row" key={candidate.rootPath}>
-                  <Icon name="plus" size={14} />
+                  <Icon name="device" size={14} />
                   <span>
                     <strong>{candidate.name}</strong>
                     <em>{candidate.rootPath}</em>
@@ -171,7 +139,7 @@ function DeviceDetectionPanel({ tweak, setTweak }: Props) {
                     disabled={loading || connectedRoots.has(candidate.rootPath)}
                     onClick={() => setConnectTarget({ rootPath: candidate.rootPath, name: candidate.name })}
                   >
-                    Conectar
+                    MP3
                   </button>
                 </div>
               ))}
@@ -199,7 +167,7 @@ function DeviceDetectionPanel({ tweak, setTweak }: Props) {
                       disabled={loading}
                       onClick={() => setConnectTarget({ rootPath: volume.rootPath, name: volume.name })}
                     >
-                      DAP
+                      MP3
                     </button>
                     <button
                       className="btn"
@@ -223,9 +191,6 @@ function DeviceDetectionPanel({ tweak, setTweak }: Props) {
         <DeviceConnectModal
           target={connectTarget}
           artworkMaxEdge={tweak.deviceArtworkMaxEdge}
-          onConnected={() => {
-            if (connectTarget.rootPath === manualPath.trim()) setManualPath('')
-          }}
           onClose={() => {
             setConnectTarget(null)
           }}
@@ -378,55 +343,6 @@ function LibraryFoldersPanel() {
             if (scanningId === removeTarget.id) setScanningId(null)
           }}
         />
-      )}
-    </>
-  )
-}
-
-function SettingsSectionNav({
-  activeTab,
-  playbackSubTab,
-  onTabChange,
-  onPlaybackSubTabChange,
-}: {
-  activeTab: SettingsMainTab
-  playbackSubTab: PlaybackSubTab
-  onTabChange: (tab: SettingsMainTab) => void
-  onPlaybackSubTabChange: (tab: PlaybackSubTab) => void
-}) {
-  return (
-    <>
-      <div className="settings-nav" role="tablist" aria-label="Secciones de preferencias">
-        {SETTINGS_TABS.map(tab => (
-          <button
-            key={tab.id}
-            type="button"
-            className={`settings-nav-tab ${activeTab === tab.id ? 'active' : ''}`}
-            role="tab"
-            aria-selected={activeTab === tab.id}
-            aria-controls="settings-content"
-            onClick={() => onTabChange(tab.id)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-      {activeTab === 'reproduccion' && (
-        <div className="settings-nav settings-subnav" role="tablist" aria-label="Subsecciones de reproducción">
-          {PLAYBACK_TABS.map(tab => (
-            <button
-              key={tab.id}
-              type="button"
-              className={`settings-nav-tab settings-nav-tab-sub ${playbackSubTab === tab.id ? 'active' : ''}`}
-              role="tab"
-              aria-selected={playbackSubTab === tab.id}
-              aria-controls="settings-content"
-              onClick={() => onPlaybackSubTabChange(tab.id)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
       )}
     </>
   )
@@ -873,16 +789,7 @@ function lyricsItemStatusLabel(item: LyricsLibraryOverview['items'][number]): st
   return 'Falta'
 }
 
-function DevicesSection({ tweak, setTweak }: Props) {
-  return (
-    <section className="set-section">
-      <h2>Dispositivos</h2>
-      <DeviceDetectionPanel tweak={tweak} setTweak={setTweak} />
-    </section>
-  )
-}
-
-function StorageSection({
+function LibrariesSection({
   tweak,
   setTweak,
   libraryLogOpen,
@@ -895,8 +802,9 @@ function StorageSection({
 }) {
   return (
     <section className="set-section">
-      <h2>Almacenamiento local</h2>
+      <h2>Bibliotecas</h2>
       <LibraryFoldersPanel />
+      <LibraryVolumeClassificationPanel tweak={tweak} />
       <div className="set-card">
         <div className="set-row">
           <div>
@@ -937,28 +845,177 @@ function StorageSection({
   )
 }
 
-export function SettingsView({ tweak, setTweak }: Props) {
-  const [libraryLogOpen, setLibraryLogOpen] = useState(false)
-  const [mainTab, setMainTab] = useState<SettingsMainTab>('apariencia')
-  const [playbackSubTab, setPlaybackSubTab] = useState<PlaybackSubTab>('general')
+const UPDATE_STATUS_LABEL: Record<AppUpdateState['status'], string> = {
+  idle: 'Sin comprobar',
+  checking: 'Buscando',
+  available: 'Disponible',
+  'not-available': 'Al día',
+  downloading: 'Descargando',
+  downloaded: 'Lista',
+  error: 'Error',
+  unsupported: 'No disponible',
+}
 
-  const switchMainTab = (tab: SettingsMainTab) => {
-    setMainTab(tab)
+function formatUpdateDate(value: string | number | null): string {
+  if (!value) return 'Nunca'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Sin fecha'
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date)
+}
+
+function formatUpdateBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB'
+  const mb = bytes / 1024 / 1024
+  if (mb < 1024) return `${mb >= 10 ? Math.round(mb) : mb.toFixed(1)} MB`
+  const gb = mb / 1024
+  return `${gb >= 10 ? Math.round(gb) : gb.toFixed(1)} GB`
+}
+
+function updateSummary(state: AppUpdateState): string {
+  if (state.status === 'unsupported') return state.error ?? 'Solo disponible en builds empaquetadas.'
+  if (state.status === 'checking') return 'Consultando GitHub Releases.'
+  if (state.status === 'available') return `Crate ${state.updateVersion ?? 'nuevo'} está disponible.`
+  if (state.status === 'downloading') return 'Descargando la actualización en segundo plano.'
+  if (state.status === 'downloaded') return 'La actualización está lista para instalarse al reiniciar.'
+  if (state.status === 'not-available') return 'Tenés la última versión publicada.'
+  if (state.status === 'error') return state.error ?? 'No se pudo comprobar la actualización.'
+  return 'Comprobá manualmente o esperá el chequeo automático al abrir la app.'
+}
+
+function UpdatesSection() {
+  const [state, setState] = useState<AppUpdateState | null>(null)
+  const [action, setAction] = useState<'check' | 'download' | 'install' | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void window.api.updates.getState()
+      .then(next => {
+        if (!cancelled) setState(next)
+      })
+      .catch(err => {
+        if (!cancelled) {
+          setState({
+            currentVersion: 'unknown',
+            status: 'error',
+            updateVersion: null,
+            releaseName: null,
+            releaseDate: null,
+            releaseNotes: null,
+            progress: null,
+            error: err instanceof Error ? err.message : String(err),
+            lastCheckedAt: null,
+            canCheck: false,
+            canDownload: false,
+            canInstall: false,
+          })
+        }
+      })
+    const off = window.api.updates.onStateChanged(next => {
+      if (!cancelled) setState(next)
+    })
+    return () => {
+      cancelled = true
+      off()
+    }
+  }, [])
+
+  const run = async (nextAction: 'check' | 'download' | 'install') => {
+    setAction(nextAction)
+    try {
+      if (nextAction === 'check') setState(await window.api.updates.checkNow())
+      if (nextAction === 'download') setState(await window.api.updates.download())
+      if (nextAction === 'install') await window.api.updates.install()
+    } finally {
+      setAction(null)
+    }
   }
+
+  const current = state ?? {
+    currentVersion: '...',
+    status: 'idle',
+    updateVersion: null,
+    releaseName: null,
+    releaseDate: null,
+    releaseNotes: null,
+    progress: null,
+    error: null,
+    lastCheckedAt: null,
+    canCheck: false,
+    canDownload: false,
+    canInstall: false,
+  } satisfies AppUpdateState
+  const progress = current.progress?.percent ?? 0
+  const transferred = current.progress
+    ? `${formatUpdateBytes(current.progress.transferred)} / ${formatUpdateBytes(current.progress.total)}`
+    : null
+
+  return (
+    <section className="set-section">
+      <h2>Actualizaciones</h2>
+      <div className="set-card update-card">
+        <div className="update-status-row">
+          <div>
+            <div className="lbl">GitHub Releases</div>
+            <div className="sub">{updateSummary(current)}</div>
+          </div>
+          <span className={`update-status-badge ${current.status}`}>{UPDATE_STATUS_LABEL[current.status]}</span>
+        </div>
+
+        <div className="update-details">
+          <span>Instalada <strong>{current.currentVersion}</strong></span>
+          <span>Último chequeo <strong>{formatUpdateDate(current.lastCheckedAt)}</strong></span>
+          {current.updateVersion && <span>Release <strong>{current.updateVersion}</strong></span>}
+          {current.releaseDate && <span>Publicado <strong>{formatUpdateDate(current.releaseDate)}</strong></span>}
+        </div>
+
+        {current.status === 'downloading' && (
+          <div className="update-progress-block">
+            <div className="update-progress-meter" aria-label={`Descarga ${Math.round(progress)}%`}>
+              <i style={{ width: `${progress}%` }} />
+            </div>
+            <span>{Math.round(progress)}%{transferred ? ` · ${transferred}` : ''}</span>
+          </div>
+        )}
+
+        {current.releaseNotes && (
+          <div className="update-release-notes">
+            {current.releaseNotes}
+          </div>
+        )}
+
+        {current.error && current.status !== 'unsupported' && (
+          <div className="device-error inline">{current.error}</div>
+        )}
+
+        <div className="update-actions">
+          <button className="btn" type="button" disabled={!current.canCheck || action != null} onClick={() => { void run('check') }}>
+            <Icon name="rotate" size={13} /> {action === 'check' ? 'Buscando' : 'Buscar ahora'}
+          </button>
+          <button className="btn primary" type="button" disabled={!current.canDownload || action != null} onClick={() => { void run('download') }}>
+            <Icon name="download" size={13} /> {action === 'download' ? 'Descargando' : 'Descargar'}
+          </button>
+          <button className="btn" type="button" disabled={!current.canInstall || action != null} onClick={() => { void run('install') }}>
+            <Icon name="sync" size={13} /> Reiniciar e instalar
+          </button>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+export function SettingsView({ tweak, setTweak, activeTab, playbackSubTab }: SettingsViewProps) {
+  const [libraryLogOpen, setLibraryLogOpen] = useState(false)
 
   return (
     <div className="settings">
       <h1>Preferences</h1>
-      <SettingsSectionNav
-        activeTab={mainTab}
-        playbackSubTab={playbackSubTab}
-        onTabChange={switchMainTab}
-        onPlaybackSubTabChange={setPlaybackSubTab}
-      />
       <div id="settings-content">
-        {mainTab === 'apariencia' ? (
+        {activeTab === 'apariencia' ? (
           <AppearanceSection tweak={tweak} setTweak={setTweak} />
-        ) : mainTab === 'reproduccion' ? (
+        ) : activeTab === 'reproduccion' ? (
           <div className="settings-tab-content">
             {playbackSubTab === 'general' ? (
               <PlaybackGeneralSection tweak={tweak} setTweak={setTweak} />
@@ -968,15 +1025,15 @@ export function SettingsView({ tweak, setTweak }: Props) {
               <PlaybackLyricsSection tweak={tweak} setTweak={setTweak} />
             )}
           </div>
-        ) : mainTab === 'dispositivos' ? (
-          <DevicesSection tweak={tweak} setTweak={setTweak} />
-        ) : (
-          <StorageSection
+        ) : activeTab === 'bibliotecas' ? (
+          <LibrariesSection
             tweak={tweak}
             setTweak={setTweak}
             libraryLogOpen={libraryLogOpen}
             setLibraryLogOpen={setLibraryLogOpen}
           />
+        ) : (
+          <UpdatesSection />
         )}
       </div>
     </div>

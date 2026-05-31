@@ -70,7 +70,7 @@ export function Sidebar({
     const picked = await pickFolder()
     if (picked) await addFolder(picked)
   }
-  const addDevice = () => setView({ kind: 'settings' })
+  const addDevice = () => setView({ kind: 'devices' })
 
   const Item = ({ id, icon, label, badge, onClick }: { id: string; icon: IconName; label: string; badge?: string | number; onClick: () => void }) => (
     <div className={`sb-item ${selectedKey === id ? 'active' : ''}`} onClick={onClick} role="button" tabIndex={0}>
@@ -114,7 +114,7 @@ export function Sidebar({
 
         <SectionLabel label="Devices" onAdd={addDevice} title="Administrar dispositivos" />
         {visibleDevices.length === 0 && (
-          <Item id="devices" icon="device" label="Ajustes de dispositivos" onClick={() => setView({ kind: 'settings' })} />
+          <Item id="devices" icon="device" label="Ajustes de dispositivos" onClick={() => setView({ kind: 'devices' })} />
         )}
         {visibleDevices.map(device => {
           const deviceKeyPrefix = `dev-${device.id}-`

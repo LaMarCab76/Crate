@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type {
   AddFolderResult,
+  AppUpdateState,
   Api,
   BufferProgressEvent,
   EqState,
@@ -387,6 +388,17 @@ const api: Api = {
       ipcRenderer.invoke('downloads:retry', jobId) as Promise<DownloadJob | null>,
     onProgress: (h) => subscribe<DownloadProgressEvent>('downloads:progress', h),
     onJobsChanged: (h) => subscribe<DownloadJobsChangedEvent>('downloads:jobs-changed', h),
+  },
+  updates: {
+    getState: () =>
+      ipcRenderer.invoke('app:update:getState') as Promise<AppUpdateState>,
+    checkNow: () =>
+      ipcRenderer.invoke('app:update:check') as Promise<AppUpdateState>,
+    download: () =>
+      ipcRenderer.invoke('app:update:download') as Promise<AppUpdateState>,
+    install: () =>
+      ipcRenderer.invoke('app:update:install') as Promise<void>,
+    onStateChanged: (h) => subscribe<AppUpdateState>('app:update-state', h),
   },
 }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import { Icon } from '@renderer/components/Icon'
 import {
   useDeviceOverview,
@@ -31,7 +31,6 @@ export type DeviceDashboardTab = 'overview' | 'activity'
 type DevicesViewProps = {
   deviceId?: string
   dashboardTab?: DeviceDashboardTab
-  onDashboardTabChange?: (tab: DeviceDashboardTab) => void
 }
 
 function shortDate(value: string | null): string {
@@ -140,7 +139,7 @@ function PendingJournalList({
   )
 }
 
-export function DevicesView({ deviceId, dashboardTab, onDashboardTabChange }: DevicesViewProps = {}) {
+export function DevicesView({ deviceId, dashboardTab }: DevicesViewProps = {}) {
   const devices = useDeviceStore(s => s.devices)
   const pendingJournals = useDeviceStore(s => s.pendingJournals)
   const scanResult = useDeviceStore(s => s.scanResult)
@@ -157,10 +156,7 @@ export function DevicesView({ deviceId, dashboardTab, onDashboardTabChange }: De
   const selectDevice = useDeviceStore(s => s.selectDevice)
   const selectedDevice = useSelectedDevice()
   const overview = useDeviceOverview(selectedDevice?.id ?? null)
-  const [localTab, setLocalTab] = useState<DeviceDashboardTab>('overview')
-  const tab = dashboardTab ?? localTab
-  const setTab = onDashboardTabChange ?? setLocalTab
-  const showInlineDashboardTabs = dashboardTab == null || onDashboardTabChange == null
+  const tab = dashboardTab ?? 'overview'
 
   useEffect(() => {
     void load()
@@ -170,10 +166,6 @@ export function DevicesView({ deviceId, dashboardTab, onDashboardTabChange }: De
   useEffect(() => {
     if (deviceId) selectDevice(deviceId)
   }, [deviceId, selectDevice])
-
-  useEffect(() => {
-    if (dashboardTab == null) setLocalTab('overview')
-  }, [dashboardTab, selectedDevice?.id])
 
   useEffect(() => {
     if (!selectedDevice) return
@@ -243,29 +235,6 @@ export function DevicesView({ deviceId, dashboardTab, onDashboardTabChange }: De
       </div>
 
       {error && <div className="device-error">{error}</div>}
-
-      {showInlineDashboardTabs && (
-        <div className="device-dashboard-tabs" role="tablist" aria-label="Device dashboard sections">
-          <button
-            className={tab === 'overview' ? 'active' : ''}
-            type="button"
-            role="tab"
-            aria-selected={tab === 'overview'}
-            onClick={() => setTab('overview')}
-          >
-            Resumen
-          </button>
-          <button
-            className={tab === 'activity' ? 'active' : ''}
-            type="button"
-            role="tab"
-            aria-selected={tab === 'activity'}
-            onClick={() => setTab('activity')}
-          >
-            Actividad
-          </button>
-        </div>
-      )}
 
       {tab === 'overview' ? (
         <section className="device-summary-panel">

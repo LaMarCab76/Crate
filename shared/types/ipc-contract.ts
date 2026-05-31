@@ -296,6 +296,46 @@ export interface MetaApi {
   version: string
 }
 
+export type AppUpdateStatus =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'not-available'
+  | 'downloading'
+  | 'downloaded'
+  | 'error'
+  | 'unsupported'
+
+export interface AppUpdateProgress {
+  percent: number
+  transferred: number
+  total: number
+  bytesPerSecond: number
+}
+
+export interface AppUpdateState {
+  currentVersion: string
+  status: AppUpdateStatus
+  updateVersion: string | null
+  releaseName: string | null
+  releaseDate: string | null
+  releaseNotes: string | null
+  progress: AppUpdateProgress | null
+  error: string | null
+  lastCheckedAt: number | null
+  canCheck: boolean
+  canDownload: boolean
+  canInstall: boolean
+}
+
+export interface UpdatesApi {
+  getState(): Promise<AppUpdateState>
+  checkNow(): Promise<AppUpdateState>
+  download(): Promise<AppUpdateState>
+  install(): Promise<void>
+  onStateChanged(h: (state: AppUpdateState) => void): EventOff
+}
+
 export type PlaybackStatus = 'stopped' | 'playing' | 'paused' | 'loading'
 export type FftMode = 'off' | 'mini' | 'full' | 'screen'
 
@@ -609,6 +649,7 @@ export interface Api {
   lyrics: LyricsApi
   devices: DevicesApi
   downloads: DownloadsApi
+  updates: UpdatesApi
 }
 
 declare global {

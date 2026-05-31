@@ -5,7 +5,6 @@ import { Toolbar } from './components/Toolbar'
 import { Icon, type IconName } from './components/Icon'
 import { PlayerPane } from './components/PlayerPane'
 import { PlayerBottomBar } from './components/PlayerBottomBar'
-import { DeviceConnectModal, type DeviceConnectTarget } from './components/DeviceConnectModal'
 import { LyricsSidePane } from './components/LyricsSidePane'
 import { UpNextToast } from './components/UpNextToast'
 import { NowPlayingFull } from './components/NowPlayingFull'
@@ -17,7 +16,7 @@ import { ArtistsView } from './views/ArtistsView'
 import { ArtistView } from './views/ArtistView'
 import { PlaylistView } from './views/PlaylistView'
 import { SearchView } from './views/SearchView'
-import { SettingsView } from './views/SettingsView'
+import { SettingsView, type PlaybackSubTab, type SettingsMainTab } from './views/SettingsView'
 import { ImportView } from './views/ImportView'
 import { GenresView } from './views/GenresView'
 import { DevicesView, type DeviceDashboardTab } from './views/DevicesView'
@@ -193,6 +192,45 @@ const DEVICE_SYNC_SUBTABS: Array<DeviceNavbarSubTab<DeviceSyncTab>> = [
   { key: 'config', label: 'Configuración', icon: 'sliders' },
 ]
 
+const SETTINGS_TABS: Array<DeviceNavbarSubTab<SettingsMainTab>> = [
+  { key: 'apariencia', label: 'Apariencia', icon: 'moon' },
+  { key: 'reproduccion', label: 'Reproducción', icon: 'play' },
+  { key: 'bibliotecas', label: 'Bibliotecas', icon: 'folder' },
+  { key: 'actualizaciones', label: 'Actualizaciones', icon: 'sync' },
+]
+
+const SETTINGS_PLAYBACK_SUBTABS: Array<DeviceNavbarSubTab<PlaybackSubTab>> = [
+  { key: 'general', label: 'Reproducción', icon: 'play' },
+  { key: 'eq', label: 'Eq', icon: 'sliders' },
+  { key: 'letras', label: 'Letras', icon: 'lyrics' },
+]
+
+function SettingsSectionTabs({
+  active,
+  onChange,
+}: {
+  active: SettingsMainTab
+  onChange: (tab: SettingsMainTab) => void
+}) {
+  return (
+    <nav className="device-section-tabs settings-section-tabs" role="tablist" aria-label="Secciones de preferencias">
+      {SETTINGS_TABS.map(tab => (
+        <button
+          key={tab.key}
+          type="button"
+          role="tab"
+          aria-selected={active === tab.key}
+          className={`device-section-tab ${active === tab.key ? 'active' : ''}`}
+          onClick={() => onChange(tab.key)}
+        >
+          <Icon name={tab.icon} size={14} />
+          {tab.label}
+        </button>
+      ))}
+    </nav>
+  )
+}
+
 function DeviceSyncStatusBar({ withFloatingPlayer }: { withFloatingPlayer: boolean }) {
   const devices = useDeviceStore(s => s.devices)
   const scanProgress = useDeviceStore(s => s.scanProgress)
@@ -222,33 +260,10 @@ function DeviceSyncStatusBar({ withFloatingPlayer }: { withFloatingPlayer: boole
   )
 }
 
-function DeviceVolumePrompt({
-  defaultArtworkMaxEdge,
-  onOpenDevice,
-}: {
-  defaultArtworkMaxEdge: number
-  onOpenDevice: (deviceId: string) => void
-}) {
+function DeviceVolumePrompt({ onReviewLibraries }: { onReviewLibraries: () => void }) {
   const unknownVolumes = useDeviceStore(s => s.unknownVolumes)
-  const ignoreVolume = useDeviceStore(s => s.ignoreVolume)
-  const addFolder = useLibraryStore(s => s.addFolder)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [connectTarget, setConnectTarget] = useState<DeviceConnectTarget | null>(null)
   const volume = unknownVolumes[0]
   if (!volume) return null
-
-  const run = async (action: () => Promise<void>) => {
-    setBusy(true)
-    setError(null)
-    try {
-      await action()
-    } catch (err) {
-      setError((err as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
 
   return (
     <div className="device-volume-prompt">
@@ -256,47 +271,13 @@ function DeviceVolumePrompt({
       <div className="device-volume-prompt-main">
         <strong>Nuevo volumen detectado</strong>
         <span title={volume.rootPath}>{volume.name} · {volume.rootPath}</span>
-        {error && <em>{error}</em>}
+        <em>Clasificalo desde Preferencias &gt; Bibliotecas.</em>
       </div>
       <div className="device-volume-prompt-actions">
-        <button
-          className="btn primary"
-          type="button"
-          disabled={busy}
-          onClick={() => setConnectTarget({ rootPath: volume.rootPath, name: volume.name })}
-        >
-          DAP
-        </button>
-        <button
-          className="btn"
-          type="button"
-          disabled={busy}
-          onClick={() => {
-            void run(async () => {
-              await addFolder(volume.rootPath)
-              await ignoreVolume(volume.rootPath)
-            })
-          }}
-        >
-          Biblioteca
-        </button>
-        <button
-          className="btn ghost"
-          type="button"
-          disabled={busy}
-          onClick={() => { void run(() => ignoreVolume(volume.rootPath)) }}
-        >
-          Ignorar
+        <button className="btn primary" type="button" onClick={onReviewLibraries}>
+          <Icon name="folder" size={13} /> Ver Bibliotecas
         </button>
       </div>
-      {connectTarget && (
-        <DeviceConnectModal
-          target={connectTarget}
-          artworkMaxEdge={defaultArtworkMaxEdge}
-          onConnected={device => onOpenDevice(device.id)}
-          onClose={() => setConnectTarget(null)}
-        />
-      )}
     </div>
   )
 }
@@ -310,6 +291,8 @@ export default function App() {
   // the top chrome owns them; reset per device below.
   const [dashboardTab, setDashboardTab] = useState<DeviceDashboardTab>('overview')
   const [syncTab, setSyncTab] = useState<DeviceSyncTab>('sync')
+  const [settingsTab, setSettingsTab] = useState<SettingsMainTab>('apariencia')
+  const [settingsPlaybackTab, setSettingsPlaybackTab] = useState<PlaybackSubTab>('general')
   const [searchQuery, setSearchQuery] = useState('')
   const [searchScope, setSearchScope] = useState<'global' | 'view'>('view')
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -745,18 +728,28 @@ export default function App() {
           />
         )
       case 'settings':
-        return <SettingsView tweak={tweak} setTweak={setTweak} />
+        return (
+          <SettingsView
+            tweak={tweak}
+            setTweak={setTweak}
+            activeTab={settingsTab}
+            playbackSubTab={settingsPlaybackTab}
+          />
+        )
       case 'import':
         return <ImportView />
       case 'devices':
-        return <DevicesView />
+        return (
+          <DevicesView
+            dashboardTab={dashboardTab}
+          />
+        )
       case 'device':
         if (view.section === 'dashboard') {
           return (
             <DevicesView
               deviceId={view.deviceId}
               dashboardTab={dashboardTab}
-              onDashboardTabChange={setDashboardTab}
             />
           )
         }
@@ -827,7 +820,7 @@ export default function App() {
                 onNavigate={navigate}
               />
             )}
-            {view.kind === 'device' && view.section === 'dashboard' && (
+            {((view.kind === 'device' && view.section === 'dashboard') || view.kind === 'devices') && (
               <DeviceNavbarSubTabs
                 tabs={DEVICE_DASHBOARD_SUBTABS}
                 active={dashboardTab}
@@ -843,6 +836,17 @@ export default function App() {
                 onChange={setSyncTab}
               />
             )}
+            {view.kind === 'settings' && (
+              <SettingsSectionTabs active={settingsTab} onChange={setSettingsTab} />
+            )}
+            {view.kind === 'settings' && settingsTab === 'reproduccion' && (
+              <DeviceNavbarSubTabs
+                tabs={SETTINGS_PLAYBACK_SUBTABS}
+                active={settingsPlaybackTab}
+                ariaLabel="Subsecciones de reproducción"
+                onChange={setSettingsPlaybackTab}
+              />
+            )}
             <div
               ref={contentRef}
               className="content"
@@ -851,8 +855,10 @@ export default function App() {
             </div>
             <DeviceSyncStatusBar withFloatingPlayer={bottomPlayerVisible} />
             <DeviceVolumePrompt
-              defaultArtworkMaxEdge={tweak.deviceArtworkMaxEdge}
-              onOpenDevice={deviceId => navigate({ kind: 'device', deviceId, section: 'dashboard' })}
+              onReviewLibraries={() => {
+                setSettingsTab('bibliotecas')
+                navigate({ kind: 'settings' }, { replace: view.kind === 'settings' })
+              }}
             />
           </div>
 

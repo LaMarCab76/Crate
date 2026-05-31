@@ -8,6 +8,7 @@ import { disposeGapless, registerAudioChannel } from './ipc/audio-channel'
 import { registerLyricsChannel } from './ipc/lyrics-channel'
 import { registerDevicesChannel } from './ipc/devices-channel'
 import { registerDownloadsChannel } from './ipc/downloads-channel'
+import { registerUpdatesChannel } from './ipc/updates-channel'
 import { registerProtocolHandlers, registerProtocolSchemes } from './protocol'
 import { getDeviceSyncService } from './devices/DeviceSyncService'
 import { getFolderWatcher } from './library/FolderWatcher'
@@ -17,6 +18,7 @@ import { getLyricsSettings } from './lyrics/LyricsSettings'
 import { getAudioEngine } from './audio/AudioEngine'
 import { getExclusiveModeManager } from './audio/ExclusiveModeManager'
 import { getLibraryBackup } from './services/LibraryBackup'
+import { getAppUpdateService } from './updates/AppUpdateService'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -136,6 +138,7 @@ app.whenReady().then(async () => {
   registerLyricsChannel()
   registerDevicesChannel()
   registerDownloadsChannel()
+  registerUpdatesChannel()
   getDeviceSyncService().startVolumeMonitor()
 
   const reconciler = getLibraryReconciler()
@@ -158,6 +161,7 @@ app.whenReady().then(async () => {
   if (getLyricsSettings().get().backgroundFetch) backfill.sweepExistingLibrary()
 
   createMainWindow()
+  getAppUpdateService().startAutoCheck()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow()

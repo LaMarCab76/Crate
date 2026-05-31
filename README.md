@@ -24,6 +24,12 @@ The `postinstall` hook rebuilds `better-sqlite3` against the bundled Electron
 runtime. If a native module ever drifts after an Electron upgrade,
 `npm run rebuild` does it on demand.
 
+Packaged builds check GitHub Releases for updates through `electron-updater`.
+The release workflow uploads installer artifacts plus `latest*.yml` metadata,
+and Preferences → Actualizaciones can check, download, and install the
+published release. macOS auto-update still requires a signed build for the
+final install step.
+
 ## Project layout
 
 ```
@@ -185,6 +191,8 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
   inline-lyrics visibility, full-screen background spectrum.
 - Lyrics: auto-fetch, background fetch, prefer-synced, orphan `.lrc` cleanup,
   global offset, and manual missing-lyrics management.
+- Updates: manual check/download/install controls backed by GitHub Releases,
+  plus an automatic check when a packaged app starts.
 - Devices: default artwork max-edge, volume detection, ignore lists.
 - Playback cache: stats + clear + per-byte quota.
 
@@ -192,6 +200,9 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
 - `electron-builder` targets: **DMG (x64 + arm64), NSIS (x64), AppImage, .deb**,
   with `native/libs/` shipped via `extraResources` + `asarUnpack` so BASS
   loads at runtime.
+- GitHub Releases publish configuration emits updater metadata
+  (`latest-mac.yml`, `latest.yml`, `latest-linux.yml`) and macOS zip artifacts
+  required by the updater.
 - Strict renderer sandbox: `contextIsolation: true`, `nodeIntegration: false`,
   navigation locked to the app's own origin, `window.open` filtered to
   http(s) only.
