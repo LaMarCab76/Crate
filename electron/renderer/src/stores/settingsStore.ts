@@ -51,6 +51,12 @@ export interface Tweak {
   lyricsAutoFetch: boolean
   lyricsPreferSynced: boolean
   lyricsGlobalOffsetMs: number
+  // Background backfill of missing lyrics as songs are added + a startup sweep.
+  // Distinct from lyricsAutoFetch (which fetches on playback). Off by default.
+  lyricsBackgroundFetch: boolean
+  // Delete orphaned .lrc files (no matching audio) during library scans. Off by
+  // default (destructive).
+  lyricsDeleteOrphans: boolean
 }
 
 const TWEAK_DEFAULTS: Tweak = {
@@ -78,6 +84,8 @@ const TWEAK_DEFAULTS: Tweak = {
   lyricsAutoFetch: true,
   lyricsPreferSynced: true,
   lyricsGlobalOffsetMs: 0,
+  lyricsBackgroundFetch: false,
+  lyricsDeleteOrphans: false,
 }
 
 // Maps the renderer tweak keys onto the main-process LyricsSettingsState shape.
@@ -85,6 +93,8 @@ function lyricsPrefsFromTweak(t: Tweak): LyricsSettingsState {
   return {
     autoFetch: t.lyricsAutoFetch,
     preferSynced: t.lyricsPreferSynced,
+    backgroundFetch: t.lyricsBackgroundFetch,
+    deleteOrphanLyrics: t.lyricsDeleteOrphans,
   }
 }
 

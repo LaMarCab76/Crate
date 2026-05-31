@@ -89,7 +89,7 @@ export interface ImportCompleteEvent {
 
 export type LibraryScanReason = 'startup' | 'watch' | 'background' | 'manual' | 'import'
 export type LibraryScanStatus = 'running' | 'completed' | 'failed'
-export type LibraryScanEventType = 'added' | 'updated' | 'removed' | 'missing_root' | 'skipped' | 'error'
+export type LibraryScanEventType = 'added' | 'updated' | 'removed' | 'missing_root' | 'skipped' | 'error' | 'orphan_lrc_removed'
 
 export interface LibraryScanRun {
   id: number

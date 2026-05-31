@@ -1,5 +1,6 @@
 import { dialog, ipcMain } from 'electron'
 import { readFileSync } from 'node:fs'
+import { getLyricsBackfillService } from '../lyrics/LyricsBackfillService'
 import { getLyricsService } from '../lyrics/LyricsService'
 import { getLyricsSettings } from '../lyrics/LyricsSettings'
 import { broadcast } from './events'
@@ -106,5 +107,10 @@ export function registerLyricsChannel(): void {
   // these to decide cache/fetch behavior. Sidecar writes are mandatory.
   ipcMain.handle('settings:setLyrics', (_, patch: Partial<LyricsSettingsState>) => {
     getLyricsSettings().set(patch)
+    // Enabling background fetch at runtime kicks off the one-time library sweep
+    // (idempotent per session).
+    if (patch.backgroundFetch === true) {
+      try { getLyricsBackfillService().sweepExistingLibrary() } catch { /* best-effort */ }
+    }
   })
 }

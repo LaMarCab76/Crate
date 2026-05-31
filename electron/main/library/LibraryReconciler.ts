@@ -1,17 +1,21 @@
-import { existsSync, statSync } from 'node:fs'
-import { basename } from 'node:path'
+import { existsSync, statSync, unlinkSync } from 'node:fs'
+import { basename, dirname, extname } from 'node:path'
 import type { DbFolder, DbTrack } from '@shared/types/db'
 import type { LibraryScanReason, LibraryScanRun } from '@shared/types/ipc-contract'
 import { getRepos, type Repos } from '../db/repositories'
 import { broadcast } from '../ipc/events'
+import { getLyricsBackfillService } from '../lyrics/LyricsBackfillService'
+import { getLyricsSettings } from '../lyrics/LyricsSettings'
 import { getLibraryBackup } from '../services/LibraryBackup'
 import { parseArtistName } from './ArtistNameParser'
-import { buildTrackInsert, collectAudioFiles, isAudioPath } from './ImportService'
+import { buildTrackInsert, collectAudioFiles, collectLrcFiles, isAudioPath } from './ImportService'
 import { getLibraryScanSettings } from './LibraryScanSettings'
 import { readTrackMetadata, type TrackMetadata } from './MetadataExtractor'
+import { isOrphanLrc } from './orphanLrc'
 
 const BACKGROUND_SCAN_INTERVAL_MS = 5 * 60 * 1000
 const WATCH_DEBOUNCE_MS = 1000
+const EMPTY_STEMS: ReadonlySet<string> = new Set<string>()
 
 interface ScanCounts {
   added: number
@@ -230,11 +234,66 @@ class LibraryReconciler {
       }
     }
 
+    // Best-effort: never let lyrics cleanup abort a scan.
+    try {
+      await this.cleanupOrphanLrc(folder, runId, files)
+    } catch (err) {
+      console.warn(`[lyrics-cleanup] folder ${folder.id} failed:`, (err as Error).message)
+    }
+
     this.repos.folders.updateTrackCount(folder.id, this.repos.tracks.countByFolder(folder.id))
     if (counts.added > 0 || counts.updated > 0 || counts.removed > 0) {
       getLibraryBackup().scheduleWriteForFolder(folder.id)
     }
     broadcast('library:import:complete', { folderId: folder.id, totalImported: counts.added, total })
+  }
+
+  // Deletes .lrc sidecar files whose matching audio (same basename, any audio
+  // extension) no longer exists. Disk-state driven, so it catches both sidecars
+  // of removed songs and stray .lrc files that were never tracks. Gated by the
+  // deleteOrphanLyrics setting; default off (destructive). Only operates inside
+  // the library root and never touches a .lrc whose sibling audio is present.
+  private async cleanupOrphanLrc(folder: DbFolder, runId: number, audioFiles: string[]): Promise<void> {
+    if (!getLyricsSettings().get().deleteOrphanLyrics) return
+
+    // Audio basenames present, grouped by directory (case-insensitive).
+    const stemsByDir = new Map<string, Set<string>>()
+    for (const file of audioFiles) {
+      const dir = dirname(file)
+      const stem = basename(file, extname(file)).toLowerCase()
+      let set = stemsByDir.get(dir)
+      if (!set) {
+        set = new Set<string>()
+        stemsByDir.set(dir, set)
+      }
+      set.add(stem)
+    }
+
+    const lrcFiles = await collectLrcFiles(folder.path)
+    for (const lrc of lrcFiles) {
+      const siblings = stemsByDir.get(dirname(lrc))
+      if (!isOrphanLrc(basename(lrc), siblings ?? EMPTY_STEMS)) continue
+      try {
+        unlinkSync(lrc)
+        this.repos.libraryScanLog.addEvent({
+          runId,
+          folderId: folder.id,
+          type: 'orphan_lrc_removed',
+          path: lrc,
+          title: basename(lrc),
+          detail: 'No matching audio file',
+        })
+      } catch (err) {
+        this.repos.libraryScanLog.addEvent({
+          runId,
+          folderId: folder.id,
+          type: 'error',
+          path: lrc,
+          title: basename(lrc),
+          detail: `Failed to delete orphan .lrc: ${err instanceof Error ? err.message : String(err)}`,
+        })
+      }
+    }
   }
 
   private async importNewTrack(folderId: number, filePath: string, runId: number, counts: ScanCounts): Promise<void> {
@@ -246,8 +305,13 @@ class LibraryReconciler {
       const album = this.repos.albums.getOrCreate(md.album, md.albumArtist ?? null, md.year || null)
       const genre = md.genre ? this.repos.genres.getOrCreate(md.genre) : null
       const row = buildTrackInsert(md, filePath, folderId, album.id, artist.id, genre?.id ?? null)
-      this.repos.tracks.insert(row)
+      const trackId = this.repos.tracks.insert(row)
       counts.added += 1
+      // Kick off a background lyrics fetch for the freshly-added track. No-op
+      // unless the user enabled background fetch; never blocks the scan.
+      if (trackId > 0) {
+        try { getLyricsBackfillService().enqueue(trackId) } catch { /* best-effort */ }
+      }
       this.repos.libraryScanLog.addEvent({
         runId,
         folderId,

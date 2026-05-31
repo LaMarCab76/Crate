@@ -12,6 +12,8 @@ import { registerProtocolHandlers, registerProtocolSchemes } from './protocol'
 import { getDeviceSyncService } from './devices/DeviceSyncService'
 import { getFolderWatcher } from './library/FolderWatcher'
 import { getLibraryReconciler } from './library/LibraryReconciler'
+import { getLyricsBackfillService } from './lyrics/LyricsBackfillService'
+import { getLyricsSettings } from './lyrics/LyricsSettings'
 import { getAudioEngine } from './audio/AudioEngine'
 import { getExclusiveModeManager } from './audio/ExclusiveModeManager'
 import { getLibraryBackup } from './services/LibraryBackup'
@@ -148,6 +150,13 @@ app.whenReady().then(async () => {
   getFolderWatcher().startAll()
   reconciler.startBackgroundSweep()
 
+  // Background lyrics backfill. The initial sweep runs AFTER scanAll so the DB
+  // already reflects the real library (new tracks imported, gone tracks removed).
+  // Both are no-ops unless the user enabled background fetch.
+  const backfill = getLyricsBackfillService()
+  backfill.start()
+  if (getLyricsSettings().get().backgroundFetch) backfill.sweepExistingLibrary()
+
   createMainWindow()
 
   app.on('activate', () => {
@@ -164,6 +173,7 @@ app.on('will-quit', () => {
   // otherwise the JSON would miss the last few mutations of the session.
   try { getLibraryBackup().flushAll() } catch (err) { console.error('[backup] flush failed:', err) }
   getFolderWatcher().stopAll()
+  try { getLyricsBackfillService().stop() } catch { /* service may not have initialized */ }
   try { getLibraryReconciler().dispose() } catch { /* reconciler may not have initialized */ }
   try { getDeviceSyncService().stopVolumeMonitor() } catch { /* service may not have initialized */ }
   // Release CoreAudio hog BEFORE freeing BASS — if we leave the device

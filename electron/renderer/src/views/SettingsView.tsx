@@ -654,7 +654,9 @@ function PlaybackLyricsSection({ tweak, setTweak }: Props) {
         <LyricsGlobalOffsetSetting tweak={tweak} setTweak={setTweak} />
         {([
           ['lyricsAutoFetch', 'Buscar letras automáticamente', 'Al reproducir, busca letras en línea (LRCLIB) si no hay un archivo .lrc.'],
+          ['lyricsBackgroundFetch', 'Descargar letras en segundo plano', 'Busca letras faltantes en LRCLIB para toda la biblioteca, sin necesidad de reproducir. Genera tráfico de red.'],
           ['lyricsPreferSynced', 'Preferir letras sincronizadas', 'Usa la versión con tiempos cuando esté disponible.'],
+          ['lyricsDeleteOrphans', 'Eliminar archivos .lrc huérfanos', 'Al escanear, borra archivos .lrc cuyo audio correspondiente ya no existe. Acción destructiva.'],
         ] as const).map(([key, label, sub]) => (
           <div className="set-row" key={key}>
             <div>
@@ -800,6 +802,7 @@ const SCAN_EVENT_LABELS: Record<LibraryScanEvent['type'], string> = {
   missing_root: 'Carpeta faltante',
   skipped: 'Omitido',
   error: 'Error',
+  orphan_lrc_removed: 'Letra huérfana eliminada',
 }
 
 const SCAN_REASON_LABELS: Record<LibraryScanRun['reason'], string> = {

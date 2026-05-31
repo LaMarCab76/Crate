@@ -84,9 +84,18 @@ export interface LyricsSelectionProgress {
 export interface LyricsSettingsState {
   autoFetch: boolean
   preferSynced: boolean
+  // Proactively fetch missing lyrics from LRCLIB in the background as songs are
+  // added, plus a one-time sweep of the existing library on startup. Distinct
+  // from autoFetch, which only fires on playback. Default off (network traffic).
+  backgroundFetch: boolean
+  // Delete orphaned .lrc sidecar files (no sibling audio) during library scans.
+  // Default off (destructive).
+  deleteOrphanLyrics: boolean
 }
 
 export const LYRICS_SETTINGS_DEFAULTS: LyricsSettingsState = {
   autoFetch: true,
   preferSynced: true,
+  backgroundFetch: false,
+  deleteOrphanLyrics: false,
 }

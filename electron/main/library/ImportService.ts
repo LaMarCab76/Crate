@@ -21,6 +21,16 @@ export function isAudioPath(path: string): boolean {
 }
 
 export async function collectAudioFiles(root: string): Promise<string[]> {
+  return collectFiles(root, name => isAudioPath(name))
+}
+
+// Same walk rules as collectAudioFiles (skip dotfiles + symlinks) but yields the
+// .lrc sidecar files. Used by the orphan-lyrics cleanup pass.
+export async function collectLrcFiles(root: string): Promise<string[]> {
+  return collectFiles(root, name => extname(name).toLowerCase() === '.lrc')
+}
+
+async function collectFiles(root: string, accept: (name: string) => boolean): Promise<string[]> {
   const out: string[] = []
   async function walk(dir: string): Promise<void> {
     let entries: Dirent[]
@@ -39,7 +49,7 @@ export async function collectAudioFiles(root: string): Promise<string[]> {
       const full = join(dir, ent.name)
       if (ent.isDirectory()) {
         await walk(full)
-      } else if (ent.isFile() && isAudioPath(ent.name)) {
+      } else if (ent.isFile() && accept(ent.name)) {
         out.push(full)
       }
     }
