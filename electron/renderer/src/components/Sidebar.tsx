@@ -12,6 +12,7 @@ import {
   useTrackCount,
 } from '@renderer/stores/libraryStore'
 import { useTweakStore } from '@renderer/stores/settingsStore'
+import { visibleSidebarDevices } from '@renderer/utils/sidebarDevices'
 import crateLogo from '@renderer/assets/crate-logo.png'
 
 interface SidebarProps {
@@ -79,6 +80,7 @@ export function Sidebar({
     </div>
   )
   const connectedRoots = new Set(devices.map(device => device.rootPath))
+  const visibleDevices = visibleSidebarDevices(devices)
   const visibleCandidates = candidates.filter(candidate => !connectedRoots.has(candidate.rootPath))
 
   return (
@@ -111,10 +113,10 @@ export function Sidebar({
         <Item id="recent"    icon="recent"   label="Recently Added"  onClick={() => setView({ kind: 'recent' })} />
 
         <SectionLabel label="Devices" onAdd={addDevice} title="Administrar dispositivos" />
-        {devices.length === 0 && (
+        {visibleDevices.length === 0 && (
           <Item id="devices" icon="device" label="Ajustes de dispositivos" onClick={() => setView({ kind: 'settings' })} />
         )}
-        {devices.map(device => {
+        {visibleDevices.map(device => {
           const deviceKeyPrefix = `dev-${device.id}-`
           return (
             <div className="sb-device-group" key={device.id}>

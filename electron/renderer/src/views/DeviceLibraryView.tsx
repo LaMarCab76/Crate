@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { Icon, type IconName } from '@renderer/components/Icon'
 import { useDeviceLibrary, useDeviceStore, useRockboxThemeLibrary } from '@renderer/stores/deviceStore'
+import { usePlaybackStore } from '@renderer/stores/playbackStore'
 import { fmtFileSize, fmtTime } from '@renderer/utils/format'
 import type {
   DeviceAlbumSummary,
@@ -14,12 +15,6 @@ import type {
 // Tracks/albums/artists are merged into a single "library" section with an
 // in-view switcher; playlists and rockbox themes stay as their own sections.
 export type DeviceLibrarySection = 'library' | 'playlists' | 'rockboxThemes'
-
-const SECTION_TITLES: Record<DeviceLibrarySection, string> = {
-  library: 'Biblioteca',
-  playlists: 'Playlists',
-  rockboxThemes: 'Rockbox Themes',
-}
 
 export type DeviceLibraryView = 'albums' | 'artists' | 'tracks'
 
@@ -187,113 +182,214 @@ function ThemeFilePill({ label, value, missing = false }: { label: string; value
   )
 }
 
-function ThemePreview({ theme }: { theme: RockboxThemeSummary | null }) {
-  if (!theme) {
-    return (
-      <aside className="device-theme-preview empty">
-        <Icon name="sparkle" size={24} />
-        <strong>Sin theme seleccionado</strong>
-        <span>Importá o seleccioná un theme Rockbox para ver sus archivos.</span>
-      </aside>
-    )
-  }
-  const hasMissingFiles = theme.missingFiles.length > 0
+function encodeAssetPath(path: string): string {
+  return path.split('/').map(part => encodeURIComponent(part)).join('/')
+}
+
+function rockboxAssetUrl(deviceId: string, path: string): string {
+  return `crate://rockbox-theme/${encodeURIComponent(deviceId)}/${encodeAssetPath(path)}`
+}
+
+function artworkAssetUrl(filename: string): string {
+  return `crate://artwork/${encodeURIComponent(filename)}`
+}
+
+function svgId(themeId: string, layerId: string): string {
+  return `rb-${themeId}-${layerId}`.replace(/[^a-zA-Z0-9_-]/g, '-')
+}
+
+function renderPreviewTemplate(template: string, values: Record<string, string>): string {
+  return template.replace(/\{\{(\w+)}}/g, (_match, key: string) => values[key] ?? '')
+}
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  return Math.max(0, Math.min(1, value))
+}
+
+function RockboxThemeMiniPreview({
+  deviceId,
+  theme,
+  values,
+  progress,
+  volume,
+  artworkPath,
+}: {
+  deviceId: string
+  theme: RockboxThemeSummary
+  values: Record<string, string>
+  progress: number
+  volume: number
+  artworkPath: string | null
+}) {
+  const preview = theme.preview
+  const gradientId = svgId(theme.id, 'album-gradient')
   return (
-    <aside className="device-theme-preview">
-      <div className="device-theme-preview-device">
-        <div className="device-theme-preview-screen">
-          <span>{theme.name}</span>
-          <strong>{theme.wpsPath ? 'WPS ready' : 'No WPS'}</strong>
-          <em>{theme.backdropPath ? 'Backdrop linked' : 'Default backdrop'}</em>
-        </div>
-      </div>
-      <div className="device-theme-preview-main">
-        <div className="device-theme-preview-head">
-          <div>
-            <h2>{theme.name}</h2>
-            <span>{theme.configPath} · {theme.fileCount} archivos detectados</span>
-          </div>
-          <b className={hasMissingFiles ? 'warning' : 'ok'}>{hasMissingFiles ? `${theme.missingFiles.length} faltantes` : 'Completo'}</b>
-        </div>
-        <div className="device-theme-file-grid">
-          <ThemeFilePill label="WPS" value={theme.wpsPath} />
-          <ThemeFilePill label="SBS" value={theme.sbsPath} />
-          <ThemeFilePill label="FMS" value={theme.fmsPath} />
-          <ThemeFilePill label="Font" value={theme.font} missing={theme.font != null && theme.missingFiles.includes(theme.font)} />
-          <ThemeFilePill label="Backdrop" value={theme.backdropPath} />
-          <ThemeFilePill label="Icons" value={theme.iconsetPath ?? theme.viewerIconsetPath} />
-        </div>
-        {hasMissingFiles && (
-          <div className="device-theme-missing-list">
-            <span>Archivos referenciados que no existen</span>
-            {theme.missingFiles.slice(0, 5).map(path => <code key={path}>{path}</code>)}
-            {theme.missingFiles.length > 5 && <em>{theme.missingFiles.length - 5} más</em>}
-          </div>
-        )}
-      </div>
-    </aside>
+    <div className="device-theme-screen-frame">
+      <svg
+        className="device-theme-screen-svg"
+        viewBox={`0 0 ${preview.width} ${preview.height}`}
+        role="img"
+        aria-label={`Preview ${theme.name}`}
+      >
+        <defs>
+          <linearGradient id={gradientId} x1="0%" x2="100%" y1="0%" y2="100%">
+            <stop offset="0%" stopColor="#68a7d8" />
+            <stop offset="52%" stopColor="#20242a" />
+            <stop offset="100%" stopColor="#e3b46d" />
+          </linearGradient>
+          {preview.layers.map(layer => (
+            <clipPath id={svgId(theme.id, `${layer.id}-clip`)} key={`${layer.id}-clip`}>
+              <rect x={layer.x} y={layer.y} width={layer.width} height={layer.height} />
+            </clipPath>
+          ))}
+        </defs>
+        <rect x="0" y="0" width={preview.width} height={preview.height} fill={`#${preview.backgroundColor}`} />
+        {preview.layers.map(layer => {
+          const clipPath = `url(#${svgId(theme.id, `${layer.id}-clip`)})`
+          switch (layer.type) {
+            case 'image':
+              return (
+                <image
+                  key={layer.id}
+                  href={rockboxAssetUrl(deviceId, layer.path)}
+                  x={layer.x - layer.sourceX}
+                  y={layer.y - layer.sourceY}
+                  width={layer.intrinsicWidth}
+                  height={layer.intrinsicHeight}
+                  clipPath={clipPath}
+                  preserveAspectRatio="none"
+                />
+              )
+            case 'albumArt':
+              return artworkPath ? (
+                <image
+                  key={layer.id}
+                  href={artworkAssetUrl(artworkPath)}
+                  x={layer.x}
+                  y={layer.y}
+                  width={layer.width}
+                  height={layer.height}
+                  clipPath={clipPath}
+                  preserveAspectRatio="xMidYMid slice"
+                />
+              ) : (
+                <g key={layer.id} clipPath={clipPath}>
+                  <rect x={layer.x} y={layer.y} width={layer.width} height={layer.height} fill={`url(#${gradientId})`} />
+                  <circle cx={layer.x + layer.width * 0.72} cy={layer.y + layer.height * 0.28} r={Math.min(layer.width, layer.height) * 0.18} fill="rgba(255,255,255,0.24)" />
+                </g>
+              )
+            case 'bar': {
+              const value = layer.kind === 'progress' ? progress : layer.kind === 'volume' ? volume : layer.value
+              return (
+                <g key={layer.id}>
+                  <rect x={layer.x} y={layer.y} width={layer.width} height={layer.height} fill={`#${layer.trackColor}`} rx={Math.min(2, layer.height / 2)} />
+                  <rect x={layer.x} y={layer.y} width={layer.width * clamp01(value)} height={layer.height} fill={`#${layer.color}`} rx={Math.min(2, layer.height / 2)} />
+                </g>
+              )
+            }
+            case 'rect':
+              return <rect key={layer.id} x={layer.x} y={layer.y} width={layer.width} height={layer.height} fill={`#${layer.color}`} opacity={layer.opacity} />
+            case 'text': {
+              const anchor = layer.align === 'center' ? 'middle' : layer.align === 'right' ? 'end' : 'start'
+              const textX = layer.align === 'center'
+                ? layer.x + layer.width / 2
+                : layer.align === 'right'
+                  ? layer.x + layer.width
+                  : layer.x
+              return (
+                <text
+                  key={layer.id}
+                  x={textX}
+                  y={layer.y + Math.max(1, (layer.height - layer.fontSize) / 2)}
+                  fill={`#${layer.color}`}
+                  fontSize={layer.fontSize}
+                  fontFamily="ui-sans-serif, system-ui"
+                  fontWeight="600"
+                  textAnchor={anchor}
+                  dominantBaseline="hanging"
+                  clipPath={clipPath}
+                >
+                  {renderPreviewTemplate(layer.template, values)}
+                </text>
+              )
+            }
+          }
+        })}
+      </svg>
+    </div>
   )
 }
 
-function ThemeRows({
-  themes,
-  scan,
-  selectedThemeId,
-  onSelect,
+function RockboxThemeCard({
+  deviceId,
+  theme,
+  values,
+  progress,
+  volume,
+  artworkPath,
   onDelete,
   loading,
 }: {
-  themes: RockboxThemeSummary[]
-  scan: RockboxThemeScanDiagnostic
-  selectedThemeId: string | null
-  onSelect: (themeId: string) => void
+  deviceId: string
+  theme: RockboxThemeSummary
+  values: Record<string, string>
+  progress: number
+  volume: number
+  artworkPath: string | null
   onDelete: (theme: RockboxThemeSummary) => void
   loading: boolean
 }) {
-  if (themes.length === 0) {
-    return <div className="device-empty">{scan.message ?? 'No hay temas Rockbox instalados.'}</div>
-  }
+  const hasMissingFiles = theme.missingFiles.length > 0
   return (
-    <div className="device-entity-table">
-      {themes.map(theme => (
-        <div
-          className={`device-theme-row ${selectedThemeId === theme.id ? 'active' : ''}`}
-          key={theme.id}
-          role="button"
-          tabIndex={0}
-          onClick={() => onSelect(theme.id)}
-          onKeyDown={event => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault()
-              onSelect(theme.id)
-            }
-          }}
-        >
-          <Icon name="sparkle" size={16} />
-          <span className="device-entity-main">
-            <strong>{theme.name}</strong>
-            <em>{theme.configPath} · {theme.fileCount} archivos</em>
-          </span>
-          <span>{theme.wpsPath ? 'WPS' : '-'}</span>
-          <span>{theme.sbsPath ? 'SBS' : '-'}</span>
-          <span className={theme.missingFiles.length > 0 ? 'device-theme-row-warning' : ''}>
-            {theme.missingFiles.length > 0 ? `${theme.missingFiles.length} faltantes` : theme.font ?? '-'}
-          </span>
-          <button
-            className="btn icon"
-            type="button"
-            disabled={loading}
-            title="Eliminar theme"
-            onClick={event => {
-              event.stopPropagation()
-              onDelete(theme)
-            }}
-          >
-            <Icon name="trash" size={12} />
-          </button>
+    <article className={`device-theme-card ${hasMissingFiles ? 'warning' : ''}`}>
+      <RockboxThemeMiniPreview
+        deviceId={deviceId}
+        theme={theme}
+        values={values}
+        progress={progress}
+        volume={volume}
+        artworkPath={artworkPath}
+      />
+      <div className="device-theme-card-head">
+        <div>
+          <h2>{theme.name}</h2>
+          <span>{theme.configPath} · {theme.fileCount} archivos detectados</span>
         </div>
-      ))}
-    </div>
+        <b className={hasMissingFiles ? 'warning' : 'ok'}>{hasMissingFiles ? `${theme.missingFiles.length} faltantes` : 'Completo'}</b>
+      </div>
+      <div className="device-theme-file-grid">
+        <ThemeFilePill label="WPS" value={theme.wpsPath} />
+        <ThemeFilePill label="SBS" value={theme.sbsPath} />
+        <ThemeFilePill label="FMS" value={theme.fmsPath} />
+        <ThemeFilePill label="Font" value={theme.font} missing={theme.font != null && theme.missingFiles.includes(theme.font)} />
+        <ThemeFilePill label="Backdrop" value={theme.backdropPath} />
+        <ThemeFilePill label="Icons" value={theme.iconsetPath ?? theme.viewerIconsetPath} />
+      </div>
+      {hasMissingFiles && (
+        <div className="device-theme-missing-list">
+          <span>Archivos referenciados que no existen</span>
+          {theme.missingFiles.slice(0, 4).map(path => <code key={path}>{path}</code>)}
+          {theme.missingFiles.length > 4 && <em>{theme.missingFiles.length - 4} más</em>}
+        </div>
+      )}
+      {theme.preview.warnings.length > 0 && (
+        <div className="device-theme-missing-list muted">
+          {theme.preview.warnings.slice(0, 2).map(warning => <code key={warning}>{warning}</code>)}
+        </div>
+      )}
+      <div className="device-theme-card-actions">
+        <button
+          className="btn icon"
+          type="button"
+          disabled={loading}
+          title="Eliminar theme"
+          onClick={() => onDelete(theme)}
+        >
+          <Icon name="trash" size={12} />
+        </button>
+      </div>
+    </article>
   )
 }
 
@@ -315,8 +411,11 @@ export function DeviceLibraryView({
   const themeInstallResult = useDeviceStore(s => s.themeInstallResult)
   const library = useDeviceLibrary(deviceId)
   const rockboxThemeLibrary = useRockboxThemeLibrary(deviceId)
+  const currentTrack = usePlaybackStore(s => s.currentTrack)
+  const positionSec = usePlaybackStore(s => s.positionSec)
+  const durationSec = usePlaybackStore(s => s.durationSec)
+  const volume = usePlaybackStore(s => s.volume)
   const [dragOver, setDragOver] = useState(false)
-  const [selectedThemeId, setSelectedThemeId] = useState<string | null>(null)
   const [libView, setLibView] = useState<DeviceLibraryView>(() => loadDeviceLibView())
   const fileInputRef = useRef<HTMLInputElement>(null)
   const isRockboxSection = section === 'rockboxThemes'
@@ -350,12 +449,6 @@ export function DeviceLibraryView({
       void loadDeviceLibrary(deviceId, true)
     }
   }
-
-  useEffect(() => {
-    if (!isRockboxSection || !rockboxThemeLibrary) return
-    if (selectedThemeId && rockboxThemeLibrary.themes.some(theme => theme.id === selectedThemeId)) return
-    setSelectedThemeId(rockboxThemeLibrary.themes[0]?.id ?? null)
-  }, [isRockboxSection, rockboxThemeLibrary, selectedThemeId])
 
   const onDrop = async (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault()
@@ -391,10 +484,48 @@ export function DeviceLibraryView({
     }
   }
 
+  const previewValues = useMemo(() => {
+    const duration = durationSec || currentTrack?.d || 218
+    const elapsed = Math.min(Math.max(0, positionSec || 0), duration)
+    const remaining = Math.max(0, duration - elapsed)
+    const now = new Date()
+    const clock = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    const title = currentTrack?.t || 'Positions'
+    const artist = currentTrack?.artist || 'Ariana Grande'
+    const album = currentTrack?.albumTitle || 'Positions (Deluxe)'
+    const filename = currentTrack?.filename || `${title}.flac`
+    const codec = currentTrack?.fmt || currentTrack?.codec || 'FLAC'
+    const bitrate = currentTrack?.bitrate ? `${Math.round(currentTrack.bitrate / 1000)}k` : '940'
+    const sampleRateKhz = currentTrack?.sampleRate ? `${Math.round(currentTrack.sampleRate / 1000)}` : '44'
+    return {
+      title,
+      artist,
+      album,
+      year: currentTrack?.year ? String(currentTrack.year) : '2026',
+      filename,
+      elapsed: fmtTime(elapsed),
+      duration: fmtTime(duration),
+      remaining: fmtTime(remaining),
+      playlistPosition: '114',
+      playlistTotal: '2399',
+      bitrate,
+      codec,
+      sampleRateKhz,
+      volumeDb: '-12 dB',
+      clock,
+      nextTitle: 'test drive',
+      nextArtist: 'Ariana Grande',
+      nextAlbum: 'Positions (Deluxe)',
+      nextFilename: '16 - test drive.flac',
+    }
+  }, [currentTrack, durationSec, positionSec])
+
+  const previewProgress = durationSec > 0 ? clamp01(positionSec / durationSec) : 0.48
+  const previewVolume = clamp01(volume)
+
   function renderSection() {
     if (isRockboxSection) {
       if (!rockboxThemeLibrary) return <div className="device-empty large">Cargando themes...</div>
-      const selectedTheme = rockboxThemeLibrary.themes.find(theme => theme.id === selectedThemeId) ?? rockboxThemeLibrary.themes[0] ?? null
       return (
         <div
           className={`device-theme-panel ${dragOver ? 'drag-over' : ''}`}
@@ -428,17 +559,25 @@ export function DeviceLibraryView({
             </div>
           )}
           <ThemeScanNotice scan={rockboxThemeLibrary.scan} themeCount={rockboxThemeLibrary.themes.length} />
-          <div className="device-theme-workbench">
-            <ThemeRows
-              themes={rockboxThemeLibrary.themes}
-              scan={rockboxThemeLibrary.scan}
-              selectedThemeId={selectedTheme?.id ?? null}
-              onSelect={setSelectedThemeId}
-              onDelete={theme => { void removeTheme(theme) }}
-              loading={loading}
-            />
-            <ThemePreview theme={selectedTheme} />
-          </div>
+          {rockboxThemeLibrary.themes.length === 0 ? (
+            <div className="device-empty large">{rockboxThemeLibrary.scan.message ?? 'No hay temas Rockbox instalados.'}</div>
+          ) : (
+            <div className="device-theme-grid">
+              {rockboxThemeLibrary.themes.map(theme => (
+                <RockboxThemeCard
+                  key={theme.id}
+                  deviceId={deviceId}
+                  theme={theme}
+                  values={previewValues}
+                  progress={previewProgress}
+                  volume={previewVolume}
+                  artworkPath={currentTrack?.artworkPath ?? null}
+                  onDelete={theme => { void removeTheme(theme) }}
+                  loading={loading}
+                />
+              ))}
+            </div>
+          )}
         </div>
       )
     }
@@ -457,37 +596,30 @@ export function DeviceLibraryView({
 
   return (
     <div className="device-browser-page">
-      <div className="lib-head">
-        <div>
-          <h1>{device?.name ?? 'Dispositivo'}</h1>
-          <div className="sub">
-            {SECTION_TITLES[section]} · {device?.rootPath ?? deviceId}
-          </div>
-        </div>
-        <div className="actions">
+      <div className={`device-browser-controls ${section !== 'library' ? 'only-actions' : ''}`}>
+        {section === 'library' && (
+          <nav className="device-subtabs" role="tablist" aria-label="Vista de biblioteca">
+            {DEVICE_LIB_VIEWS.map(item => (
+              <button
+                key={item.value}
+                className={`device-section-tab ${libView === item.value ? 'active' : ''}`}
+                type="button"
+                role="tab"
+                aria-selected={libView === item.value}
+                title={item.label}
+                onClick={() => changeLibView(item.value)}
+              >
+                <Icon name={item.icon} size={13} /> {item.label}
+              </button>
+            ))}
+          </nav>
+        )}
+        <div className="device-browser-actions">
           <button className="btn" type="button" disabled={loading} onClick={refresh}>
             <Icon name="rotate" size={13} /> Actualizar
           </button>
         </div>
       </div>
-
-      {section === 'library' && (
-        <nav className="device-subtabs" role="tablist" aria-label="Vista de biblioteca">
-          {DEVICE_LIB_VIEWS.map(item => (
-            <button
-              key={item.value}
-              className={`device-section-tab ${libView === item.value ? 'active' : ''}`}
-              type="button"
-              role="tab"
-              aria-selected={libView === item.value}
-              title={item.label}
-              onClick={() => changeLibView(item.value)}
-            >
-              <Icon name={item.icon} size={13} /> {item.label}
-            </button>
-          ))}
-        </nav>
-      )}
 
       {error && <div className="device-error">{error}</div>}
 

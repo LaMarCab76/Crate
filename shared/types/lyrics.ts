@@ -74,11 +74,38 @@ export interface LyricsSelectionSummary {
   failed: number
 }
 
+export type LyricsSelectionPhase = 'queued' | 'waiting' | 'fetching' | 'complete'
+
 export interface LyricsSelectionProgress {
   done: number
   total: number
   found: number
   failed: number
+  phase?: LyricsSelectionPhase
+  currentTrackId?: number
+  currentTitle?: string
+  nextAllowedAt?: number | null
+}
+
+export interface LyricsLibraryItem {
+  trackId: number
+  title: string
+  artist: string
+  album: string
+  duration: number
+  path: string
+  status: LyricsStatus
+  source: LyricsSource | null
+  hasLyrics: boolean
+  sidecarWritten: boolean
+  embeddedInFile: boolean
+}
+
+export interface LyricsLibraryOverview {
+  total: number
+  withLyrics: number
+  missingLyrics: number
+  items: LyricsLibraryItem[]
 }
 
 export interface LyricsSettingsState {

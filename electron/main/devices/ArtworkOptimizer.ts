@@ -1,6 +1,7 @@
 import { nativeImage } from 'electron'
 import { ByteVector, File, Picture, PictureType, type IPicture } from 'node-taglib-sharp'
 import { clampDeviceArtworkEdge } from '@shared/constants/device-sync'
+import { resizedArtworkOutcome } from './artworkOptimizationGuards'
 
 const JPEG_QUALITY = 85
 
@@ -89,9 +90,6 @@ function resizePicture(
   const height = Math.max(1, Math.round(size.height * scale))
   const resized = image.resize({ width, height, quality: 'best' })
   const encoded = encodeResizedArtwork(resized, format)
-  if (encoded.data.byteLength >= original.byteLength) {
-    return { picture, optimized: false, bytesSaved: 0 }
-  }
 
   const next = Picture.fromFullData(
     ByteVector.fromByteArray(encoded.data),
@@ -100,10 +98,11 @@ function resizePicture(
     picture.description || 'cover',
   )
   next.filename = filenameWithExtension(picture.filename, encoded.extension)
+  const outcome = resizedArtworkOutcome(original.byteLength, encoded.data.byteLength)
   return {
     picture: next,
-    optimized: true,
-    bytesSaved: original.byteLength - encoded.data.byteLength,
+    optimized: outcome.optimized,
+    bytesSaved: outcome.bytesSaved,
   }
 }
 

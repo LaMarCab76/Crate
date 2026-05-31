@@ -4,7 +4,7 @@ Audiophile music library and player for **macOS, Windows and Linux**, built as a
 Electron + Vite + React + TypeScript desktop app on top of the
 [BASS](https://www.un4seen.com/bass.html) audio library.
 
-> Current release: **v0.3.2** — installers and release notes live in
+> Current release: **v0.4.2** — installers and release notes live in
 > [`docs/releases/`](docs/releases/).
 
 ## Quick start
@@ -127,17 +127,21 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
   artwork-extracted**.
 
 ### Lyrics
-- Read pipeline composes four providers — **LRClib** (online), embedded tags,
-  `.lrc` **sidecar**, and an in-DB **cache** — coordinated by `LyricsMatcher`
-  with candidate selection in `LyricsCandidates` when multiple matches show up.
+- Read pipeline composes **LRCLIB** (online), embedded tags, and `.lrc`
+  **sidecars** — coordinated by `LyricsMatcher` with candidate selection in
+  `LyricsCandidates` when multiple matches show up.
 - Write pipeline writes mandatory **`.lrc` sidecars** next to the audio file
   (`SidecarLrcWriter`) — sidecars are what gets copied during device sync, so
   lyrics travel with the library. A `FlacVorbisLyricsWriter` plus
   `stripFlacLyrics` handle legacy embedded cases.
+- Online lookups are globally queued at **one song per minute**. Local sidecars
+  and embedded lyrics resolve immediately and do not consume a lookup slot.
 - Synced display with **global** and **per-track** timing offsets
   (`lyricsGlobalOffsetMs` in settings, plus the parsed `[offset:…]` tag
   honored at lookup time).
-- Settings: auto-fetch, prefer-synced, local cache toggle, global offset.
+- Settings: auto-fetch, background fetch, prefer-synced, orphan `.lrc` cleanup,
+  global offset, and a manual library panel for finding songs with/without
+  lyrics and fetching selected missing lyrics without playback.
 - A `LyricsPanel` (inline) and `LyricsSidePane` (overlay) both subscribe to the
   same playback tick and run the same current-line lookup.
 - Full spec for future iteration in [`docs/lyrics-feature.md`](docs/lyrics-feature.md).
@@ -157,6 +161,9 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
   doesn't blow past flash storage limits.
 - `RockboxThemeScanner` lists installed themes and accepts **drag-and-drop
   `.zip` theme installs** straight into the device's `/.rockbox/themes/`.
+- Device sync copies only lyrics already present locally (`.lrc` sidecars or
+  embedded tags). It no longer downloads missing lyrics online during MP3/DAP
+  sync.
 
 ### Downloads
 - `DownloadManager` with provider plugins: **Qobuz** and **TIDAL**.
@@ -176,7 +183,8 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
 - Audio: gapless, crossfade duration, soundcheck, exclusive mode, 10-band EQ.
 - Player: tint source (default / preset / custom / artwork), spectrum +
   inline-lyrics visibility, full-screen background spectrum.
-- Lyrics: auto-fetch, prefer-synced, local cache, global offset.
+- Lyrics: auto-fetch, background fetch, prefer-synced, orphan `.lrc` cleanup,
+  global offset, and manual missing-lyrics management.
 - Devices: default artwork max-edge, volume detection, ignore lists.
 - Playback cache: stats + clear + per-byte quota.
 

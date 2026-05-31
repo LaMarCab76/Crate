@@ -8,6 +8,7 @@ import {
 } from '@shared/constants/device-sync'
 import type {
   DeviceConnectPayload,
+  DeviceArtworkOptimizationSelection,
   DeviceSettingsUpdate,
   DeviceSyncApplySelection,
   DeviceSyncActionKind,
@@ -53,6 +54,9 @@ function assertConnectPayload(value: unknown): DeviceConnectPayload {
   if (payload.fetchMissingLyrics !== undefined && typeof payload.fetchMissingLyrics !== 'boolean') {
     throw new Error('Invalid fetchMissingLyrics flag')
   }
+  if (payload.optimizeArtworkOnSync !== undefined && typeof payload.optimizeArtworkOnSync !== 'boolean') {
+    throw new Error('Invalid optimizeArtworkOnSync flag')
+  }
   if (payload.sourceLibraryIds !== undefined) {
     if (
       !Array.isArray(payload.sourceLibraryIds) ||
@@ -84,6 +88,9 @@ function assertSettingsUpdate(value: unknown): DeviceSettingsUpdate {
   }
   if (payload.fetchMissingLyrics !== undefined && typeof payload.fetchMissingLyrics !== 'boolean') {
     throw new Error('Invalid fetchMissingLyrics flag')
+  }
+  if (payload.optimizeArtworkOnSync !== undefined && typeof payload.optimizeArtworkOnSync !== 'boolean') {
+    throw new Error('Invalid optimizeArtworkOnSync flag')
   }
   if (payload.musicRoot !== undefined && typeof payload.musicRoot !== 'string') {
     throw new Error('Invalid device music root')
@@ -126,6 +133,18 @@ function assertPathList(value: unknown): string[] {
   return value.map(path => assertNonEmptyString(path, 'file path'))
 }
 
+function assertArtworkOptimizationSelection(value: unknown): DeviceArtworkOptimizationSelection | undefined {
+  if (value === undefined || value === null) return undefined
+  if (!value || typeof value !== 'object') throw new Error('Invalid artwork optimization selection')
+  const payload = value as DeviceArtworkOptimizationSelection
+  if (!Array.isArray(payload.relativePaths)) {
+    throw new Error('Invalid artwork optimization paths')
+  }
+  return {
+    relativePaths: payload.relativePaths.map(path => assertNonEmptyString(path, 'artwork relative path')),
+  }
+}
+
 function assertActionKind(value: unknown): DeviceSyncActionKind {
   if (
     value === 'copy_pc_to_device' ||
@@ -161,7 +180,10 @@ function assertApplySelection(value: unknown): DeviceSyncApplySelection | undefi
           }
         })
       : (() => { throw new Error('Invalid conflict resolutions') })()
-  return { actionIds, conflictResolutions }
+  if (payload.optimizeArtwork !== undefined && typeof payload.optimizeArtwork !== 'boolean') {
+    throw new Error('Invalid optimizeArtwork flag')
+  }
+  return { actionIds, conflictResolutions, optimizeArtwork: payload.optimizeArtwork }
 }
 
 export function registerDevicesChannel(): void {
@@ -207,6 +229,12 @@ export function registerDevicesChannel(): void {
   )
   ipcMain.handle('devices:applySync', (_, planId: unknown, selection: unknown) =>
     service.applySync(assertNonEmptyString(planId, 'plan id'), assertApplySelection(selection)),
+  )
+  ipcMain.handle('devices:optimizeArtwork', (_, deviceId: unknown, selection: unknown) =>
+    service.optimizeDeviceArtwork(
+      assertNonEmptyString(deviceId, 'device id'),
+      assertArtworkOptimizationSelection(selection),
+    ),
   )
   ipcMain.handle('devices:rockboxThemes:install', (_, deviceId: unknown, paths: unknown) =>
     service.installRockboxThemes(

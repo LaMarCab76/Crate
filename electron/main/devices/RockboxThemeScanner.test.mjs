@@ -87,6 +87,56 @@ test('reports misplaced cfg files without counting them as themes', async () => 
   }
 })
 
+test('ignores macOS AppleDouble metadata files when listing themes', async () => {
+  const root = tempDevice()
+  try {
+    mkdirSync(join(root, '.rockbox', 'themes'), { recursive: true })
+    mkdirSync(join(root, '.rockbox', 'wps'), { recursive: true })
+    mkdirSync(join(root, '.rockbox', '__MACOSX', 'themes'), { recursive: true })
+    writeFileSync(join(root, '.rockbox', 'wps', 'Foo.wps'), '')
+    writeFileSync(join(root, '.rockbox', 'wps', '._Foo.wps'), 'metadata')
+    writeFileSync(join(root, '.rockbox', 'themes', 'Foo.cfg'), 'wps: /.rockbox/wps/Foo.wps\n')
+    writeFileSync(join(root, '.rockbox', 'themes', '._Foo.cfg'), 'metadata')
+    writeFileSync(join(root, '.rockbox', 'themes', '.DS_Store'), 'metadata')
+    writeFileSync(join(root, '.rockbox', '__MACOSX', 'themes', 'Wrapped.cfg'), '')
+
+    const result = await scanRockboxThemes(root)
+
+    assert.equal(result.scan.status, 'ok')
+    assert.equal(result.themes.length, 1)
+    assert.equal(result.themes[0].name, 'Foo')
+    assert.equal(result.themes[0].fileCount, 2)
+    assert.deepEqual(result.scan.misplacedConfigPaths, [])
+  } finally {
+    cleanup(root)
+  }
+})
+
+test('treats Rockbox dash path values as disabled rather than missing files', async () => {
+  const root = tempDevice()
+  try {
+    mkdirSync(join(root, '.rockbox', 'themes'), { recursive: true })
+    mkdirSync(join(root, '.rockbox', 'wps'), { recursive: true })
+    writeFileSync(join(root, '.rockbox', 'wps', 'Foo.wps'), '')
+    writeFileSync(join(root, '.rockbox', 'themes', 'Foo.cfg'), [
+      'wps: /.rockbox/wps/Foo.wps',
+      'iconset: -',
+      'viewers iconset: -',
+      'backdrop: -',
+    ].join('\n'))
+
+    const result = await scanRockboxThemes(root)
+
+    assert.equal(result.themes.length, 1)
+    assert.equal(result.themes[0].iconsetPath, null)
+    assert.equal(result.themes[0].viewerIconsetPath, null)
+    assert.equal(result.themes[0].backdropPath, null)
+    assert.deepEqual(result.themes[0].missingFiles, [])
+  } finally {
+    cleanup(root)
+  }
+})
+
 test('reports unreadable themes directories where permissions allow it', async t => {
   if (process.platform === 'win32') {
     t.skip('chmod-based unreadable directory checks are not stable on Windows')

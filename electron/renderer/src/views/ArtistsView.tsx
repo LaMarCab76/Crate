@@ -3,7 +3,7 @@ import type { ArtistsSortBy } from '@renderer/utils/listSort'
 import type { Artist } from '@shared/types/library'
 import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
-import { ListPrefsMenu } from '@renderer/components/ListPrefsMenu'
+import { ListPrefsMenu, SortDirectionButton } from '@renderer/components/ListPrefsMenu'
 import { useListPrefs } from '@renderer/stores/settingsStore'
 import { createListPrefsDefaults, sortArtists } from '@renderer/utils/listSort'
 import { toggleArtistFavorite, useVisibleArtists } from '@renderer/stores/libraryStore'
@@ -54,7 +54,7 @@ export function ArtistsView({ onSelect }: { onSelect?: (ar: Artist) => void }) {
           <div className="sub">
             {list.length} artistas
             {filters.length > 0 ? ` · Filtrado por ${filters.join(', ')}` : ''}
-            {` · Ordenado por ${sortArtistsLabel(prefs.sortBy)}`}
+            {` · Ordenado por ${sortArtistsLabel(prefs.sortBy)}${prefs.sortDir === 'desc' ? ' · Descendente' : ' · Ascendente'}`}
           </div>
         </div>
         <div className="actions list-toolbar">
@@ -74,12 +74,10 @@ export function ArtistsView({ onSelect }: { onSelect?: (ar: Artist) => void }) {
                     </option>
                   ))}
                 </select>
-                <button
-                  className="btn sm"
-                  onClick={() => setPrefs({ sortDir: prefs.sortDir === 'asc' ? 'desc' : 'asc' })}
-                >
-                  {prefs.sortDir === 'asc' ? 'Asc' : 'Desc'}
-                </button>
+                <SortDirectionButton
+                  direction={prefs.sortDir}
+                  onToggle={() => setPrefs({ sortDir: prefs.sortDir === 'asc' ? 'desc' : 'asc' })}
+                />
               </div>
             </div>
             <div className="list-prefs-row-inline">

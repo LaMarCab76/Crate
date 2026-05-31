@@ -1,6 +1,9 @@
 import { existsSync } from 'node:fs'
 import { lstat, readdir, readFile, stat } from 'node:fs/promises'
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import type { RockboxThemePreview } from '@shared/types/device-sync'
+import { parseRockboxThemePreview } from './RockboxThemePreview.ts'
+import { isRockboxIgnoredEntryName } from './rockboxIgnoredFiles.ts'
 
 const ROCKBOX_DIR = '.rockbox'
 const THEME_CONFIG_EXTENSION = '.cfg'
@@ -22,6 +25,7 @@ export interface RockboxThemeSummary {
   fileCount: number
   missingFiles: string[]
   updatedAt: string | null
+  preview: RockboxThemePreview
 }
 
 export interface RockboxThemeScanDiagnostic {
@@ -74,7 +78,8 @@ function normalizeRockboxConfigPath(value: string): string {
 function themeConfigValue(config: string, key: string): string | null {
   const pattern = new RegExp(`^\\s*${key}\\s*:\\s*(.+?)\\s*$`, 'im')
   const match = config.match(pattern)
-  return match?.[1]?.replace(/^"|"$/g, '').trim() || null
+  const value = match?.[1]?.replace(/^"|"$/g, '').trim() || null
+  return value === '-' ? null : value
 }
 
 function themeConfigValues(config: string): Record<string, string> {
@@ -163,7 +168,7 @@ async function findMisplacedConfigPaths(rockboxRoot: string): Promise<string[]> 
     }
 
     for (const entry of entries) {
-      if (entry.name === '__MACOSX' || entry.name === '.DS_Store') continue
+      if (isRockboxIgnoredEntryName(entry.name)) continue
       const full = resolve(dir, entry.name)
       if (!isInside(root, full)) continue
 
@@ -242,6 +247,7 @@ export async function scanRockboxThemes(deviceRoot: string): Promise<RockboxThem
 
   const themes: RockboxThemeSummary[] = []
   for (const entry of entries) {
+    if (isRockboxIgnoredEntryName(entry.name)) continue
     if (!entry.isFile() || extname(entry.name).toLowerCase() !== THEME_CONFIG_EXTENSION) continue
     const configPath = join(themesRoot, entry.name)
     const name = basename(entry.name, THEME_CONFIG_EXTENSION)
@@ -290,6 +296,11 @@ export async function scanRockboxThemes(deviceRoot: string): Promise<RockboxThem
         }
       }
     }
+    const previewResult = await parseRockboxThemePreview(rockboxRoot, name, wpsPath, configValues)
+    for (const previewPath of previewResult.referencedPaths) {
+      const absolute = fromPosix(rockboxRoot, previewPath)
+      if (isInside(rockboxRoot, resolve(absolute)) && existsSync(absolute)) referencedFiles.add(previewPath)
+    }
     themes.push({
       id: idForValue(name),
       name,
@@ -304,6 +315,7 @@ export async function scanRockboxThemes(deviceRoot: string): Promise<RockboxThem
       fileCount: referencedFiles.size,
       missingFiles: [...missingFiles].sort((a, b) => a.localeCompare(b)),
       updatedAt: configStat?.mtime.toISOString() ?? null,
+      preview: previewResult.preview,
     })
   }
 

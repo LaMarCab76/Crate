@@ -3,7 +3,7 @@ import type { AlbumsSortBy } from '@renderer/utils/listSort'
 import type { Album } from '@shared/types/library'
 import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
-import { ListPrefsMenu } from '@renderer/components/ListPrefsMenu'
+import { ListPrefsMenu, SortDirectionButton } from '@renderer/components/ListPrefsMenu'
 import { useVisibleAlbums } from '@renderer/stores/libraryStore'
 import { useListPrefs } from '@renderer/stores/settingsStore'
 import { createListPrefsDefaults, albumMatchesQuery, sortAlbums } from '@renderer/utils/listSort'
@@ -115,12 +115,10 @@ export function AlbumsView({
                     </option>
                   ))}
                 </select>
-                <button
-                  className="btn sm"
-                  onClick={() => setPrefs({ sortDir: prefs.sortDir === 'asc' ? 'desc' : 'asc' })}
-                >
-                  {prefs.sortDir === 'asc' ? 'Asc' : 'Desc'}
-                </button>
+                <SortDirectionButton
+                  direction={prefs.sortDir}
+                  onToggle={() => setPrefs({ sortDir: prefs.sortDir === 'asc' ? 'desc' : 'asc' })}
+                />
               </div>
             </div>
             <div className="list-prefs-row-inline">

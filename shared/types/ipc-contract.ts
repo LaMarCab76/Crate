@@ -4,6 +4,7 @@
 import type { DbAlbum, DbArtist, DbFolder, DbGenre, DbPlaylist, DbTrack } from './db'
 import type {
   LyricsCandidate,
+  LyricsLibraryOverview,
   LyricsSelectionProgress,
   LyricsSelectionSummary,
   LyricsSettingsState,
@@ -13,6 +14,8 @@ import type {
   DeviceCandidate,
   DeviceArtworkAnalysisProgressEvent,
   DeviceArtworkAnalysisResult,
+  DeviceArtworkOptimizationSelection,
+  DeviceArtworkOptimizationSummary,
   DeviceConnectPayload,
   DeviceLibraryResult,
   DeviceMusicRootPickResult,
@@ -515,6 +518,7 @@ export interface ArtistsApi {
 
 export interface LyricsApi {
   get(trackId: number): Promise<LyricsView>
+  libraryOverview(): Promise<LyricsLibraryOverview>
   fetch(trackId: number, force?: boolean): Promise<LyricsView>
   search(trackId: number): Promise<LyricsCandidate[]>
   importCandidate(trackId: number, lrclibId: string): Promise<LyricsView>
@@ -555,6 +559,10 @@ export interface DevicesApi {
   rockboxThemes(deviceId: string): Promise<RockboxThemeLibraryResult>
   planSync(payload: DeviceSyncPlanRequest): Promise<DeviceSyncPlan>
   applySync(planId: string, selection?: DeviceSyncApplySelection): Promise<DeviceSyncApplyResult>
+  optimizeArtwork(
+    deviceId: string,
+    selection?: DeviceArtworkOptimizationSelection,
+  ): Promise<DeviceArtworkOptimizationSummary>
   installRockboxThemesFromFiles(deviceId: string, files: unknown[]): Promise<RockboxThemeInstallResult>
   deleteRockboxTheme(deviceId: string, themeId: string): Promise<RockboxThemeDeleteResult>
   listPendingJournals(): Promise<DevicePendingJournal[]>

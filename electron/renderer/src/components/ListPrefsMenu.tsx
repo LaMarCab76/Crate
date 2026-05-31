@@ -9,6 +9,12 @@ interface ListPrefsMenuProps {
   children: React.ReactNode
 }
 
+interface SortDirectionButtonProps {
+  direction: 'asc' | 'desc'
+  onToggle: () => void
+  label?: string
+}
+
 export function ListPrefsMenu({
   buttonLabel = 'Filtro',
   buttonIcon = 'filter',
@@ -72,3 +78,23 @@ export function ListPrefsMenu({
   )
 }
 
+export function SortDirectionButton({
+  direction,
+  onToggle,
+  label = direction === 'asc' ? 'Ascendente' : 'Descendente',
+}: SortDirectionButtonProps) {
+  const nextLabel = direction === 'asc' ? 'descendente' : 'ascendente'
+
+  return (
+    <button
+      type="button"
+      className="btn sm list-sort-dir-btn"
+      onClick={onToggle}
+      title={`Cambiar a orden ${nextLabel}`}
+      aria-label={`Orden ${label}`}
+    >
+      <Icon name={direction === 'asc' ? 'chevU' : 'chevD'} size={12} />
+      {label}
+    </button>
+  )
+}

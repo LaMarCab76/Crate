@@ -4,7 +4,7 @@ import type { PlaylistTrackSortBy } from '@renderer/utils/listSort'
 import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
 import { TrackTable } from '@renderer/components/TrackTable'
-import { ListPrefsMenu } from '@renderer/components/ListPrefsMenu'
+import { ListPrefsMenu, SortDirectionButton } from '@renderer/components/ListPrefsMenu'
 import { useListPrefs } from '@renderer/stores/settingsStore'
 import { createListPrefsDefaults, sortTracks, trackMatchesQuery } from '@renderer/utils/listSort'
 import { fmtTotal } from '@renderer/utils/format'
@@ -127,9 +127,10 @@ export function PlaylistView({ playlist, kind }: Props) {
                       <option key={option.value} value={option.value}>{option.label}</option>
                     ))}
                   </select>
-                  <button className="btn sm" onClick={() => setPrefs({ sortDir: prefs.sortDir === 'asc' ? 'desc' : 'asc' })}>
-                    {prefs.sortDir === 'asc' ? 'Asc' : 'Desc'}
-                  </button>
+                  <SortDirectionButton
+                    direction={prefs.sortDir}
+                    onToggle={() => setPrefs({ sortDir: prefs.sortDir === 'asc' ? 'desc' : 'asc' })}
+                  />
                 </div>
               </div>
               <div className="list-prefs-row-inline">

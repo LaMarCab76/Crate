@@ -9,6 +9,16 @@ import {
 import { useFolders } from '@renderer/stores/libraryStore'
 import { DEVICE_ARTWORK_EDGE_MAX, DEVICE_ARTWORK_EDGE_MIN } from '@shared/constants/device-sync'
 import { fmtFileSize } from '@renderer/utils/format'
+import { artworkOptimizeActionState } from '@renderer/utils/artworkOptimizeAction'
+import {
+  filterArtworkItemsForSearch,
+  groupArtworkItems,
+  selectedArtworkItemsFromGroup,
+  selectedArtworkItemsForSearch,
+  shouldShowArtworkSearchResults,
+  type ArtworkOptimizeGroup,
+  type ArtworkOptimizeViewMode,
+} from '@renderer/utils/artworkOptimizeSelection'
 import { basenameForPath, isValidDeviceMusicRoot, normalizeDeviceMusicRoot } from '@renderer/utils/devicePaths'
 import {
   actionKindForSelection,
@@ -32,6 +42,7 @@ import type {
   DeviceSyncApplySelection,
   DeviceSyncMode,
   DeviceSyncPlan,
+  DeviceArtworkOptimizationSummary,
 } from '@shared/types/device-sync'
 
 const MODES: Array<{ mode: DeviceSyncMode; label: string; short: string; description: string }> = [
@@ -60,6 +71,14 @@ const SYNC_BASES: Array<{ value: DeviceSyncBase; label: string }> = [
   { value: 'device', label: 'Preferir dispositivo' },
   { value: 'review', label: 'Revisar c/u' },
 ]
+
+function formatArtworkOptimizationSummary(summary: DeviceArtworkOptimizationSummary): string {
+  if (summary.optimized === 0) return 'No se optimizaron carátulas.'
+  if (summary.bytesSaved <= 0) {
+    return `Se optimizaron ${summary.optimized} carátulas sin ahorro adicional.`
+  }
+  return `Se optimizaron ${summary.optimized} carátulas y se ahorraron ${fmtFileSize(summary.bytesSaved)}.`
+}
 
 // Persisted conflict base selector. Lives in the Configuración tab (only for
 // bidirectional sync) — the chosen side wins when a track changed on both.
@@ -117,6 +136,17 @@ const ARTWORK_PHASE_LABELS: Record<string, string> = {
   reading: 'Analizando artwork',
   complete: 'Completado',
 }
+
+const ARTWORK_REFRESH_PHASE_LABELS: Record<string, string> = {
+  scanning: 'Actualizando listado',
+  reading: 'Reanalizando artwork',
+  complete: 'Listado actualizado',
+}
+
+const ARTWORK_VIEW_MODES: Array<{ value: ArtworkOptimizeViewMode; label: string }> = [
+  { value: 'artist', label: 'Artistas' },
+  { value: 'album', label: 'Álbumes' },
+]
 
 // Readable "qué tema y de/hacia qué lado" line for the live sync run (Paso 3).
 const SYNC_DIRECTION_LABELS: Record<DeviceSyncActionKind, string> = {
@@ -521,6 +551,8 @@ function SyncResultStep({
 function SyncConfirmStep({
   plan,
   selection,
+  optimizeArtwork,
+  onOptimizeArtworkChange,
   loading,
   applyBlockedReason,
   result,
@@ -528,6 +560,8 @@ function SyncConfirmStep({
 }: {
   plan: DeviceSyncPlan
   selection: DeviceSyncApplySelection | null
+  optimizeArtwork: boolean
+  onOptimizeArtworkChange: (value: boolean) => void
   loading: boolean
   applyBlockedReason: string | null
   result: DeviceSyncApplyResult | null
@@ -538,6 +572,7 @@ function SyncConfirmStep({
   const toPc = summary.copyDeviceToPc + summary.replacePc
   const removed = summary.deleteDevice + summary.deletePc
   const executable = toDevice + toPc + removed
+  const canApply = executable > 0 || optimizeArtwork
   return (
     <section className="device-side-card device-sync-confirm">
       <div className="device-card-head">
@@ -553,18 +588,30 @@ function SyncConfirmStep({
         <div><b className="mono">{fmtFileSize(summary.bytesToCopy)}</b><span>A copiar</span></div>
       </div>
       {applyBlockedReason && <div className="device-warning inline">{applyBlockedReason}</div>}
+      <label className="device-toggle-field device-sync-confirm-toggle">
+        <input
+          type="checkbox"
+          checked={optimizeArtwork}
+          disabled={loading || result != null}
+          onChange={event => onOptimizeArtworkChange(event.target.checked)}
+        />
+        <span>
+          <strong>Optimizar artwork en el dispositivo</strong>
+          <em>Reduce carátulas embebidas que superan el límite configurado antes de cerrar la sincronización.</em>
+        </span>
+      </label>
       {result && (
         <div className={result.failed.length > 0 ? 'device-error inline' : 'sync-result-ok inline'}>
           {result.failed.length > 0
             ? `${result.failed.length} operaciones fallaron. ${result.failed[0]?.error ?? ''}`
-            : `Se aplicaron ${result.applied} operaciones. Se optimizaron ${result.artwork.optimized} carátulas y se ahorraron ${fmtFileSize(result.artwork.bytesSaved)}.`}
+            : `Se aplicaron ${result.applied} operaciones. ${formatArtworkOptimizationSummary(result.artwork)}`}
         </div>
       )}
       <div className="device-plan-actions">
         <button
           className="btn primary"
           type="button"
-          disabled={loading || executable === 0 || result != null || applyBlockedReason != null}
+          disabled={loading || !canApply || result != null || applyBlockedReason != null}
           onClick={onApply}
         >
           <Icon name="sync" size={13} /> Sincronizar ahora
@@ -611,20 +658,27 @@ function PendingJournalList({
 function ArtworkOversizedList({
   items,
   maxEdge,
+  selectedKeys,
+  selectionEnabled,
+  onToggleSelected,
 }: {
   items: DeviceArtworkAnalysisItem[]
   maxEdge: number
+  selectedKeys: ReadonlySet<string>
+  selectionEnabled: boolean
+  onToggleSelected(item: DeviceArtworkAnalysisItem, selected: boolean): void
 }) {
   if (items.length === 0) {
     return (
       <div className="device-empty">
-        Ningún tema supera el límite del dispositivo ({maxEdge}px).
+        No hay temas para mostrar con el filtro actual ({maxEdge}px).
       </div>
     )
   }
   return (
     <div className="device-artwork-table">
       <div className="device-artwork-row head">
+        <span className="device-artwork-select">Sel.</span>
         <span>Tema</span>
         <span>Artista</span>
         <span>Álbum</span>
@@ -633,6 +687,15 @@ function ArtworkOversizedList({
       </div>
       {items.slice(0, 500).map(item => (
         <div className="device-artwork-row" key={item.key}>
+          <span className="device-artwork-select">
+            <input
+              type="checkbox"
+              checked={selectedKeys.has(item.key)}
+              disabled={!selectionEnabled}
+              aria-label={`Optimizar ${item.title || item.relativePath}`}
+              onChange={event => onToggleSelected(item, event.target.checked)}
+            />
+          </span>
           <span className="device-track-title" title={item.relativePath}>{item.title}</span>
           <span>{item.artist || 'Unknown Artist'}</span>
           <span>{item.album || 'Unknown Album'}</span>
@@ -650,6 +713,57 @@ function ArtworkOversizedList({
   )
 }
 
+function ArtworkGroupedList({
+  groups,
+  maxEdge,
+  viewMode,
+  onSelectGroup,
+}: {
+  groups: ArtworkOptimizeGroup[]
+  maxEdge: number
+  viewMode: ArtworkOptimizeViewMode
+  onSelectGroup(group: ArtworkOptimizeGroup): void
+}) {
+  if (groups.length === 0) {
+    return (
+      <div className="device-empty">
+        Ningún tema supera el límite del dispositivo ({maxEdge}px).
+      </div>
+    )
+  }
+
+  return (
+    <div className="device-artwork-table device-artwork-group-table">
+      <div className="device-artwork-group-row head">
+        <span>{viewMode === 'artist' ? 'Artista' : 'Álbum'}</span>
+        <span>{viewMode === 'artist' ? 'Álbumes' : 'Artista'}</span>
+        <span>Temas</span>
+        <span className="device-artwork-res">Máx. resolución</span>
+      </div>
+      {groups.slice(0, 500).map(group => (
+        <button
+          className="device-artwork-group-row"
+          key={group.key}
+          type="button"
+          aria-label={`Mostrar ${group.itemCount} temas afectados de ${group.title}`}
+          onClick={() => onSelectGroup(group)}
+        >
+          <span className="device-track-title" title={group.title}>{group.title}</span>
+          <span>{group.subtitle}</span>
+          <span className="mono">{group.itemCount}</span>
+          <span className="device-artwork-res mono">
+            {group.maxWidth != null && group.maxHeight != null ? `${group.maxWidth}×${group.maxHeight}` : '—'}
+            <em> &gt; {maxEdge}px</em>
+          </span>
+        </button>
+      ))}
+      {groups.length > 500 && (
+        <div className="device-empty compact">{groups.length - 500} grupos más ocultos</div>
+      )}
+    </div>
+  )
+}
+
 function ArtworkOptimizePanel({
   deviceId,
   artworkMaxEdge,
@@ -658,16 +772,93 @@ function ArtworkOptimizePanel({
   artworkMaxEdge: number
 }) {
   const analyzeArtwork = useDeviceStore(s => s.analyzeArtwork)
+  const optimizeArtwork = useDeviceStore(s => s.optimizeArtwork)
   const progress = useDeviceStore(s => s.artworkAnalyzeProgress)
+  const syncProgress = useDeviceStore(s => s.syncProgress)
   const analysis = useDeviceArtworkAnalysis(deviceId)
   const [analyzing, setAnalyzing] = useState(false)
+  const [optimizing, setOptimizing] = useState(false)
+  const [refreshingAfterOptimize, setRefreshingAfterOptimize] = useState(false)
+  const [optimizeResult, setOptimizeResult] = useState<DeviceArtworkOptimizationSummary | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [artworkQuery, setArtworkQuery] = useState('')
+  const [artworkViewMode, setArtworkViewMode] = useState<ArtworkOptimizeViewMode>('artist')
+  const [focusedArtworkGroupKey, setFocusedArtworkGroupKey] = useState<string | null>(null)
+  const [excludedArtworkKeys, setExcludedArtworkKeys] = useState<Set<string>>(() => new Set())
+
+  useEffect(() => {
+    setExcludedArtworkKeys(new Set())
+  }, [analysis?.analyzedAt, artworkQuery, artworkViewMode, focusedArtworkGroupKey])
+
+  const analysisItems = analysis?.items ?? []
+  const searchActive = shouldShowArtworkSearchResults(artworkQuery)
+  const artworkGroups = useMemo(
+    () => groupArtworkItems(analysisItems, artworkViewMode),
+    [analysisItems, artworkViewMode],
+  )
+  const focusedArtworkGroup = useMemo(
+    () => focusedArtworkGroupKey
+      ? artworkGroups.find(group => group.key === focusedArtworkGroupKey) ?? null
+      : null,
+    [artworkGroups, focusedArtworkGroupKey],
+  )
+  const selectionEnabled = searchActive || Boolean(focusedArtworkGroup)
+  const visibleArtworkItems = useMemo(
+    () => {
+      if (searchActive) return filterArtworkItemsForSearch(analysisItems, artworkQuery, 'all')
+      return focusedArtworkGroup?.items ?? []
+    },
+    [analysisItems, artworkQuery, focusedArtworkGroup, searchActive],
+  )
+  const selectedArtworkItems = useMemo(
+    () => searchActive
+      ? selectedArtworkItemsForSearch({
+          items: analysisItems,
+          query: artworkQuery,
+          scope: 'all',
+          excludedKeys: excludedArtworkKeys,
+        })
+      : selectedArtworkItemsFromGroup(focusedArtworkGroup, excludedArtworkKeys),
+    [analysisItems, artworkQuery, excludedArtworkKeys, focusedArtworkGroup, searchActive],
+  )
+  const selectedArtworkKeys = useMemo(
+    () => new Set(selectedArtworkItems.map(item => item.key)),
+    [selectedArtworkItems],
+  )
+  const toggleArtworkSelection = useCallback((item: DeviceArtworkAnalysisItem, selected: boolean) => {
+    if (!selectionEnabled) return
+    setExcludedArtworkKeys(current => {
+      const next = new Set(current)
+      if (selected) {
+        next.delete(item.key)
+      } else {
+        next.add(item.key)
+      }
+      return next
+    })
+  }, [selectionEnabled])
+  const updateArtworkQuery = useCallback((value: string) => {
+    setArtworkQuery(value)
+    setFocusedArtworkGroupKey(null)
+  }, [])
+  const updateArtworkViewMode = useCallback((mode: ArtworkOptimizeViewMode) => {
+    setArtworkViewMode(mode)
+    setFocusedArtworkGroupKey(null)
+  }, [])
+  const showArtworkGroup = useCallback((group: ArtworkOptimizeGroup) => {
+    setArtworkQuery('')
+    setFocusedArtworkGroupKey(group.key)
+  }, [])
+  const clearFocusedArtworkGroup = useCallback(() => {
+    setFocusedArtworkGroupKey(null)
+  }, [])
 
   const runAnalysis = useCallback(async () => {
     setAnalyzing(true)
     setError(null)
     try {
       await analyzeArtwork(deviceId)
+      setOptimizeResult(null)
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -675,11 +866,55 @@ function ArtworkOptimizePanel({
     }
   }, [analyzeArtwork, deviceId])
 
-  const activeProgress = analyzing ? progress : null
-  const pct = activeProgress && activeProgress.total > 0
-    ? Math.min(100, Math.round((activeProgress.scanned / activeProgress.total) * 100))
+  const runOptimization = useCallback(async () => {
+    if (selectedArtworkItems.length === 0) return
+    setOptimizing(true)
+    setRefreshingAfterOptimize(false)
+    setError(null)
+    setOptimizeResult(null)
+    try {
+      const result = await optimizeArtwork(deviceId, {
+        relativePaths: selectedArtworkItems.map(item => item.relativePath),
+      })
+      setOptimizeResult(result)
+      setOptimizing(false)
+      setRefreshingAfterOptimize(true)
+      await analyzeArtwork(deviceId).catch(() => undefined)
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setOptimizing(false)
+      setRefreshingAfterOptimize(false)
+    }
+  }, [analyzeArtwork, deviceId, optimizeArtwork, selectedArtworkItems])
+
+  const artworkProgressActive = analyzing || refreshingAfterOptimize
+  const artworkBusy = analyzing || optimizing || refreshingAfterOptimize
+  const activeProgress = artworkProgressActive ? progress : optimizing && syncProgress?.deviceId === deviceId ? syncProgress : null
+  const activeCompleted = activeProgress
+    ? 'scanned' in activeProgress
+      ? activeProgress.scanned
+      : activeProgress.completed
+    : 0
+  const activeTotal = activeProgress?.total ?? 0
+  const pct = activeProgress && activeTotal > 0
+    ? Math.min(100, Math.round((activeCompleted / activeTotal) * 100))
     : 0
   const summary = analysis?.summary
+  const action = artworkOptimizeActionState({
+    analyzing,
+    optimizing,
+    refreshing: refreshingAfterOptimize,
+    hasAnalysis: Boolean(analysis),
+    oversizedCount: summary?.oversized ?? 0,
+    selectedCount: selectedArtworkItems.length,
+  })
+  const progressLabel = refreshingAfterOptimize
+    ? ARTWORK_REFRESH_PHASE_LABELS[progress?.phase ?? 'scanning'] ?? 'Actualizando listado'
+    : analyzing
+      ? ARTWORK_PHASE_LABELS[progress?.phase ?? 'scanning'] ?? 'Analizando artwork'
+      : SYNC_PHASE_LABELS[syncProgress?.phase ?? 'optimizing_artwork'] ?? 'Optimizando artwork'
+  const runPrimaryAction = action.mode === 'apply' ? runOptimization : runAnalysis
 
   return (
     <section className="device-sync-stage device-sync-activity-tab device-artwork-optimize">
@@ -687,22 +922,29 @@ function ArtworkOptimizePanel({
         <div>
           <h2>Optimizar artwork</h2>
           <span>
-            Analiza los temas que ya están en el dispositivo y detecta los que tienen artwork
-            mayor al límite de <strong>{artworkMaxEdge}px</strong>. Es solo lectura: no modifica archivos.
+            Analiza los temas que ya están en el dispositivo y lista los artwork mayores al
+            límite de <strong>{artworkMaxEdge}px</strong> antes de aplicar la optimización.
           </span>
         </div>
-        <button className="btn primary" type="button" onClick={runAnalysis} disabled={analyzing}>
-          <Icon name="search" size={13} /> {analyzing ? 'Analizando…' : 'Analizar artwork'}
-        </button>
+        <div className="device-plan-actions inline">
+          <button
+            className={`btn ${action.primary ? 'primary' : ''}`}
+            type="button"
+            onClick={runPrimaryAction}
+            disabled={action.disabled}
+          >
+            <Icon name={action.icon} size={13} /> {action.label}
+          </button>
+        </div>
       </div>
 
       {error && <div className="device-error inline">{error}</div>}
 
-      {analyzing && (
+      {artworkBusy && (
         <div className="device-sync-inline-progress">
           <span>
-            {ARTWORK_PHASE_LABELS[activeProgress?.phase ?? 'scanning'] ?? 'Analizando artwork'}
-            {activeProgress ? ` · ${activeProgress.scanned}/${activeProgress.total}` : ''}
+            {progressLabel}
+            {activeProgress ? ` · ${activeCompleted}/${activeTotal}` : ''}
           </span>
           <div className="device-progress-track" aria-hidden="true">
             <b style={{ width: `${pct}%` }} />
@@ -710,7 +952,15 @@ function ArtworkOptimizePanel({
         </div>
       )}
 
-      {!analyzing && analysis && summary && (
+      {!artworkBusy && optimizeResult && (
+        <div className={optimizeResult.failed > 0 ? 'device-error inline' : 'sync-result-ok inline'}>
+          {optimizeResult.failed > 0
+            ? `${optimizeResult.failed} carátulas fallaron. Se optimizaron ${optimizeResult.optimized}.`
+            : formatArtworkOptimizationSummary(optimizeResult)}
+        </div>
+      )}
+
+      {!artworkBusy && analysis && summary && (
         <>
           <div className="device-artwork-summary">
             <div className="device-artwork-stat oversized">
@@ -736,11 +986,87 @@ function ArtworkOptimizePanel({
               {summary.errors > 0 && <>{summary.errors} no se pudieron leer.</>}
             </div>
           )}
-          <ArtworkOversizedList items={analysis.items} maxEdge={analysis.artworkMaxEdge} />
+          {analysis.items.length > 0 && (
+            <div className="device-artwork-filter">
+              <div className={`device-artwork-search ${selectionEnabled ? 'is-active' : ''}`}>
+                <Icon name="search" size={13} />
+                <input
+                  value={artworkQuery}
+                  placeholder="Buscar para seleccionar"
+                  aria-label="Buscar artwork por artista o track"
+                  onChange={event => updateArtworkQuery(event.target.value)}
+                />
+                {artworkQuery && (
+                  <button
+                    type="button"
+                    aria-label="Limpiar búsqueda de artwork"
+                    onClick={() => updateArtworkQuery('')}
+                  >
+                    <Icon name="close" size={12} />
+                  </button>
+                )}
+              </div>
+              <div className="device-artwork-scope" role="group" aria-label="Vista de artwork">
+                {ARTWORK_VIEW_MODES.map(mode => (
+                  <button
+                    key={mode.value}
+                    type="button"
+                    className={artworkViewMode === mode.value ? 'active' : ''}
+                    onClick={() => updateArtworkViewMode(mode.value)}
+                  >
+                    {mode.label}
+                  </button>
+                ))}
+              </div>
+              <div className="device-artwork-selected">
+                <b className="mono">{selectedArtworkItems.length}</b>
+                <span>
+                  seleccionados
+                  {searchActive
+                    ? ` · ${visibleArtworkItems.length} resultados`
+                    : focusedArtworkGroup
+                      ? ` · ${focusedArtworkGroup.title}`
+                    : ` · ${artworkGroups.length} ${artworkViewMode === 'artist' ? 'artistas' : 'álbumes'}`}
+                </span>
+              </div>
+            </div>
+          )}
+          {analysis.items.length > 0 && !selectionEnabled && (
+            <div className="device-library-note">
+              Con el buscador vacío no se optimiza nada. Elegí un artista o álbum para revisar sus temas, o buscá para seleccionar resultados.
+            </div>
+          )}
+          {focusedArtworkGroup && !searchActive && (
+            <div className="device-artwork-focus">
+              <div>
+                <strong>{focusedArtworkGroup.title}</strong>
+                <span>{focusedArtworkGroup.itemCount} temas afectados</span>
+              </div>
+              <button className="btn ghost sm" type="button" onClick={clearFocusedArtworkGroup}>
+                Volver a {artworkViewMode === 'artist' ? 'artistas' : 'álbumes'}
+              </button>
+            </div>
+          )}
+          {selectionEnabled ? (
+            <ArtworkOversizedList
+              items={visibleArtworkItems}
+              maxEdge={analysis.artworkMaxEdge}
+              selectedKeys={selectedArtworkKeys}
+              selectionEnabled={selectionEnabled}
+              onToggleSelected={toggleArtworkSelection}
+            />
+          ) : (
+            <ArtworkGroupedList
+              groups={artworkGroups}
+              maxEdge={analysis.artworkMaxEdge}
+              viewMode={artworkViewMode}
+              onSelectGroup={showArtworkGroup}
+            />
+          )}
         </>
       )}
 
-      {!analyzing && !analysis && (
+      {!artworkBusy && !analysis && (
         <div className="device-empty">
           Tocá «Analizar artwork» para revisar los temas del dispositivo.
         </div>
@@ -787,6 +1113,7 @@ export function DeviceSyncView({
   const [musicRoot, setMusicRoot] = useState('')
   const [artworkMaxEdge, setArtworkMaxEdge] = useState('')
   const [fetchMissingLyrics, setFetchMissingLyrics] = useState(true)
+  const [optimizeArtworkOnSync, setOptimizeArtworkOnSync] = useState(true)
   const [sourceLibraryIds, setSourceLibraryIds] = useState<number[]>([])
   const [destinationFolderId, setDestinationFolderId] = useState<number | null>(null)
   const [libraryPickerOpen, setLibraryPickerOpen] = useState(false)
@@ -826,6 +1153,7 @@ export function DeviceSyncView({
     setMusicRoot(selectedDevice.musicRoot)
     setArtworkMaxEdge(String(selectedDevice.artworkMaxEdge))
     setFetchMissingLyrics(selectedDevice.fetchMissingLyrics)
+    setOptimizeArtworkOnSync(selectedDevice.optimizeArtworkOnSync)
     const folderIds = new Set(folders.map(folder => folder.id))
     const nextSourceIds = selectedDevice.sourceLibraryIds.length > 0
       ? selectedDevice.sourceLibraryIds.filter(id => folderIds.has(id))
@@ -844,6 +1172,7 @@ export function DeviceSyncView({
     selectedDevice?.pcTargetPath,
     selectedDevice?.artworkMaxEdge,
     selectedDevice?.fetchMissingLyrics,
+    selectedDevice?.optimizeArtworkOnSync,
     selectedDevice?.sourceLibraryIds,
     folders,
   ])
@@ -1058,13 +1387,19 @@ export function DeviceSyncView({
     setApplying(true)
     setWizardStep('apply')
     try {
-      const result = await applyPlan(visiblePlan.id, currentPlanSelection ?? undefined)
+      if (selectedDevice && selectedDevice.optimizeArtworkOnSync !== optimizeArtworkOnSync) {
+        await updateSettings(selectedDevice.id, { optimizeArtworkOnSync })
+      }
+      const selection = currentPlanSelection
+        ? { ...currentPlanSelection, optimizeArtwork: optimizeArtworkOnSync }
+        : { optimizeArtwork: optimizeArtworkOnSync }
+      const result = await applyPlan(visiblePlan.id, selection)
       setApplyResult(result)
       await scan(visiblePlan.deviceId)
     } finally {
       setApplying(false)
     }
-  }, [visiblePlan, applyBlockedReason, devices, applyPlan, currentPlanSelection, scan, clearPlan])
+  }, [visiblePlan, applyBlockedReason, devices, applyPlan, currentPlanSelection, scan, clearPlan, optimizeArtworkOnSync, selectedDevice, updateSettings])
 
   const resumePendingJournal = useCallback(async (journalId: string) => {
     const result = await resumeJournal(journalId)
@@ -1302,17 +1637,9 @@ export function DeviceSyncView({
                 aria-label="Device artwork limit"
               />
             </label>
-            <label className="device-toggle-field">
-              <input
-                type="checkbox"
-                checked={fetchMissingLyrics}
-                onChange={event => setFetchMissingLyrics(event.target.checked)}
-              />
-              <span>
-                <strong>Buscar letras faltantes al sincronizar</strong>
-                <em>Descarga online (LRCLIB) las letras que faltan al copiar al MP3. Las letras ya existentes se sincronizan igual.</em>
-              </span>
-            </label>
+            <div className="device-library-note compact">
+              Las letras locales disponibles se copian con el MP3. La sincronización no descarga letras nuevas.
+            </div>
           </div>
         </div>
 
@@ -1401,6 +1728,8 @@ export function DeviceSyncView({
                 <SyncConfirmStep
                   plan={visiblePlan}
                   selection={currentPlanSelection}
+                  optimizeArtwork={optimizeArtworkOnSync}
+                  onOptimizeArtworkChange={setOptimizeArtworkOnSync}
                   loading={loading}
                   applyBlockedReason={applyBlockedReason}
                   result={applyResult}

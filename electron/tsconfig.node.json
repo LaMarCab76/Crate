@@ -10,6 +10,7 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
+    "allowImportingTsExtensions": true,
     "allowSyntheticDefaultImports": true,
     "baseUrl": "..",
     "paths": {

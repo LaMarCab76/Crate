@@ -2,6 +2,7 @@ import { app, net, protocol } from 'electron'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { getDeviceSyncService } from './devices/DeviceSyncService'
 
 // Lets the renderer load cached artwork files via `crate://artwork/<filename>`
 // without disabling webSecurity or opening up arbitrary file:// access.
@@ -38,6 +39,25 @@ export function registerProtocolHandlers(): void {
         return new Response('Not Found', { status: 404 })
       }
       return net.fetch(pathToFileURL(filePath).toString())
+    }
+    if (url.hostname === 'rockbox-theme') {
+      let parts: string[]
+      try {
+        parts = url.pathname.split('/').filter(Boolean).map(part => decodeURIComponent(part))
+      } catch {
+        return new Response('Bad Request', { status: 400 })
+      }
+      const deviceId = parts.shift()
+      const relativePath = parts.join('/')
+      if (!deviceId || !relativePath) {
+        return new Response('Bad Request', { status: 400 })
+      }
+      try {
+        const filePath = getDeviceSyncService().rockboxThemeAssetPath(deviceId, relativePath)
+        return net.fetch(pathToFileURL(filePath).toString())
+      } catch {
+        return new Response('Not Found', { status: 404 })
+      }
     }
     return new Response('Not Found', { status: 404 })
   })

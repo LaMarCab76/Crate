@@ -48,16 +48,22 @@ test('device sync direction modes and source libraries stay compact', () => {
 })
 
 test('refactored sync controls (base selector, section tabs, destination) are styled', () => {
+  const root = cssBlock(':root')
   const base = cssBlock('.device-plan-base-options')
   const sectionTabs = cssBlock('.device-section-tabs')
+  const sectionSubtabs = cssBlock('.device-section-subtabs')
   const subtabs = cssBlock('.device-subtabs')
   const sectionTab = cssBlock('.device-section-tab')
   const select = cssBlock('.device-select')
 
   assert.equal(declaration(base, 'display'), 'inline-flex')
-  // Section tabs (top second line) and the in-view Biblioteca sub-tabs share
-  // the same underlined .device-section-tab look.
+  // Primary device tabs and dashboard/sync navbar sub-tabs share height and the
+  // same underlined .device-section-tab look.
+  assert.equal(declaration(root, '--device-nav-row-height'), '38px')
   assert.equal(declaration(sectionTabs, 'display'), 'flex')
+  assert.equal(declaration(sectionTabs, 'height'), 'var(--device-nav-row-height)')
+  assert.equal(declaration(sectionSubtabs, 'height'), 'var(--device-nav-row-height)')
+  // In-view Biblioteca/grouping sub-tabs keep their compact strip styling.
   assert.equal(declaration(subtabs, 'display'), 'flex')
   assert.equal(declaration(sectionTab, 'border-bottom'), '2px solid transparent')
   assert.equal(declaration(select, 'width'), '100%')

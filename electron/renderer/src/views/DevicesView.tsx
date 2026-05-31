@@ -26,7 +26,13 @@ const SYNC_PHASE_LABELS: Record<string, string> = {
   complete: 'Completado',
 }
 
-type DeviceDashboardTab = 'overview' | 'activity'
+export type DeviceDashboardTab = 'overview' | 'activity'
+
+type DevicesViewProps = {
+  deviceId?: string
+  dashboardTab?: DeviceDashboardTab
+  onDashboardTabChange?: (tab: DeviceDashboardTab) => void
+}
 
 function shortDate(value: string | null): string {
   if (!value) return 'never'
@@ -134,7 +140,7 @@ function PendingJournalList({
   )
 }
 
-export function DevicesView({ deviceId }: { deviceId?: string } = {}) {
+export function DevicesView({ deviceId, dashboardTab, onDashboardTabChange }: DevicesViewProps = {}) {
   const devices = useDeviceStore(s => s.devices)
   const pendingJournals = useDeviceStore(s => s.pendingJournals)
   const scanResult = useDeviceStore(s => s.scanResult)
@@ -151,7 +157,10 @@ export function DevicesView({ deviceId }: { deviceId?: string } = {}) {
   const selectDevice = useDeviceStore(s => s.selectDevice)
   const selectedDevice = useSelectedDevice()
   const overview = useDeviceOverview(selectedDevice?.id ?? null)
-  const [tab, setTab] = useState<DeviceDashboardTab>('overview')
+  const [localTab, setLocalTab] = useState<DeviceDashboardTab>('overview')
+  const tab = dashboardTab ?? localTab
+  const setTab = onDashboardTabChange ?? setLocalTab
+  const showInlineDashboardTabs = dashboardTab == null || onDashboardTabChange == null
 
   useEffect(() => {
     void load()
@@ -163,8 +172,8 @@ export function DevicesView({ deviceId }: { deviceId?: string } = {}) {
   }, [deviceId, selectDevice])
 
   useEffect(() => {
-    setTab('overview')
-  }, [selectedDevice?.id])
+    if (dashboardTab == null) setLocalTab('overview')
+  }, [dashboardTab, selectedDevice?.id])
 
   useEffect(() => {
     if (!selectedDevice) return
@@ -235,26 +244,28 @@ export function DevicesView({ deviceId }: { deviceId?: string } = {}) {
 
       {error && <div className="device-error">{error}</div>}
 
-      <div className="device-dashboard-tabs" role="tablist" aria-label="Device dashboard sections">
-        <button
-          className={tab === 'overview' ? 'active' : ''}
-          type="button"
-          role="tab"
-          aria-selected={tab === 'overview'}
-          onClick={() => setTab('overview')}
-        >
-          Resumen
-        </button>
-        <button
-          className={tab === 'activity' ? 'active' : ''}
-          type="button"
-          role="tab"
-          aria-selected={tab === 'activity'}
-          onClick={() => setTab('activity')}
-        >
-          Actividad
-        </button>
-      </div>
+      {showInlineDashboardTabs && (
+        <div className="device-dashboard-tabs" role="tablist" aria-label="Device dashboard sections">
+          <button
+            className={tab === 'overview' ? 'active' : ''}
+            type="button"
+            role="tab"
+            aria-selected={tab === 'overview'}
+            onClick={() => setTab('overview')}
+          >
+            Resumen
+          </button>
+          <button
+            className={tab === 'activity' ? 'active' : ''}
+            type="button"
+            role="tab"
+            aria-selected={tab === 'activity'}
+            onClick={() => setTab('activity')}
+          >
+            Actividad
+          </button>
+        </div>
+      )}
 
       {tab === 'overview' ? (
         <section className="device-summary-panel">

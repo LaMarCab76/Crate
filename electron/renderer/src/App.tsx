@@ -20,7 +20,7 @@ import { SearchView } from './views/SearchView'
 import { SettingsView } from './views/SettingsView'
 import { ImportView } from './views/ImportView'
 import { GenresView } from './views/GenresView'
-import { DevicesView } from './views/DevicesView'
+import { DevicesView, type DeviceDashboardTab } from './views/DevicesView'
 import { DeviceSyncView, type DeviceSyncTab } from './views/DeviceSyncView'
 import { DeviceLibraryView, type DeviceLibrarySection } from './views/DeviceLibraryView'
 import { useTweaks, useListPrefsStore } from './stores/settingsStore'
@@ -104,6 +104,41 @@ const DEVICE_SYNC_PHASE_LABELS: Record<string, string> = {
 }
 
 type DeviceSectionKey = 'dashboard' | 'sync' | DeviceLibrarySection
+type DeviceNavbarSubTab<Key extends string> = { key: Key; label: string; icon: IconName }
+
+function DeviceNavbarSubTabs<Key extends string>({
+  tabs,
+  active,
+  ariaLabel,
+  onChange,
+}: {
+  tabs: Array<DeviceNavbarSubTab<Key>>
+  active: Key
+  ariaLabel: string
+  onChange: (tab: Key) => void
+}) {
+  return (
+    <nav
+      className="device-section-tabs device-section-subtabs"
+      role="tablist"
+      aria-label={ariaLabel}
+    >
+      {tabs.map(tab => (
+        <button
+          key={tab.key}
+          type="button"
+          role="tab"
+          aria-selected={active === tab.key}
+          className={`device-section-tab ${active === tab.key ? 'active' : ''}`}
+          onClick={() => onChange(tab.key)}
+        >
+          <Icon name={tab.icon} size={14} />
+          {tab.label}
+        </button>
+      ))}
+    </nav>
+  )
+}
 
 // Section tabs rendered as a second line directly under the toolbar whenever a
 // device view is open. Mirrors the device's sidebar sub-items so the active
@@ -147,39 +182,16 @@ function DeviceSectionTabs({
   )
 }
 
-const DEVICE_SYNC_SUBTABS: Array<{ key: DeviceSyncTab; label: string; icon: IconName }> = [
+const DEVICE_DASHBOARD_SUBTABS: Array<DeviceNavbarSubTab<DeviceDashboardTab>> = [
+  { key: 'overview', label: 'Resumen', icon: 'device' },
+  { key: 'activity', label: 'Actividad', icon: 'recent' },
+]
+
+const DEVICE_SYNC_SUBTABS: Array<DeviceNavbarSubTab<DeviceSyncTab>> = [
   { key: 'sync', label: 'Sincronización', icon: 'sync' },
   { key: 'optimize', label: 'Optimizar', icon: 'sparkle' },
   { key: 'config', label: 'Configuración', icon: 'sliders' },
 ]
-
-// Second navbar row shown under DeviceSectionTabs while the Sync section is open.
-// Drives the sub-view rendered inside DeviceSyncView.
-function DeviceSyncSubTabs({
-  active,
-  onChange,
-}: {
-  active: DeviceSyncTab
-  onChange: (tab: DeviceSyncTab) => void
-}) {
-  return (
-    <nav className="device-section-tabs device-section-subtabs" role="tablist" aria-label="Vista de sincronización">
-      {DEVICE_SYNC_SUBTABS.map(tab => (
-        <button
-          key={tab.key}
-          type="button"
-          role="tab"
-          aria-selected={active === tab.key}
-          className={`device-section-tab ${active === tab.key ? 'active' : ''}`}
-          onClick={() => onChange(tab.key)}
-        >
-          <Icon name={tab.icon} size={14} />
-          {tab.label}
-        </button>
-      ))}
-    </nav>
-  )
-}
 
 function DeviceSyncStatusBar({ withFloatingPlayer }: { withFloatingPlayer: boolean }) {
   const devices = useDeviceStore(s => s.devices)
@@ -294,8 +306,9 @@ export default function App() {
   const [history, setHistory] = useState<View[]>([{ kind: 'library' }])
   const [idx, setIdx] = useState(0)
   const [expanded, setExpanded] = useState(false)
-  // Active sub-tab of the device Sync section, rendered as the navbar's second
-  // row. Lifted here so the top chrome owns it; reset per device below.
+  // Active sub-tabs rendered as the device navbar's second row. Lifted here so
+  // the top chrome owns them; reset per device below.
+  const [dashboardTab, setDashboardTab] = useState<DeviceDashboardTab>('overview')
   const [syncTab, setSyncTab] = useState<DeviceSyncTab>('sync')
   const [searchQuery, setSearchQuery] = useState('')
   const [searchScope, setSearchScope] = useState<'global' | 'view'>('view')
@@ -318,10 +331,11 @@ export default function App() {
   const frameRef = useRef<HTMLDivElement>(null)
   const scrollPositionsRef = useRef(new Map<number, number>())
   const view = history[idx]
-  // Default the Sync sub-tab back to Sincronización whenever the open device
-  // changes, so each device starts on its primary view.
+  // Default device sub-tabs back to their primary views whenever the open device
+  // changes.
   const deviceViewId = view.kind === 'device' ? view.deviceId : null
   useEffect(() => {
+    setDashboardTab('overview')
     setSyncTab('sync')
   }, [deviceViewId])
   const viewAlbum = view.kind === 'album' ? view.album : null
@@ -737,7 +751,15 @@ export default function App() {
       case 'devices':
         return <DevicesView />
       case 'device':
-        if (view.section === 'dashboard') return <DevicesView deviceId={view.deviceId} />
+        if (view.section === 'dashboard') {
+          return (
+            <DevicesView
+              deviceId={view.deviceId}
+              dashboardTab={dashboardTab}
+              onDashboardTabChange={setDashboardTab}
+            />
+          )
+        }
         if (view.section === 'sync') return <DeviceSyncView deviceId={view.deviceId} syncTab={syncTab} onSyncTabChange={setSyncTab} />
         return <DeviceLibraryView deviceId={view.deviceId} section={view.section} />
       case 'genres':
@@ -805,8 +827,21 @@ export default function App() {
                 onNavigate={navigate}
               />
             )}
+            {view.kind === 'device' && view.section === 'dashboard' && (
+              <DeviceNavbarSubTabs
+                tabs={DEVICE_DASHBOARD_SUBTABS}
+                active={dashboardTab}
+                ariaLabel="Vista del resumen del dispositivo"
+                onChange={setDashboardTab}
+              />
+            )}
             {view.kind === 'device' && view.section === 'sync' && (
-              <DeviceSyncSubTabs active={syncTab} onChange={setSyncTab} />
+              <DeviceNavbarSubTabs
+                tabs={DEVICE_SYNC_SUBTABS}
+                active={syncTab}
+                ariaLabel="Vista de sincronización"
+                onChange={setSyncTab}
+              />
             )}
             <div
               ref={contentRef}

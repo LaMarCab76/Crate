@@ -5,6 +5,7 @@ import { broadcast } from '../ipc/events'
 import type { DbTrack } from '@shared/types/db'
 import type {
   LyricsCandidate,
+  LyricsLibraryOverview,
   LyricsResult,
   LyricsSource,
   LyricsStatus,
@@ -19,6 +20,8 @@ import {
   scoreCandidate,
   toConfidence,
 } from './LyricsMatcher'
+import { getLyricsLookupQueue, type LyricsLookupQueue } from './LyricsLookupQueue'
+import { buildLyricsLibraryOverview } from './lyricsLibraryOverview'
 import { LrclibProvider, type LrclibQuery, type LrclibRaw } from './providers/LrclibProvider'
 import { readEmbeddedLyrics } from './providers/EmbeddedLyricsProvider'
 import { readSidecarLrc } from './providers/SidecarLrcProvider'
@@ -112,6 +115,8 @@ function rawScore(track: DbTrack, raw: LrclibRaw): number {
 export class LyricsService {
   private repos: Repos
   private lrclib = new LrclibProvider()
+  private lookupQueue: LyricsLookupQueue = getLyricsLookupQueue()
+  private searchCache = new Map<number, { createdAt: number; results: LrclibRaw[] }>()
 
   // Session-only memory of tracks LRCLIB had no usable match for, so repeated
   // plays / sync passes don't re-hit the network. Replaces the persistent
@@ -121,6 +126,10 @@ export class LyricsService {
 
   constructor() {
     this.repos = getRepos()
+  }
+
+  nextLookupAllowedAt(): number | null {
+    return this.lookupQueue.nextAllowedAt()
   }
 
   // --- read-only resolution (no network) ---------------------------------
@@ -140,17 +149,23 @@ export class LyricsService {
     return emptyView(trackId, 'none')
   }
 
+  libraryOverview(): LyricsLibraryOverview {
+    return buildLyricsLibraryOverview(this.repos.tracks.getAll({ orderBy: 'artist' }), id => this.getForTrack(id))
+  }
+
   // --- online fetch (auto-accept) ----------------------------------------
 
   async fetchOnline(trackId: number, opts?: { force?: boolean }): Promise<LyricsView> {
     const track = this.repos.tracks.getById(trackId)
     if (!track) return emptyView(trackId, 'none')
 
-    // A sidecar already on disk means the lyrics are resolved — never hit the
+    // Local lyrics mean the track is resolved — never hit the
     // network for it unless the user explicitly forces a re-fetch.
     if (!opts?.force) {
-      const existing = readSidecarLrc(track.path)
-      if (existing) return viewFromResult(trackId, existing, { sidecarWritten: true, embeddedInFile: false })
+      const sidecar = readSidecarLrc(track.path)
+      if (sidecar) return viewFromResult(trackId, sidecar, { sidecarWritten: true, embeddedInFile: false })
+      const embedded = readEmbeddedLyrics(track.path)
+      if (embedded) return viewFromResult(trackId, embedded, { sidecarWritten: false, embeddedInFile: true })
     }
 
     if (!track.title.trim() || !track.artist.trim()) {
@@ -165,6 +180,11 @@ export class LyricsService {
       }
     }
 
+    return this.lookupQueue.enqueue(() => this.fetchOnlineFromProvider(track, opts))
+  }
+
+  private async fetchOnlineFromProvider(track: DbTrack, opts?: { force?: boolean }): Promise<LyricsView> {
+    const trackId = track.id
     const query = trackToQuery(track)
     try {
       let chosen: LrclibRaw | null = null
@@ -182,6 +202,7 @@ export class LyricsService {
       if (!chosen) {
         const results = await this.lrclib.search(query)
         if (results.length > 0) {
+          this.rememberSearchResults(track.id, results)
           const ranked = results
             .map(raw => ({ raw, score: rawScore(track, raw) }))
             .sort((a, b) => b.score - a.score)
@@ -216,7 +237,8 @@ export class LyricsService {
     if (!track || !track.title.trim() || !track.artist.trim()) return []
     let results: LrclibRaw[]
     try {
-      results = await this.lrclib.search(trackToQuery(track))
+      results = await this.lookupQueue.enqueue(() => this.lrclib.search(trackToQuery(track)))
+      this.rememberSearchResults(trackId, results)
     } catch {
       return []
     }
@@ -240,7 +262,8 @@ export class LyricsService {
     if (!track) return emptyView(trackId, 'none')
     let raw: LrclibRaw | null
     try {
-      raw = await this.lrclib.getById(lrclibId)
+      raw = this.cachedSearchResult(trackId, lrclibId)
+        ?? await this.lookupQueue.enqueue(() => this.lrclib.getById(lrclibId))
     } catch {
       return emptyView(trackId, 'failed_provider')
     }
@@ -318,6 +341,23 @@ export class LyricsService {
     let found = 0
     let failed = 0
     for (const id of trackIds) {
+      const track = this.repos.tracks.getById(id)
+      const currentView = this.getForTrack(id)
+      const alreadyResolved =
+        currentView.status === 'found_synced' ||
+        currentView.status === 'found_plain' ||
+        currentView.status === 'instrumental'
+      const nextAllowedAt = alreadyResolved ? null : this.nextLookupAllowedAt()
+      broadcast('lyrics:selection:progress', {
+        done,
+        total,
+        found,
+        failed,
+        phase: nextAllowedAt != null && nextAllowedAt > Date.now() ? 'waiting' : 'queued',
+        currentTrackId: id,
+        currentTitle: track?.title,
+        nextAllowedAt,
+      })
       try {
         const view = await this.fetchOnline(id)
         if (view.status === 'found_synced' || view.status === 'found_plain' || view.status === 'instrumental') {
@@ -330,7 +370,16 @@ export class LyricsService {
         failed++
       }
       done++
-      broadcast('lyrics:selection:progress', { done, total, found, failed })
+      broadcast('lyrics:selection:progress', {
+        done,
+        total,
+        found,
+        failed,
+        phase: done >= total ? 'complete' : 'fetching',
+        currentTrackId: id,
+        currentTitle: track?.title,
+        nextAllowedAt: this.nextLookupAllowedAt(),
+      })
     }
     return { done, found, failed }
   }
@@ -368,6 +417,20 @@ export class LyricsService {
     } catch {
       return false
     }
+  }
+
+  private rememberSearchResults(trackId: number, results: LrclibRaw[]): void {
+    this.searchCache.set(trackId, { createdAt: Date.now(), results })
+  }
+
+  private cachedSearchResult(trackId: number, lrclibId: string): LrclibRaw | null {
+    const cached = this.searchCache.get(trackId)
+    if (!cached) return null
+    if (Date.now() - cached.createdAt > 10 * 60 * 1000) {
+      this.searchCache.delete(trackId)
+      return null
+    }
+    return cached.results.find(raw => String(raw.id) === lrclibId) ?? null
   }
 }
 

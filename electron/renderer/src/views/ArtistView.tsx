@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
 import type { Album, Artist } from '@shared/types/library'
 import { Artwork } from '@renderer/components/Artwork'
-import { ListPrefsMenu } from '@renderer/components/ListPrefsMenu'
+import { ListPrefsMenu, SortDirectionButton } from '@renderer/components/ListPrefsMenu'
 import { Icon } from '@renderer/components/Icon'
 import { useListPrefs } from '@renderer/stores/settingsStore'
 import { useAlbumActions } from '@renderer/components/MediaActions'
@@ -187,12 +187,10 @@ export function ArtistView({ artist, onSelectAlbum }: Props) {
                       <option key={option.value} value={option.value}>{option.label}</option>
                     ))}
                   </select>
-                  <button
-                    className="btn sm"
-                    onClick={() => setPrefs({ albumSortDir: prefs.albumSortDir === 'asc' ? 'desc' : 'asc' })}
-                  >
-                    {prefs.albumSortDir === 'asc' ? 'Asc' : 'Desc'}
-                  </button>
+                  <SortDirectionButton
+                    direction={prefs.albumSortDir}
+                    onToggle={() => setPrefs({ albumSortDir: prefs.albumSortDir === 'asc' ? 'desc' : 'asc' })}
+                  />
                 </div>
               </div>
               <div className="list-prefs-row">
@@ -208,12 +206,10 @@ export function ArtistView({ artist, onSelectAlbum }: Props) {
                       <option key={option.value} value={option.value}>{option.label}</option>
                     ))}
                   </select>
-                  <button
-                    className="btn sm"
-                    onClick={() => setPrefs({ trackSortDir: prefs.trackSortDir === 'asc' ? 'desc' : 'asc' })}
-                  >
-                    {prefs.trackSortDir === 'asc' ? 'Asc' : 'Desc'}
-                  </button>
+                  <SortDirectionButton
+                    direction={prefs.trackSortDir}
+                    onToggle={() => setPrefs({ trackSortDir: prefs.trackSortDir === 'asc' ? 'desc' : 'asc' })}
+                  />
                 </div>
               </div>
             </ListPrefsMenu>

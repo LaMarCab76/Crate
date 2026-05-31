@@ -15,11 +15,19 @@ import type { LibraryScanEvent, LibraryScanLogPayload, LibraryScanRun, PlaybackC
 import { COLOR_PRESETS } from '@renderer/utils/colorPresets'
 import { clearPlaybackTableBarsMemoryCache } from '@renderer/utils/playbackTableBars'
 import { basenameForPath } from '@renderer/utils/devicePaths'
+import { fmtTime } from '@renderer/utils/format'
+import {
+  filterLyricsLibraryItems,
+  lyricsLibraryCounts,
+  pruneLyricsSelection,
+  type LyricsLibraryTab,
+} from '@renderer/utils/lyricsLibraryPanel'
 import {
   UP_NEXT_TOAST_END_SEC_MIN,
   UP_NEXT_TOAST_START_SEC_MAX,
   UP_NEXT_TOAST_START_SEC_MIN,
 } from '@renderer/utils/upNextToast'
+import type { LyricsLibraryOverview, LyricsSelectionProgress } from '@shared/types/lyrics'
 
 interface Props {
   tweak: Tweak
@@ -673,8 +681,196 @@ function PlaybackLyricsSection({ tweak, setTweak }: Props) {
           </div>
         ))}
       </div>
+      <LyricsLibraryManager />
     </section>
   )
+}
+
+function LyricsLibraryManager() {
+  const [overview, setOverview] = useState<LyricsLibraryOverview | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [running, setRunning] = useState(false)
+  const [query, setQuery] = useState('')
+  const [tab, setTab] = useState<LyricsLibraryTab>('missing')
+  const [selected, setSelected] = useState<Set<number>>(() => new Set())
+  const [progress, setProgress] = useState<LyricsSelectionProgress | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const refreshOverview = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const next = await window.api.lyrics.libraryOverview()
+      setOverview(next)
+      setSelected(current => pruneLyricsSelection(current, next.items))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void refreshOverview()
+    const off = window.api.lyrics.onSelectionProgress(event => {
+      setProgress(event)
+    })
+    return off
+    // refreshOverview is an event helper; this panel only needs one load on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const items = overview?.items ?? []
+  const counts = useMemo(() => lyricsLibraryCounts(items), [items])
+  const visibleItems = useMemo(
+    () => filterLyricsLibraryItems(items, tab, query),
+    [items, query, tab],
+  )
+  const visibleMissingIds = visibleItems
+    .filter(item => !item.hasLyrics)
+    .map(item => item.trackId)
+  const selectedVisibleCount = visibleMissingIds.filter(id => selected.has(id)).length
+  const allVisibleSelected = visibleMissingIds.length > 0 && selectedVisibleCount === visibleMissingIds.length
+
+  const toggleSelected = (trackId: number) => {
+    setSelected(current => {
+      const next = new Set(current)
+      if (next.has(trackId)) next.delete(trackId)
+      else next.add(trackId)
+      return next
+    })
+  }
+
+  const toggleVisible = () => {
+    setSelected(current => {
+      const next = new Set(current)
+      if (allVisibleSelected) {
+        for (const id of visibleMissingIds) next.delete(id)
+      } else {
+        for (const id of visibleMissingIds) next.add(id)
+      }
+      return next
+    })
+  }
+
+  const runSearch = async () => {
+    const ids = [...selected]
+    if (ids.length === 0 || running) return
+    setRunning(true)
+    setError(null)
+    setProgress({ done: 0, total: ids.length, found: 0, failed: 0, phase: 'queued', nextAllowedAt: null })
+    try {
+      await window.api.lyrics.fetchForSelection(ids)
+      setSelected(new Set())
+      await refreshOverview()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const waitText = progress?.nextAllowedAt && progress.nextAllowedAt > Date.now()
+    ? `Próxima búsqueda ${new Date(progress.nextAllowedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    : null
+
+  return (
+    <div className="lyrics-library-panel">
+      <div className="lyrics-library-head">
+        <div>
+          <h3>Biblioteca de letras</h3>
+          <span>{counts.withLyrics.toLocaleString()} con letras · {counts.missingLyrics.toLocaleString()} sin letras</span>
+        </div>
+        <button className="btn" type="button" disabled={loading || running} onClick={() => void refreshOverview()}>
+          <Icon name="rotate" size={13} /> Actualizar
+        </button>
+      </div>
+
+      <div className="lyrics-library-toolbar">
+        <div className="lyrics-library-tabs" role="tablist" aria-label="Estado de letras">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'missing'}
+            className={tab === 'missing' ? 'active' : ''}
+            onClick={() => setTab('missing')}
+          >
+            Faltan letras <span>{counts.missingLyrics.toLocaleString()}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'with'}
+            className={tab === 'with' ? 'active' : ''}
+            onClick={() => setTab('with')}
+          >
+            Con letras <span>{counts.withLyrics.toLocaleString()}</span>
+          </button>
+        </div>
+        <div className="lyrics-library-search">
+          <Icon name="search" size={13} />
+          <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Buscar canción, artista o álbum" />
+        </div>
+      </div>
+
+      {tab === 'missing' && (
+        <div className="lyrics-library-actions">
+          <button className="btn" type="button" disabled={visibleMissingIds.length === 0 || running} onClick={toggleVisible}>
+            {allVisibleSelected ? 'Quitar visibles' : 'Seleccionar visibles'}
+          </button>
+          <button className="btn primary" type="button" disabled={selected.size === 0 || running} onClick={() => void runSearch()}>
+            <Icon name="lyrics" size={13} /> Buscar seleccionadas ({selected.size})
+          </button>
+          {running && progress && (
+            <span className="lyrics-library-progress">
+              {progress.done}/{progress.total} · {progress.found} encontradas{waitText ? ` · ${waitText}` : ''}
+            </span>
+          )}
+        </div>
+      )}
+
+      {error && <div className="device-error inline">{error}</div>}
+
+      <div className="lyrics-library-list">
+        {loading ? (
+          <div className="lyrics-library-empty">Cargando biblioteca…</div>
+        ) : visibleItems.length === 0 ? (
+          <div className="lyrics-library-empty">Sin canciones para mostrar.</div>
+        ) : (
+          visibleItems.map(item => (
+            <div className="lyrics-library-row" key={item.trackId}>
+              {tab === 'missing' ? (
+                <input
+                  type="checkbox"
+                  checked={selected.has(item.trackId)}
+                  onChange={() => toggleSelected(item.trackId)}
+                  aria-label={`Seleccionar ${item.title}`}
+                />
+              ) : (
+                <Icon name={item.embeddedInFile ? 'song' : 'lyrics'} size={14} />
+              )}
+              <span>
+                <strong>{item.title}</strong>
+                <em>{item.artist}{item.album ? ` · ${item.album}` : ''}</em>
+              </span>
+              <b>{lyricsItemStatusLabel(item)}</b>
+              <code>{fmtTime(item.duration)}</code>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
+function lyricsItemStatusLabel(item: LyricsLibraryOverview['items'][number]): string {
+  if (item.status === 'instrumental') return 'Instrumental'
+  if (item.sidecarWritten) return item.status === 'found_synced' ? 'LRC' : 'Texto'
+  if (item.embeddedInFile) return 'Embebida'
+  if (item.hasLyrics) return item.status === 'found_synced' ? 'Sincronizada' : 'Texto'
+  if (item.status === 'failed_provider') return 'Error'
+  if (item.status === 'not_found') return 'Sin resultado'
+  return 'Falta'
 }
 
 function DevicesSection({ tweak, setTweak }: Props) {

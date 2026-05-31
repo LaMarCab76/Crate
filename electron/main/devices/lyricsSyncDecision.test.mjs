@@ -18,10 +18,9 @@ test('push: PC has lyrics, device missing -> write device sidecar', () => {
   assert.deepEqual(d, { writeDeviceSidecar: true, importToPc: false, fetchOnline: false, skip: false })
 })
 
-test('push: neither side has lyrics -> fetch online (toggle on)', () => {
+test('push: neither side has lyrics -> skip without online lookup', () => {
   const d = decideLyricsSync(state({ pcHasLrc: false }))
-  assert.equal(d.fetchOnline, true)
-  assert.equal(d.writeDeviceSidecar, false)
+  assert.deepEqual(d, { writeDeviceSidecar: false, importToPc: false, fetchOnline: false, skip: true })
 })
 
 test('push: toggle off and nothing local -> skip (no online fetch)', () => {
@@ -35,10 +34,11 @@ test('push: PC already has lyrics -> never fetch online (file detected)', () => 
   assert.equal(d.skip, true)
 })
 
-test('push: pc-only (unmatched) with no content -> fetch online, no device write yet', () => {
+test('push: pc-only (unmatched) with no content -> skip without online lookup', () => {
   const d = decideLyricsSync(state({ isMatched: false }))
-  assert.equal(d.fetchOnline, true)
+  assert.equal(d.fetchOnline, false)
   assert.equal(d.writeDeviceSidecar, false)
+  assert.equal(d.skip, true)
 })
 
 test('pull: device has lrc, PC empty -> import to PC', () => {
@@ -79,7 +79,14 @@ test('bidirectional: both sides already have lyrics -> skip (no clobber)', () =>
   assert.deepEqual(d, { writeDeviceSidecar: false, importToPc: false, fetchOnline: false, skip: true })
 })
 
-test('bidirectional: neither side -> fetch online toward device', () => {
+test('bidirectional: neither side -> skip without online lookup', () => {
   const d = decideLyricsSync(state({ mode: 'bidirectional_safe' }))
-  assert.equal(d.fetchOnline, true)
+  assert.deepEqual(d, { writeDeviceSidecar: false, importToPc: false, fetchOnline: false, skip: true })
+})
+
+test('device sync never fetches online even when legacy toggle is enabled', () => {
+  for (const mode of ['pc_to_device', 'device_to_pc', 'bidirectional_safe']) {
+    const d = decideLyricsSync(state({ mode, fetchEnabled: true, isMatched: false }))
+    assert.equal(d.fetchOnline, false, `expected no online fetch for ${mode}`)
+  }
 })

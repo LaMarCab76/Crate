@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import type {
   DeviceArtworkAnalysisProgressEvent,
   DeviceArtworkAnalysisResult,
+  DeviceArtworkOptimizationSelection,
+  DeviceArtworkOptimizationSummary,
   DeviceCandidate,
   DeviceConnectPayload,
   DeviceLibraryResult,
@@ -58,6 +60,10 @@ interface DeviceState {
   analyzeArtwork(deviceId?: string): Promise<DeviceArtworkAnalysisResult>
   planSync(mode: DeviceSyncMode, pcTargetPath?: string): Promise<DeviceSyncPlan>
   applyPlan(planId: string, selection?: DeviceSyncApplySelection): Promise<DeviceSyncApplyResult>
+  optimizeArtwork(
+    deviceId?: string,
+    selection?: DeviceArtworkOptimizationSelection,
+  ): Promise<DeviceArtworkOptimizationSummary>
   resumeJournal(journalId: string): Promise<DeviceSyncApplyResult>
   discardJournal(journalId: string): Promise<void>
   clearPlan(): void
@@ -105,6 +111,16 @@ function overviewFromStorage(
 
 function overviewFromScan(scanResult: DeviceScanResult): DeviceOverviewResult {
   return overviewFromStorage(scanResult.device, scanResult.storage)
+}
+
+export function mergeDeviceRecord(devices: DeviceRecord[], next: DeviceRecord): DeviceRecord[] {
+  let found = false
+  const merged = devices.map(device => {
+    if (device.id !== next.id) return device
+    found = true
+    return next
+  })
+  return found ? merged : [next, ...merged]
 }
 
 function canReuseDeviceLibrary(library: DeviceLibraryResult, device?: DeviceRecord): boolean {
@@ -268,7 +284,7 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     try {
       const overview = await window.api.devices.overview(deviceId)
       set(state => ({
-        devices: state.devices.map(device => device.id === overview.device.id ? overview.device : device),
+        devices: mergeDeviceRecord(state.devices, overview.device),
         deviceOverviews: { ...state.deviceOverviews, [deviceId]: overview },
         selectedDeviceId: deviceId,
         loading: false,
@@ -289,6 +305,7 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     try {
       const library = await window.api.devices.library(deviceId)
       set(state => ({
+        devices: mergeDeviceRecord(state.devices, library.device),
         deviceLibraries: { ...state.deviceLibraries, [deviceId]: library },
         deviceOverviews: {
           ...state.deviceOverviews,
@@ -322,7 +339,7 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
         themes = rockboxThemesFromLibrary(library)
       }
       set(state => ({
-        devices: state.devices.map(device => device.id === themes.device.id ? themes.device : device),
+        devices: mergeDeviceRecord(state.devices, themes.device),
         deviceLibraries: library
           ? { ...state.deviceLibraries, [deviceId]: library }
           : state.deviceLibraries,
@@ -446,7 +463,9 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
         window.api.devices.library(id).catch(() => null),
       ])
       set(state => ({
-        devices,
+        devices: library
+          ? mergeDeviceRecord(mergeDeviceRecord(devices, scanResult.device), library.device)
+          : mergeDeviceRecord(devices, scanResult.device),
         scanResult,
         selectedDeviceId: id,
         loading: false,
@@ -499,17 +518,58 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     set({ loading: true, error: null })
     try {
       const result = await window.api.devices.applySync(planId, selection)
-      const [devices, pendingJournals] = await Promise.all([
+      const [devices, pendingJournals, library] = await Promise.all([
         window.api.devices.list(),
         window.api.devices.listPendingJournals(),
+        window.api.devices.library(result.deviceId).catch(() => null),
       ])
-      set({
-        devices,
+      set(state => ({
+        devices: library ? mergeDeviceRecord(devices, library.device) : devices,
         pendingJournals,
+        deviceLibraries: library
+          ? { ...state.deviceLibraries, [result.deviceId]: library }
+          : state.deviceLibraries,
+        deviceOverviews: library
+          ? { ...state.deviceOverviews, [result.deviceId]: overviewFromStorage(library.device, library.storage) }
+          : state.deviceOverviews,
+        rockboxThemeLibraries: library
+          ? { ...state.rockboxThemeLibraries, [result.deviceId]: rockboxThemesFromLibrary(library) }
+          : state.rockboxThemeLibraries,
         plan: null,
         loading: false,
         syncProgress: null,
-      })
+      }))
+      return result
+    } catch (err) {
+      set({ loading: false, error: (err as Error).message, syncProgress: null })
+      throw err
+    }
+  },
+
+  async optimizeArtwork(deviceId, selection) {
+    const id = currentDeviceId(get(), deviceId)
+    set({ loading: true, error: null })
+    try {
+      const result = await window.api.devices.optimizeArtwork(id, selection)
+      const [devices, library] = await Promise.all([
+        window.api.devices.list(),
+        window.api.devices.library(id).catch(() => null),
+      ])
+      set(state => ({
+        devices: library ? mergeDeviceRecord(devices, library.device) : devices,
+        deviceLibraries: library
+          ? { ...state.deviceLibraries, [id]: library }
+          : state.deviceLibraries,
+        deviceOverviews: library
+          ? { ...state.deviceOverviews, [id]: overviewFromStorage(library.device, library.storage) }
+          : state.deviceOverviews,
+        rockboxThemeLibraries: library
+          ? { ...state.rockboxThemeLibraries, [id]: rockboxThemesFromLibrary(library) }
+          : state.rockboxThemeLibraries,
+        selectedDeviceId: id,
+        loading: false,
+        syncProgress: null,
+      }))
       return result
     } catch (err) {
       set({ loading: false, error: (err as Error).message, syncProgress: null })
@@ -521,16 +581,26 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     set({ loading: true, error: null })
     try {
       const result = await window.api.devices.resumeJournal(journalId)
-      const [devices, pendingJournals] = await Promise.all([
+      const [devices, pendingJournals, library] = await Promise.all([
         window.api.devices.list(),
         window.api.devices.listPendingJournals(),
+        window.api.devices.library(result.deviceId).catch(() => null),
       ])
-      set({
-        devices,
+      set(state => ({
+        devices: library ? mergeDeviceRecord(devices, library.device) : devices,
         pendingJournals,
+        deviceLibraries: library
+          ? { ...state.deviceLibraries, [result.deviceId]: library }
+          : state.deviceLibraries,
+        deviceOverviews: library
+          ? { ...state.deviceOverviews, [result.deviceId]: overviewFromStorage(library.device, library.storage) }
+          : state.deviceOverviews,
+        rockboxThemeLibraries: library
+          ? { ...state.rockboxThemeLibraries, [result.deviceId]: rockboxThemesFromLibrary(library) }
+          : state.rockboxThemeLibraries,
         loading: false,
         syncProgress: null,
-      })
+      }))
       return result
     } catch (err) {
       set({ loading: false, error: (err as Error).message, syncProgress: null })

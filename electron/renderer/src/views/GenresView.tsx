@@ -3,7 +3,7 @@ import type { GenreAlbumSortBy, GenresSortBy } from '@renderer/utils/listSort'
 import type { Album } from '@shared/types/library'
 import { Artwork } from '@renderer/components/Artwork'
 import { useAlbumActions } from '@renderer/components/MediaActions'
-import { ListPrefsMenu } from '@renderer/components/ListPrefsMenu'
+import { ListPrefsMenu, SortDirectionButton } from '@renderer/components/ListPrefsMenu'
 import { useVisibleAlbums } from '@renderer/stores/libraryStore'
 import { sortAlbums, sortGenreGroupsByNameOrCount } from '@renderer/utils/listSort'
 import { createListPrefsDefaults } from '@renderer/utils/listSort'
@@ -95,9 +95,10 @@ export function GenresView({ onSelectAlbum }: { onSelectAlbum?: (al: Album) => v
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
-                <button className="btn sm" onClick={() => setPrefs({ sortDir: prefs.sortDir === 'asc' ? 'desc' : 'asc' })}>
-                  {prefs.sortDir === 'asc' ? 'Asc' : 'Desc'}
-                </button>
+                <SortDirectionButton
+                  direction={prefs.sortDir}
+                  onToggle={() => setPrefs({ sortDir: prefs.sortDir === 'asc' ? 'desc' : 'asc' })}
+                />
               </div>
             </div>
             <div className="list-prefs-row">
@@ -113,9 +114,10 @@ export function GenresView({ onSelectAlbum }: { onSelectAlbum?: (al: Album) => v
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
-                <button className="btn sm" onClick={() => setPrefs({ albumSortDir: prefs.albumSortDir === 'asc' ? 'desc' : 'asc' })}>
-                  {prefs.albumSortDir === 'asc' ? 'Asc' : 'Desc'}
-                </button>
+                <SortDirectionButton
+                  direction={prefs.albumSortDir}
+                  onToggle={() => setPrefs({ albumSortDir: prefs.albumSortDir === 'asc' ? 'desc' : 'asc' })}
+                />
               </div>
             </div>
           </ListPrefsMenu>

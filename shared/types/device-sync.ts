@@ -24,6 +24,10 @@ export interface DeviceArtworkOptimizationSummary {
   bytesSaved: number
 }
 
+export interface DeviceArtworkOptimizationSelection {
+  relativePaths: string[]
+}
+
 // Read-only artwork analysis (the "Optimizar" section): scans the tracks already
 // present on the device and reports which embedded artwork exceeds the device's
 // max edge. It never modifies files.
@@ -103,8 +107,11 @@ export interface DeviceRecord {
   syncBase: DeviceSyncBase
   pcTargetPath: string
   artworkMaxEdge: number
-  // When true, missing lyrics are fetched online (LRCLIB) during PC->device sync.
+  // Legacy persisted flag. Device sync now copies only local lyrics and does not
+  // fetch missing lyrics online.
   fetchMissingLyrics: boolean
+  // When true, the sync run also downscales oversized embedded artwork on the device.
+  optimizeArtworkOnSync: boolean
   hasRockbox: boolean
   isAvailable: boolean
   trackCount: number
@@ -232,6 +239,68 @@ export interface RockboxThemeSummary {
   fileCount: number
   missingFiles: string[]
   updatedAt: string | null
+  preview: RockboxThemePreview
+}
+
+export type RockboxThemePreviewLayer =
+  | RockboxThemePreviewImageLayer
+  | RockboxThemePreviewTextLayer
+  | RockboxThemePreviewBarLayer
+  | RockboxThemePreviewAlbumArtLayer
+  | RockboxThemePreviewRectLayer
+
+export interface RockboxThemePreview {
+  width: number
+  height: number
+  backgroundColor: string
+  foregroundColor: string
+  layers: RockboxThemePreviewLayer[]
+  warnings: string[]
+}
+
+export interface RockboxThemePreviewBaseLayer {
+  id: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface RockboxThemePreviewImageLayer extends RockboxThemePreviewBaseLayer {
+  type: 'image'
+  path: string
+  intrinsicWidth: number
+  intrinsicHeight: number
+  sourceX: number
+  sourceY: number
+  sourceWidth: number
+  sourceHeight: number
+}
+
+export interface RockboxThemePreviewTextLayer extends RockboxThemePreviewBaseLayer {
+  type: 'text'
+  template: string
+  color: string
+  align: 'left' | 'center' | 'right'
+  fontSize: number
+}
+
+export interface RockboxThemePreviewBarLayer extends RockboxThemePreviewBaseLayer {
+  type: 'bar'
+  kind: 'progress' | 'volume'
+  value: number
+  color: string
+  trackColor: string
+}
+
+export interface RockboxThemePreviewAlbumArtLayer extends RockboxThemePreviewBaseLayer {
+  type: 'albumArt'
+}
+
+export interface RockboxThemePreviewRectLayer extends RockboxThemePreviewBaseLayer {
+  type: 'rect'
+  color: string
+  opacity: number
 }
 
 export type RockboxThemeScanStatus = 'ok' | 'no-rockbox' | 'no-themes-dir' | 'unreadable'
@@ -315,12 +384,14 @@ export interface DeviceConnectPayload {
   pcTargetPath?: string
   artworkMaxEdge?: number
   fetchMissingLyrics?: boolean
+  optimizeArtworkOnSync?: boolean
   sourceLibraryIds?: number[]
 }
 
 export interface DeviceSettingsUpdate {
   artworkMaxEdge?: number
   fetchMissingLyrics?: boolean
+  optimizeArtworkOnSync?: boolean
   musicRoot?: string
   sourceLibraryIds?: number[]
   defaultMode?: DeviceSyncMode
@@ -365,6 +436,7 @@ export interface DeviceSyncConflictResolution {
 export interface DeviceSyncApplySelection {
   actionIds?: string[]
   conflictResolutions?: DeviceSyncConflictResolution[]
+  optimizeArtwork?: boolean
 }
 
 export interface DeviceSyncPlanRequest {

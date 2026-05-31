@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Icon } from '@renderer/components/Icon'
 import { MetadataCompletionModal } from '@renderer/components/MetadataCompletionModal'
 import { TrackTable } from '@renderer/components/TrackTable'
-import { ListPrefsMenu } from '@renderer/components/ListPrefsMenu'
+import { ListPrefsMenu, SortDirectionButton } from '@renderer/components/ListPrefsMenu'
 import { useListPrefs } from '@renderer/stores/settingsStore'
 import { createListPrefsDefaults, trackMatchesQuery, type LibraryTrackSortBy, sortTracks } from '@renderer/utils/listSort'
 import { fmtTotal } from '@renderer/utils/format'
@@ -133,13 +133,10 @@ export function LibraryView() {
                     </option>
                   ))}
                 </select>
-                <button
-                  className="btn sm"
-                  onClick={() => setPrefs({ sortDir: prefs.sortDir === 'asc' ? 'desc' : 'asc' })}
-                  title="Alternar dirección"
-                >
-                  {prefs.sortDir === 'asc' ? 'Asc' : 'Desc'}
-                </button>
+                <SortDirectionButton
+                  direction={prefs.sortDir}
+                  onToggle={() => setPrefs({ sortDir: prefs.sortDir === 'asc' ? 'desc' : 'asc' })}
+                />
               </div>
             </div>
             <div className="list-prefs-row-inline">

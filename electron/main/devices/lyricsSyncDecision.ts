@@ -5,7 +5,9 @@ import type { DeviceSyncMode } from '@shared/types/device-sync'
 // source), so the inputs are purely "does each side already have lyrics".
 export interface LyricsSyncState {
   mode: DeviceSyncMode
-  // Per-device toggle: allow online (LRCLIB) fetch for missing lyrics.
+  // Backward-compatible setting kept in persisted device config. Device sync no
+  // longer performs online lyrics fetches; missing lyrics are copied only when
+  // one side already has local content.
   fetchEnabled: boolean
   // True when the track exists on BOTH sides (the device audio file is present).
   // False for a PC-only track that is about to be copied to the device.
@@ -27,7 +29,8 @@ export interface LyricsSyncDecision {
   writeDeviceSidecar: boolean
   // Read the device `.lrc` and import it into the PC sidecar (device -> PC).
   importToPc: boolean
-  // Fetch the missing lyrics online for the PC track.
+  // Device sync never fetches missing lyrics online. Kept in the return shape so
+  // older callers/tests can assert the disabled behavior explicitly.
   fetchOnline: boolean
   // Nothing to do for this track.
   skip: boolean
@@ -37,9 +40,9 @@ export interface LyricsSyncDecision {
 // `LyricsSyncState` from the filesystem and performs the chosen action.
 //
 // Direction semantics:
-//   pc_to_device (push)      -> propagate PC -> device; online fetch allowed
-//   device_to_pc (pull)      -> propagate device -> PC; no online fetch
-//   bidirectional_safe       -> propagate both ways; online fetch toward the device
+//   pc_to_device (push)      -> propagate PC -> device
+//   device_to_pc (pull)      -> propagate device -> PC
+//   bidirectional_safe       -> propagate both ways
 // "Both sides already have lyrics" always resolves to skip (never clobber).
 export function decideLyricsSync(state: LyricsSyncState): LyricsSyncDecision {
   const pushDir = state.mode === 'pc_to_device' || state.mode === 'bidirectional_safe'
@@ -51,13 +54,7 @@ export function decideLyricsSync(state: LyricsSyncState): LyricsSyncDecision {
   const importToPc =
     pullDir && state.isMatched && state.deviceHasLrc && !state.pcHasLrc
 
-  const fetchOnline =
-    pushDir &&
-    state.fetchEnabled &&
-    !state.pcHasLrc &&
-    // Matched: only fetch when the device lacks lyrics too. PC-only (about to be
-    // copied): always eligible — the copy step writes the device sidecar afterward.
-    (state.isMatched ? !state.deviceHasLrc : true)
+  const fetchOnline = false
 
   const skip = !writeDeviceSidecar && !importToPc && !fetchOnline
   return { writeDeviceSidecar, importToPc, fetchOnline, skip }

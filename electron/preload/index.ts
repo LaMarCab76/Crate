@@ -38,6 +38,8 @@ import type {
 import type {
   DeviceArtworkAnalysisProgressEvent,
   DeviceArtworkAnalysisResult,
+  DeviceArtworkOptimizationSelection,
+  DeviceArtworkOptimizationSummary,
   DeviceCandidate,
   DeviceConnectPayload,
   DeviceLibraryResult,
@@ -68,6 +70,7 @@ import type {
 } from '@shared/types/db'
 import type {
   LyricsCandidate,
+  LyricsLibraryOverview,
   LyricsSelectionProgress,
   LyricsSelectionSummary,
   LyricsSettingsState,
@@ -259,6 +262,8 @@ const api: Api = {
   lyrics: {
     get: (trackId: number) =>
       ipcRenderer.invoke('lyrics:get', trackId) as Promise<LyricsView>,
+    libraryOverview: () =>
+      ipcRenderer.invoke('lyrics:libraryOverview') as Promise<LyricsLibraryOverview>,
     fetch: (trackId: number, force?: boolean) =>
       ipcRenderer.invoke('lyrics:fetch', { trackId, force }) as Promise<LyricsView>,
     search: (trackId: number) =>
@@ -313,6 +318,8 @@ const api: Api = {
       ipcRenderer.invoke('devices:planSync', payload) as Promise<DeviceSyncPlan>,
     applySync: (planId: string, selection?: DeviceSyncApplySelection) =>
       ipcRenderer.invoke('devices:applySync', planId, selection) as Promise<DeviceSyncApplyResult>,
+    optimizeArtwork: (deviceId: string, selection?: DeviceArtworkOptimizationSelection) =>
+      ipcRenderer.invoke('devices:optimizeArtwork', deviceId, selection) as Promise<DeviceArtworkOptimizationSummary>,
     installRockboxThemesFromFiles: (deviceId: string, files: unknown[]) => {
       const paths = files
         .map(file => {
