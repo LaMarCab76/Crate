@@ -11,6 +11,8 @@ import type {
 } from './lyrics'
 import type {
   DeviceCandidate,
+  DeviceArtworkAnalysisProgressEvent,
+  DeviceArtworkAnalysisResult,
   DeviceConnectPayload,
   DeviceLibraryResult,
   DeviceMusicRootPickResult,
@@ -558,10 +560,12 @@ export interface DevicesApi {
   listPendingJournals(): Promise<DevicePendingJournal[]>
   resumeJournal(journalId: string): Promise<DeviceSyncApplyResult>
   discardJournal(journalId: string): Promise<void>
+  analyzeArtwork(deviceId: string): Promise<DeviceArtworkAnalysisResult>
 
   onScanProgress(h: (e: DeviceScanProgressEvent) => void): EventOff
   onSyncProgress(h: (e: DeviceSyncProgressEvent) => void): EventOff
   onVolumesChanged(h: (e: DeviceVolumeSnapshot) => void): EventOff
+  onArtworkAnalyzeProgress(h: (e: DeviceArtworkAnalysisProgressEvent) => void): EventOff
 }
 
 export interface DownloadsApi {

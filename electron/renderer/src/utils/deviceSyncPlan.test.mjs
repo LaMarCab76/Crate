@@ -1,10 +1,15 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 import {
+  actionKindForSelection,
+  buildSelectionFromSides,
   bulkResolveSelection,
   conflictResolutionOptions,
   defaultDeviceSyncSelection,
   groupDeviceSyncActions,
+  naturalSideForAction,
+  partitionActionsBySide,
+  seedActionSides,
   selectionPayload,
   summarizeDeviceSyncSelection,
 } from './deviceSyncPlan.ts'
@@ -165,4 +170,97 @@ test('selectionPayload serializes sets and omits skipped conflicts', () => {
 
   assert.deepEqual(payload.actionIds, ['copy', 'conflict'])
   assert.deepEqual(payload.conflictResolutions, [{ actionId: 'conflict', kind: 'replace_device' }])
+})
+
+// --- Wizard side-selection model (Vista 1 / Vista 2) ---
+
+function ids(selection) {
+  return [...(selection.actionIds ?? [])].sort()
+}
+
+function resolutions(selection) {
+  const out = {}
+  for (const { actionId, kind } of selection.conflictResolutions ?? []) out[actionId] = kind
+  return out
+}
+
+test('partitionActionsBySide splits by which side currently holds the file', () => {
+  const { pc, device } = partitionActionsBySide(basePlan().actions)
+  // both/pcReplace touch both sides; pcOnly only PC; deviceOnly only device.
+  assert.deepEqual(pc.map(a => a.id), ['both', 'pcReplace', 'pcOnly'])
+  assert.deepEqual(device.map(a => a.id), ['both', 'pcReplace', 'deviceOnly'])
+})
+
+test('naturalSideForAction maps each kind to the winning side', () => {
+  assert.equal(naturalSideForAction(action('x', 'copy_pc_to_device')), 'pc')
+  assert.equal(naturalSideForAction(action('x', 'replace_device')), 'pc')
+  assert.equal(naturalSideForAction(action('x', 'delete_device')), 'pc')
+  assert.equal(naturalSideForAction(action('x', 'copy_device_to_pc')), 'device')
+  assert.equal(naturalSideForAction(action('x', 'replace_pc')), 'device')
+  assert.equal(naturalSideForAction(action('x', 'delete_pc')), 'device')
+  assert.equal(naturalSideForAction(action('x', 'skip_conflict')), 'omit')
+})
+
+test("review seed reproduces the engine's default selection", () => {
+  const p = basePlan()
+  const derived = buildSelectionFromSides(p, seedActionSides(p, 'review'))
+  const def = defaultDeviceSyncSelection(p)
+  assert.deepEqual(ids(derived), ids(def))
+  assert.deepEqual(resolutions(derived), {})
+})
+
+test('pc seed reproduces bulkResolveSelection toward pc', () => {
+  const p = basePlan()
+  const derived = buildSelectionFromSides(p, seedActionSides(p, 'pc'))
+  const bulk = bulkResolveSelection(p, 'pc')
+  const expected = selectionPayload(bulk.actionIds, bulk.conflictResolutions)
+  assert.deepEqual(ids(derived), ids(expected))
+  assert.deepEqual(resolutions(derived), resolutions(expected))
+})
+
+test('device seed reproduces bulkResolveSelection toward device', () => {
+  const p = basePlan()
+  const derived = buildSelectionFromSides(p, seedActionSides(p, 'device'))
+  const bulk = bulkResolveSelection(p, 'device')
+  const expected = selectionPayload(bulk.actionIds, bulk.conflictResolutions)
+  assert.deepEqual(ids(derived), ids(expected))
+  assert.deepEqual(resolutions(derived), resolutions(expected))
+})
+
+test('per-action overrides: omit excludes, flipping a side adds a resolution', () => {
+  const p = basePlan()
+  const sides = seedActionSides(p, 'review')
+  sides.pcOnly = 'omit' // drop a normal push
+  sides.deviceOnly = 'pc' // flip pull-to-pc into delete_device on the device
+  const derived = buildSelectionFromSides(p, sides)
+  assert.ok(!ids(derived).includes('pcOnly'), 'omitted action must be excluded')
+  assert.ok(ids(derived).includes('deviceOnly'), 'flipped action must be included')
+  assert.equal(resolutions(derived).deviceOnly, 'delete_device')
+})
+
+test('resolving a conflict to a side produces a conflictResolution entry', () => {
+  const p = basePlan()
+  const sides = seedActionSides(p, 'review')
+  sides.both = 'device' // resolve the conflict toward the device copy
+  const derived = buildSelectionFromSides(p, sides)
+  assert.ok(ids(derived).includes('both'))
+  assert.equal(resolutions(derived).both, 'replace_pc')
+})
+
+test('actionKindForSelection honours overrides on non-conflict actions', () => {
+  const p = basePlan()
+  const selection = buildSelectionFromSides(p, seedActionSides(p, 'pc'))
+  const deviceOnly = p.actions.find(a => a.id === 'deviceOnly')
+  // "Usar PC" turns the device-only pull into a device delete — not a pull to PC.
+  assert.equal(actionKindForSelection(deviceOnly, selection), 'delete_device')
+})
+
+test('choosing PC never copies anything to the PC library', () => {
+  const p = basePlan()
+  const summary = summarizeDeviceSyncSelection(p, buildSelectionFromSides(p, seedActionSides(p, 'pc')))
+  assert.equal(summary.copyDeviceToPc, 0)
+  assert.equal(summary.replacePc, 0)
+  assert.equal(summary.deletePc, 0)
+  assert.equal(summary.pcAfter, summary.pcBefore) // the PC library is unchanged
+  assert.equal(summary.deleteDevice, 1) // the device-only track is removed from the MP3
 })

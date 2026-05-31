@@ -50,7 +50,6 @@ export interface Tweak {
   // it knows cache/fetch behavior before any action. Sidecar writes are mandatory.
   lyricsAutoFetch: boolean
   lyricsPreferSynced: boolean
-  lyricsCacheLocal: boolean
   lyricsGlobalOffsetMs: number
 }
 
@@ -78,7 +77,6 @@ const TWEAK_DEFAULTS: Tweak = {
   fullPlayerVisualizer: true,
   lyricsAutoFetch: true,
   lyricsPreferSynced: true,
-  lyricsCacheLocal: true,
   lyricsGlobalOffsetMs: 0,
 }
 
@@ -87,7 +85,6 @@ function lyricsPrefsFromTweak(t: Tweak): LyricsSettingsState {
   return {
     autoFetch: t.lyricsAutoFetch,
     preferSynced: t.lyricsPreferSynced,
-    cacheLocal: t.lyricsCacheLocal,
   }
 }
 

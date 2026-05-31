@@ -36,6 +36,8 @@ import type {
   TrashTracksResult,
 } from '@shared/types/ipc-contract'
 import type {
+  DeviceArtworkAnalysisProgressEvent,
+  DeviceArtworkAnalysisResult,
   DeviceCandidate,
   DeviceConnectPayload,
   DeviceLibraryResult,
@@ -303,6 +305,8 @@ const api: Api = {
       ipcRenderer.invoke('devices:scan', deviceId) as Promise<DeviceScanResult>,
     library: (deviceId: string) =>
       ipcRenderer.invoke('devices:library', deviceId) as Promise<DeviceLibraryResult>,
+    analyzeArtwork: (deviceId: string) =>
+      ipcRenderer.invoke('devices:analyzeArtwork', deviceId) as Promise<DeviceArtworkAnalysisResult>,
     rockboxThemes: (deviceId: string) =>
       ipcRenderer.invoke('devices:rockboxThemes', deviceId) as Promise<RockboxThemeLibraryResult>,
     planSync: (payload: DeviceSyncPlanRequest) =>
@@ -332,6 +336,8 @@ const api: Api = {
     onScanProgress: (h) => subscribe<DeviceScanProgressEvent>('devices:scan:progress', h),
     onSyncProgress: (h) => subscribe<DeviceSyncProgressEvent>('devices:sync:progress', h),
     onVolumesChanged: (h) => subscribe<DeviceVolumeSnapshot>('devices:volumes-changed', h),
+    onArtworkAnalyzeProgress: (h) =>
+      subscribe<DeviceArtworkAnalysisProgressEvent>('devices:artwork-analyze:progress', h),
   },
   downloads: {
     getSettings: () =>

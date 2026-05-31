@@ -28,14 +28,29 @@ import { getImportService } from '../library/ImportService'
 import { readTrackMetadata } from '../library/MetadataExtractor'
 import { broadcast } from '../ipc/events'
 import { createThrottledBroadcaster, type ThrottledBroadcaster } from '../ipc/throttle'
-import { optimizeEmbeddedArtwork } from './ArtworkOptimizer'
+import {
+  optimizeEmbeddedArtwork,
+  probeEmbeddedArtwork,
+  type EmbeddedArtworkProbe,
+  type EmbeddedArtworkProbePicture,
+} from './ArtworkOptimizer'
+import { decideLyricsSync } from './lyricsSyncDecision'
+import { classifyArtwork } from './artworkOptimizeDecision'
 import { scanRockboxThemes } from './RockboxThemeScanner'
-import { sidecarPathFor } from '../lyrics/providers/SidecarLrcProvider'
+import { trackFingerprint } from './trackFingerprint'
+import { probeKind } from './dirEntryKind'
+import { readSidecarLrc, sidecarPathFor } from '../lyrics/providers/SidecarLrcProvider'
+import { readEmbeddedLyrics } from '../lyrics/providers/EmbeddedLyricsProvider'
+import { getLyricsService } from '../lyrics/LyricsService'
 import { clampDeviceArtworkEdge } from '@shared/constants/device-sync'
 import type { DbTrack } from '@shared/types/db'
 import type { PickFolderResult } from '@shared/types/ipc-contract'
 import type {
+  ArtworkStatus,
   DeviceAlbumSummary,
+  DeviceArtworkAnalysisItem,
+  DeviceArtworkAnalysisResult,
+  DeviceArtworkAnalysisSummary,
   DeviceArtworkOptimizationSummary,
   DeviceArtistSummary,
   DeviceCandidate,
@@ -57,6 +72,7 @@ import type {
   DeviceSyncAction,
   DeviceSyncActionKind,
   DeviceSyncApplyResult,
+  DeviceSyncBase,
   DeviceSyncFailure,
   DeviceSyncMode,
   DeviceSyncPhase,
@@ -122,8 +138,10 @@ interface DeviceRow {
   root_path: string
   music_root: string
   sync_mode: DeviceSyncMode
+  sync_base: DeviceSyncBase
   pc_target_path: string
   artwork_max_edge: number
+  fetch_lyrics: number
   has_rockbox: number
   track_count: number
   created_at: string
@@ -140,6 +158,7 @@ interface DeviceYaml {
   musicRoot: string
   defaultSyncMode: DeviceSyncMode
   artworkMaxEdge?: number
+  fetchMissingLyrics?: boolean
   linkedMachineIds: string[]
   createdAt: string
   updatedAt: string
@@ -201,7 +220,7 @@ type JournalStepOutcome = 'applied' | 'optimized' | 'skipped'
 
 interface SyncJournalStep {
   id: string
-  kind: DeviceSyncActionKind | 'optimize_artwork'
+  kind: DeviceSyncActionKind | 'optimize_artwork' | 'sync_lyrics'
   relativePath: string
   sourcePath: string | null
   destinationPath: string | null
@@ -228,6 +247,7 @@ interface SyncJournalYaml {
   updatedAt: string
   completedAt?: string
   actions: SyncJournalStep[]
+  lyrics: SyncJournalStep[]
   artwork: SyncJournalStep[]
   pcTargetImported?: boolean
   result?: DeviceSyncApplyResult
@@ -311,26 +331,11 @@ function validateSyncMode(value: unknown): DeviceSyncMode {
   return DEFAULT_SYNC_MODE
 }
 
-function trackFingerprint(track: {
-  relativePath: string
-  fileSize: number | null
-  dateModified: string | null
-  duration: number
-  title: string
-  artist: string
-  album: string
-  format: string
-}): string {
-  return [
-    track.relativePath,
-    track.fileSize ?? '',
-    track.dateModified ?? '',
-    Math.round(track.duration || 0),
-    track.title,
-    track.artist,
-    track.album,
-    track.format,
-  ].join('|')
+function validateSyncBase(value: unknown): DeviceSyncBase {
+  if (value === 'pc' || value === 'device' || value === 'review') {
+    return value
+  }
+  return 'review'
 }
 
 function snapshotFromTracks<T extends DeviceTrack>(tracks: T[]): Record<string, SnapshotTrack> {
@@ -712,12 +717,16 @@ export class DeviceSyncService {
     const name = (payload.name?.trim() || existingDevice?.name || basename(rootPath) || 'Rockbox Device').trim()
     const musicRoot = sanitizeMusicRoot(payload.musicRoot ?? existingDevice?.musicRoot ?? existingRootRow?.music_root ?? '.')
     const defaultMode = validateSyncMode(payload.defaultMode ?? existingDevice?.defaultSyncMode ?? existingRootRow?.sync_mode)
+    const syncBase = validateSyncBase(existingRootRow?.sync_base ?? 'review')
     const pcTargetPath = resolve(
       payload.pcTargetPath ?? existingMachine?.pcTargetPath ?? existingRootRow?.pc_target_path ?? this.defaultPcTargetPath(name),
     )
     const artworkMaxEdge = clampDeviceArtworkEdge(
       existingDevice?.artworkMaxEdge ?? existingRootRow?.artwork_max_edge ?? payload.artworkMaxEdge,
     )
+    const fetchMissingLyrics =
+      existingDevice?.fetchMissingLyrics ??
+      (existingRootRow ? existingRootRow.fetch_lyrics === 1 : payload.fetchMissingLyrics ?? true)
     const hasRockbox = existsSync(join(rootPath, '.rockbox'))
 
     const linkedMachineIds = new Set(existingDevice?.linkedMachineIds ?? [])
@@ -734,6 +743,7 @@ export class DeviceSyncService {
       musicRoot,
       defaultSyncMode: defaultMode,
       artworkMaxEdge,
+      fetchMissingLyrics,
       linkedMachineIds: [...linkedMachineIds],
       createdAt,
       updatedAt,
@@ -757,8 +767,10 @@ export class DeviceSyncService {
       root_path: rootPath,
       music_root: musicRoot,
       sync_mode: defaultMode,
+      sync_base: syncBase,
       pc_target_path: pcTargetPath,
       artwork_max_edge: artworkMaxEdge,
+      fetch_lyrics: fetchMissingLyrics ? 1 : 0,
       has_rockbox: hasRockbox ? 1 : 0,
       track_count: 0,
       created_at: createdAt,
@@ -782,9 +794,15 @@ export class DeviceSyncService {
   async updateSettings(deviceId: string, settings: DeviceSettingsUpdate): Promise<DeviceRecord> {
     const row = this.requireDevice(deviceId)
     const artworkMaxEdge = clampDeviceArtworkEdge(settings.artworkMaxEdge, row.artwork_max_edge)
+    const fetchMissingLyrics = settings.fetchMissingLyrics === undefined
+      ? row.fetch_lyrics === 1
+      : settings.fetchMissingLyrics
     const defaultMode = settings.defaultMode === undefined
       ? row.sync_mode
       : validateSyncMode(settings.defaultMode)
+    const syncBase = settings.syncBase === undefined
+      ? validateSyncBase(row.sync_base)
+      : validateSyncBase(settings.syncBase)
     const musicRoot = settings.musicRoot === undefined
       ? row.music_root
       : sanitizeMusicRoot(settings.musicRoot)
@@ -808,6 +826,7 @@ export class DeviceSyncService {
       musicRoot,
       defaultSyncMode: defaultMode,
       artworkMaxEdge,
+      fetchMissingLyrics,
       linkedMachineIds: [...linkedMachineIds],
       createdAt: existingDevice?.createdAt ?? row.created_at,
       updatedAt,
@@ -826,8 +845,8 @@ export class DeviceSyncService {
       lastSyncAt: existingMachine?.lastSyncAt ?? row.last_sync_at,
     }
     getDatabase()
-      .prepare(`UPDATE devices SET music_root = ?, sync_mode = ?, pc_target_path = ?, artwork_max_edge = ?, last_seen_at = ? WHERE id = ?`)
-      .run(musicRoot, defaultMode, pcTargetPath, artworkMaxEdge, updatedAt, row.id)
+      .prepare(`UPDATE devices SET music_root = ?, sync_mode = ?, sync_base = ?, pc_target_path = ?, artwork_max_edge = ?, fetch_lyrics = ?, last_seen_at = ? WHERE id = ?`)
+      .run(musicRoot, defaultMode, syncBase, pcTargetPath, artworkMaxEdge, fetchMissingLyrics ? 1 : 0, updatedAt, row.id)
     if (settings.sourceLibraryIds !== undefined) {
       this.setDeviceLibraries(row.id, settings.sourceLibraryIds)
     }
@@ -855,9 +874,14 @@ export class DeviceSyncService {
     const scan = await this.scanDeviceRow(row, true)
     const storage = await this.deviceStorage(row, scan.tracks)
     const scannedAt = nowIso()
+    // No pisar un conteo válido con 0 cuando el walk encontró archivos pero
+    // ninguno se pudo leer (scan fallido); sí persistir 0 si el device está
+    // realmente vacío (no se detectaron archivos).
+    const scanLikelyFailed = scan.tracks.length === 0 && scan.summary.scanned > 0
+    const nextTrackCount = scanLikelyFailed ? row.track_count : scan.tracks.length
     getDatabase()
       .prepare(`UPDATE devices SET track_count = ?, last_scan_at = ?, last_seen_at = ? WHERE id = ?`)
-      .run(scan.tracks.length, scannedAt, scannedAt, row.id)
+      .run(nextTrackCount, scannedAt, scannedAt, row.id)
     const device = this.rowToRecord(this.getDeviceRow(row.id)!)
     await this.publishVolumeSnapshot(true)
     return {
@@ -866,6 +890,147 @@ export class DeviceSyncService {
       summary: scan.summary,
       storage,
     }
+  }
+
+  // Read-only artwork analysis for the device "Optimizar" section. Scans every
+  // audio file already on the device, probes the embedded artwork dimensions and
+  // reports which tracks exceed the device's max edge. Never modifies files.
+  async analyzeDeviceArtwork(deviceId: string): Promise<DeviceArtworkAnalysisResult> {
+    const row = this.requireDevice(deviceId)
+    const maxEdge = clampDeviceArtworkEdge(row.artwork_max_edge)
+    const musicRoot = this.deviceMusicRoot(row)
+    const files = await this.collectAudioFiles(row.id, musicRoot, false)
+
+    const summary: DeviceArtworkAnalysisSummary = {
+      scanned: 0,
+      oversized: 0,
+      withinLimit: 0,
+      noArtwork: 0,
+      unsupported: 0,
+      errors: 0,
+    }
+    const items: DeviceArtworkAnalysisItem[] = []
+
+    this.throttledBroadcast('devices:artwork-analyze:progress', true, {
+      deviceId: row.id,
+      scanned: 0,
+      total: files.length,
+      phase: 'scanning',
+    })
+
+    let processed = 0
+    for (const file of files) {
+      const relativePath = toPosixRelative(musicRoot, file)
+      try {
+        const probe = probeEmbeddedArtwork(file)
+        const evaluated = this.evaluateArtworkProbe(probe, maxEdge)
+        summary.scanned += 1
+        switch (evaluated.status) {
+          case 'oversized':
+            summary.oversized += 1
+            break
+          case 'within_limit':
+            summary.withinLimit += 1
+            break
+          case 'no_artwork':
+            summary.noArtwork += 1
+            break
+          case 'unsupported':
+            summary.unsupported += 1
+            break
+        }
+        if (evaluated.status === 'oversized') {
+          items.push({
+            key: keyForRelativePath(relativePath),
+            relativePath,
+            title: probe.title || basename(file),
+            artist: probe.artist,
+            album: probe.album,
+            format: evaluated.format,
+            width: evaluated.width,
+            height: evaluated.height,
+            status: 'oversized',
+          })
+        }
+      } catch (err) {
+        summary.errors += 1
+        console.warn(`[devices] artwork analyze skip ${file}:`, (err as Error).message)
+      } finally {
+        processed += 1
+        this.throttledBroadcast('devices:artwork-analyze:progress', false, {
+          deviceId: row.id,
+          scanned: processed,
+          total: files.length,
+          phase: 'reading',
+        })
+      }
+    }
+
+    this.throttledBroadcast('devices:artwork-analyze:progress', true, {
+      deviceId: row.id,
+      scanned: processed,
+      total: files.length,
+      phase: 'complete',
+    })
+
+    // Biggest offenders first, then stable by path.
+    items.sort((a, b) => {
+      const aEdge = Math.max(a.width ?? 0, a.height ?? 0)
+      const bEdge = Math.max(b.width ?? 0, b.height ?? 0)
+      if (aEdge !== bEdge) return bEdge - aEdge
+      return a.relativePath.localeCompare(b.relativePath)
+    })
+
+    return {
+      deviceId: row.id,
+      artworkMaxEdge: maxEdge,
+      analyzedAt: nowIso(),
+      summary,
+      items,
+    }
+  }
+
+  // Collapses a file's embedded pictures into a single track-level verdict: the
+  // most severe status wins (oversized > within_limit > unsupported), and among
+  // ties the largest picture is reported so the UI shows the worst dimensions.
+  private evaluateArtworkProbe(
+    probe: EmbeddedArtworkProbe,
+    maxEdge: number,
+  ): { status: ArtworkStatus; format: 'jpeg' | 'png' | null; width: number | null; height: number | null } {
+    if (probe.pictures.length === 0) {
+      return { status: 'no_artwork', format: null, width: null, height: null }
+    }
+    const rank: Record<ArtworkStatus, number> = {
+      no_artwork: 0,
+      unsupported: 1,
+      within_limit: 2,
+      oversized: 3,
+    }
+    let chosen: EmbeddedArtworkProbePicture = probe.pictures[0]
+    let chosenStatus: ArtworkStatus = 'unsupported'
+    let chosenEdge = -1
+    let first = true
+    for (const picture of probe.pictures) {
+      const status = classifyArtwork({
+        maxEdge,
+        hasPicture: true,
+        format: picture.format,
+        width: picture.width,
+        height: picture.height,
+      })
+      const edge = Math.max(picture.width ?? 0, picture.height ?? 0)
+      const better =
+        first ||
+        rank[status] > rank[chosenStatus] ||
+        (rank[status] === rank[chosenStatus] && edge > chosenEdge)
+      if (better) {
+        chosen = picture
+        chosenStatus = status
+        chosenEdge = edge
+        first = false
+      }
+    }
+    return { status: chosenStatus, format: chosen.format, width: chosen.width, height: chosen.height }
   }
 
   async overview(deviceId: string): Promise<DeviceOverviewResult> {
@@ -890,9 +1055,13 @@ export class DeviceSyncService {
     ])
     const rockboxThemes = rockboxThemeResult.themes
     const scannedAt = nowIso()
+    // Don't clobber a valid count with 0 when the scan likely failed (files were
+    // found but none could be read); only persist 0 for a genuinely empty device.
+    const libScanLikelyFailed = scan.tracks.length === 0 && scan.summary.scanned > 0
+    const nextLibTrackCount = libScanLikelyFailed ? row.track_count : scan.tracks.length
     getDatabase()
       .prepare(`UPDATE devices SET track_count = ?, last_seen_at = ? WHERE id = ?`)
-      .run(scan.tracks.length, scannedAt, row.id)
+      .run(nextLibTrackCount, scannedAt, row.id)
     const device = this.rowToRecord(this.getDeviceRow(row.id)!)
     await this.publishVolumeSnapshot(true)
 
@@ -1000,14 +1169,26 @@ export class DeviceSyncService {
       this.readLibraryState(row),
     ])
 
-    const actions = this.buildActions({
-      mode,
-      pcTracks,
-      deviceTracks: deviceScan.tracks,
-      baseline,
-      deviceMusicRoot,
-      pcTargetPath,
-    })
+    // Guard contra el plan catastrófico "copiar toda la librería": si el índice
+    // del device quedó vacío pero el dispositivo debería tener contenido (se
+    // detectaron archivos que no se pudieron leer, o antes había temas/baseline),
+    // no construimos las acciones y avisamos para reescanear.
+    const deviceFilesFound = deviceScan.summary.scanned
+    const baselineDeviceCount = baseline ? Object.keys(baseline.device.tracks ?? {}).length : 0
+    const hadContentBefore = (row.track_count ?? 0) > 0 || baselineDeviceCount > 0
+    const deviceIndexSuspect =
+      deviceScan.tracks.length === 0 && (deviceFilesFound > 0 || hadContentBefore)
+
+    const actions = deviceIndexSuspect
+      ? []
+      : this.buildActions({
+          mode,
+          pcTracks,
+          deviceTracks: deviceScan.tracks,
+          baseline,
+          deviceMusicRoot,
+          pcTargetPath,
+        })
     const plan: DeviceSyncPlan = {
       id: randomUUID(),
       deviceId: row.id,
@@ -1017,6 +1198,11 @@ export class DeviceSyncService {
       pcTargetPath,
       actions,
       summary: summaryFor(actions, pcTracks.length, deviceScan.tracks.length),
+      deviceIndexWarning: deviceIndexSuspect
+        ? deviceFilesFound > 0
+          ? `Se detectaron ${deviceFilesFound} archivos en el dispositivo pero no se pudo leer su metadata. Reescaneá antes de sincronizar.`
+          : 'El índice del dispositivo quedó vacío aunque debería tener temas. Reescaneá antes de sincronizar.'
+        : null,
     }
 
     this.purgeExpiredPlans()
@@ -1139,7 +1325,7 @@ export class DeviceSyncService {
     journal.deviceRoot = row.root_path
     journal.deviceMusicRoot = deviceMusicRoot
     journal.updatedAt = nowIso()
-    for (const step of [...journal.actions, ...journal.artwork]) {
+    for (const step of [...journal.actions, ...journal.lyrics, ...journal.artwork]) {
       if (step.status === 'running') step.status = 'pending'
     }
     await writeYamlFile(found.path, journal)
@@ -1233,6 +1419,7 @@ export class DeviceSyncService {
           destinationPath: action.destinationPath,
           status: 'pending',
         })),
+      lyrics: [],
       artwork: [],
     }
   }
@@ -1262,7 +1449,11 @@ export class DeviceSyncService {
         if (!entry.isFile() || !entry.name.startsWith('sync-') || !entry.name.endsWith('.yaml')) continue
         const path = join(dir, entry.name)
         const journal = await readYamlFile<SyncJournalYaml>(path)
-        if (this.isPendingJournal(journal)) out.push({ path, journal })
+        if (this.isPendingJournal(journal)) {
+          // Backward-compat: journals written before the lyrics phase lack this field.
+          journal.lyrics ??= []
+          out.push({ path, journal })
+        }
       }
     }
     return out
@@ -1290,7 +1481,7 @@ export class DeviceSyncService {
   }
 
   private toPendingJournal(journal: SyncJournalYaml): DevicePendingJournal {
-    const allSteps = [...journal.actions, ...journal.artwork]
+    const allSteps = [...journal.actions, ...(journal.lyrics ?? []), ...journal.artwork]
     const current = allSteps.find(step => step.status === 'running') ?? allSteps.find(step => step.status === 'failed')
     return {
       id: journal.id,
@@ -1370,6 +1561,21 @@ export class DeviceSyncService {
   ): Promise<DeviceSyncApplyResult> {
     const affectedPcFolderIds = new Set<number>()
     try {
+      // Pre-copy: reconcile/fetch lyrics. Wrapped so it can never abort the copy.
+      try {
+        await this.reconcileLyricsForJournal(
+          plan,
+          deviceMusicRoot,
+          this.deviceLibraryIds(row.id),
+          row.fetch_lyrics === 1,
+          journalPath,
+          journal,
+          deviceFilesHint,
+        )
+      } catch (err) {
+        console.warn('[devices] lyrics phase failed (continuing sync):', (err as Error).message)
+      }
+
       const copiedIntoPcTarget = await this.executeSyncJournalActions(
         plan,
         journalPath,
@@ -1497,7 +1703,10 @@ export class DeviceSyncService {
       }
 
       const phase = action.kind === 'delete_device' || action.kind === 'delete_pc' ? 'deleting' : 'copying'
-      this.broadcastSyncProgress(plan, phase, completed, total, action.sourcePath ?? action.relativePath)
+      this.broadcastSyncProgress(plan, phase, completed, total, action.sourcePath ?? action.relativePath, {
+        title: action.title,
+        kind: action.kind,
+      })
       this.setJournalStepRunning(journal, step, phase)
       await writeYamlFile(journalPath, journal)
 
@@ -1515,6 +1724,151 @@ export class DeviceSyncService {
     }
 
     return copiedIntoPcTarget
+  }
+
+  // Pre-copy phase: reconcile lyrics across every track present on BOTH sides
+  // (propagate an existing .lrc/DB lyrics to the side that lacks them, per
+  // direction) and, when the device toggle is on, fetch missing lyrics online for
+  // PC->device. Best-effort: a lyrics failure never fails the copy that follows.
+  private async reconcileLyricsForJournal(
+    plan: DeviceSyncPlan,
+    deviceMusicRoot: string,
+    libraryIds: number[],
+    fetchOnlineEnabled: boolean,
+    journalPath: string,
+    journal: SyncJournalYaml,
+    deviceFilesHint?: string[],
+  ): Promise<void> {
+    journal.lyrics ??= []
+    const mode = plan.mode
+    const pushDir = mode === 'pc_to_device' || mode === 'bidirectional_safe'
+
+    const deviceFiles = deviceFilesHint && deviceFilesHint.length > 0
+      ? deviceFilesHint
+      : await this.collectAudioFiles(plan.deviceId, deviceMusicRoot, false)
+    const deviceByKey = new Map<string, string>()
+    for (const file of deviceFiles) {
+      deviceByKey.set(keyForRelativePath(toPosixRelative(deviceMusicRoot, file)), file)
+    }
+
+    const pcTracks = await this.pcLibraryTracks(libraryIds.length > 0 ? new Set(libraryIds) : undefined)
+    const pcByKey = new Map(pcTracks.map(track => [track.key, track]))
+
+    // Targets: matched tracks (present on both sides) for reconciliation, plus —
+    // only when pushing with online fetch on — PC-only tracks about to be copied,
+    // so the DB is seeded before the copy writes their device sidecar.
+    const targets = new Map<string, { pcTrack: PcTrack; devicePath: string | null }>()
+    for (const [key, pcTrack] of pcByKey) {
+      const devicePath = deviceByKey.get(key)
+      if (devicePath) targets.set(key, { pcTrack, devicePath })
+    }
+    if (pushDir && fetchOnlineEnabled) {
+      for (const action of plan.actions) {
+        if (action.kind !== 'copy_pc_to_device' && action.kind !== 'replace_device') continue
+        if (targets.has(action.key)) continue
+        const pcTrack = pcByKey.get(action.key)
+        if (pcTrack) targets.set(action.key, { pcTrack, devicePath: deviceByKey.get(action.key) ?? null })
+      }
+    }
+
+    const stepId = (pcTrack: PcTrack) => `lyrics:${keyForRelativePath(pcTrack.relativePath)}`
+    const targetById = new Map<string, { pcTrack: PcTrack; devicePath: string | null }>()
+    for (const target of targets.values()) targetById.set(stepId(target.pcTrack), target)
+
+    const existingById = new Map(journal.lyrics.map(step => [step.id, step]))
+    for (const [id, target] of targetById) {
+      if (existingById.has(id)) continue
+      const step: SyncJournalStep = {
+        id,
+        kind: 'sync_lyrics',
+        relativePath: target.pcTrack.relativePath,
+        sourcePath: target.pcTrack.absolutePath,
+        destinationPath: target.devicePath,
+        status: 'pending',
+      }
+      journal.lyrics.push(step)
+    }
+    for (const step of journal.lyrics) {
+      if (step.status === 'completed') continue
+      if (!targetById.has(step.id)) this.setJournalStepCompleted(journal, step, 'skipped')
+    }
+    await writeYamlFile(journalPath, journal)
+
+    let completed = journal.lyrics.reduce((count, step) => (step.status === 'completed' ? count + 1 : count), 0)
+    const total = journal.lyrics.length
+    if (completed >= total) return
+
+    for (const step of journal.lyrics) {
+      if (step.status === 'completed') continue
+      const target = targetById.get(step.id)
+      this.broadcastSyncProgress(plan, 'fetching_lyrics', completed, total, step.relativePath)
+      this.setJournalStepRunning(journal, step, 'fetching_lyrics')
+      await writeYamlFile(journalPath, journal)
+      try {
+        if (target) await this.reconcileTrackLyrics(target.pcTrack, target.devicePath, mode, fetchOnlineEnabled)
+        this.setJournalStepCompleted(journal, step, 'applied')
+      } catch (err) {
+        // Lyrics are best-effort: record the error but mark the step done so it
+        // never fails the journal (this phase runs before the file copy).
+        this.setJournalStepCompleted(journal, step, 'skipped')
+        step.error = err instanceof Error ? err.message : String(err)
+      }
+      completed += 1
+      await writeYamlFile(journalPath, journal)
+    }
+  }
+
+  // Resolve and apply the lyrics decision for one matched/pushed track.
+  private async reconcileTrackLyrics(
+    pcTrackRef: PcTrack,
+    devicePath: string | null,
+    mode: DeviceSyncMode,
+    fetchOnlineEnabled: boolean,
+  ): Promise<void> {
+    const repos = getRepos()
+    const track = repos.tracks.getByPath(pcTrackRef.absolutePath)
+    if (!track) return
+
+    const lyricsService = getLyricsService()
+    const isMatched = devicePath != null
+    const deviceLrc = devicePath ? sidecarPathFor(devicePath) : null
+
+    const decision = decideLyricsSync({
+      mode,
+      fetchEnabled: fetchOnlineEnabled,
+      isMatched,
+      pcHasLrc: this.pcHasLyrics(pcTrackRef.absolutePath),
+      deviceHasLrc: deviceLrc ? existsSync(deviceLrc) : false,
+    })
+    if (decision.skip && !decision.fetchOnline) return
+
+    if (decision.importToPc && devicePath) {
+      await this.importDeviceLyricsToPc(pcTrackRef.absolutePath, devicePath)
+      return
+    }
+
+    if (decision.fetchOnline) {
+      try { await lyricsService.fetchOnline(track.id) } catch { /* best-effort */ }
+    }
+
+    // Propagate PC -> device for matched tracks (covers both pre-existing and
+    // freshly-fetched lyrics). PC-only copies get their device sidecar from the
+    // copy step that runs after this phase.
+    const pushDir = mode === 'pc_to_device' || mode === 'bidirectional_safe'
+    if (pushDir && isMatched && devicePath && deviceLrc && !existsSync(deviceLrc)) {
+      const content = this.lyricsContentFromSidecar(pcTrackRef.absolutePath)
+      if (content) await this.writeLyricsSidecarIfMissing(devicePath, content)
+    }
+  }
+
+  // Import a device-side .lrc into the PC library (PC sidecar). Never overwrites
+  // lyrics the PC already has (a sidecar or embedded tags).
+  private async importDeviceLyricsToPc(pcAudioPath: string, devicePath: string): Promise<void> {
+    if (this.pcHasLyrics(pcAudioPath)) return
+    const sidecar = readSidecarLrc(devicePath)
+    const content = sidecar?.syncedLyricsLrc || sidecar?.plainLyrics || null
+    if (!content) return
+    await this.writeLyricsSidecarIfMissing(pcAudioPath, content)
   }
 
   private async optimizeArtworkForJournal(
@@ -2187,8 +2541,10 @@ export class DeviceSyncService {
       rootPath: row.root_path,
       musicRoot: row.music_root,
       defaultMode: row.sync_mode,
+      syncBase: validateSyncBase(row.sync_base),
       pcTargetPath: row.pc_target_path,
       artworkMaxEdge: clampDeviceArtworkEdge(row.artwork_max_edge),
+      fetchMissingLyrics: row.fetch_lyrics === 1,
       hasRockbox: row.has_rockbox === 1,
       isAvailable: existsSync(row.root_path),
       trackCount: row.track_count,
@@ -2270,10 +2626,10 @@ export class DeviceSyncService {
     getDatabase()
       .prepare(`
         INSERT INTO devices (
-          id, name, root_path, music_root, sync_mode, pc_target_path, artwork_max_edge, has_rockbox,
+          id, name, root_path, music_root, sync_mode, sync_base, pc_target_path, artwork_max_edge, fetch_lyrics, has_rockbox,
           track_count, created_at, last_seen_at, last_scan_at, last_sync_at
         ) VALUES (
-          @id, @name, @root_path, @music_root, @sync_mode, @pc_target_path, @artwork_max_edge, @has_rockbox,
+          @id, @name, @root_path, @music_root, @sync_mode, @sync_base, @pc_target_path, @artwork_max_edge, @fetch_lyrics, @has_rockbox,
           @track_count, @created_at, @last_seen_at, @last_scan_at, @last_sync_at
         )
         ON CONFLICT(id) DO UPDATE SET
@@ -2283,6 +2639,7 @@ export class DeviceSyncService {
           sync_mode = excluded.sync_mode,
           pc_target_path = excluded.pc_target_path,
           artwork_max_edge = excluded.artwork_max_edge,
+          fetch_lyrics = excluded.fetch_lyrics,
           has_rockbox = excluded.has_rockbox,
           last_seen_at = excluded.last_seen_at
       `)
@@ -2413,10 +2770,24 @@ export class DeviceSyncService {
         if (entry.name.startsWith('.')) continue
         const full = resolve(dir, entry.name)
         if (!isInside(rootResolved, full)) continue
-        if (entry.isSymbolicLink()) continue
-        if (entry.isDirectory()) {
+
+        // FAT/exFAT volumes mounted via macOS fskit can return Dirents with an
+        // unknown type, so the whole tree would be silently skipped. Fall back
+        // to lstat (no symlink follow) to resolve the real type in that case.
+        let kind = probeKind(entry)
+        if (kind === 'unknown') {
+          try {
+            kind = probeKind(await lstat(full))
+          } catch (err) {
+            console.warn(`[devices] unreadable entry ${full}:`, (err as Error).message)
+            continue
+          }
+        }
+
+        if (kind === 'link') continue
+        if (kind === 'dir') {
           await walk(full, ignored)
-        } else if (!ignored && entry.isFile() && AUDIO_EXTENSIONS.has(extname(entry.name).toLowerCase())) {
+        } else if (kind === 'file' && !ignored && AUDIO_EXTENSIONS.has(extname(entry.name).toLowerCase())) {
           out.push(full)
         }
       }
@@ -2772,12 +3143,16 @@ export class DeviceSyncService {
     }
   }
 
-  private lyricsContentFromDbPath(audioPath: string): string | null {
-    const repos = getRepos()
-    const track = repos.tracks.getByPath(audioPath)
-    if (!track) return null
-    const row = repos.lyrics.getByTrackId(track.id)
-    return row?.synced_lyrics_lrc ?? row?.plain_lyrics ?? null
+  // True when the PC audio has lyrics on disk: a `.lrc` sidecar (the canonical
+  // store) or embedded tags. Used both as the sync input and the overwrite guard.
+  private pcHasLyrics(audioPath: string): boolean {
+    if (existsSync(sidecarPathFor(audioPath))) return true
+    return readEmbeddedLyrics(audioPath) != null
+  }
+
+  private lyricsContentFromSidecar(audioPath: string): string | null {
+    const res = readSidecarLrc(audioPath) ?? readEmbeddedLyrics(audioPath)
+    return res?.syncedLyricsLrc ?? res?.plainLyrics ?? null
   }
 
   private async writeLyricsSidecarIfMissing(audioPath: string, content: string): Promise<string> {
@@ -2806,8 +3181,8 @@ export class DeviceSyncService {
     const destinationSidecar = sidecarPathFor(destinationAudioPath)
     assertDestination(destinationSidecar)
 
-    const sourceDbContent = this.lyricsContentFromDbPath(sourceAudioPath)
-    await this.materializeSourceLyricsSidecar(sourceAudioPath, sourceDbContent)
+    const sourceContent = this.lyricsContentFromSidecar(sourceAudioPath)
+    await this.materializeSourceLyricsSidecar(sourceAudioPath, sourceContent)
 
     if (existsSync(destinationSidecar)) return
     if (existsSync(sourceSidecar)) {
@@ -2815,7 +3190,7 @@ export class DeviceSyncService {
       return
     }
 
-    const content = sourceDbContent ?? this.lyricsContentFromDbPath(destinationAudioPath)
+    const content = sourceContent ?? this.lyricsContentFromSidecar(destinationAudioPath)
     if (!content) return
     await this.writeLyricsSidecarIfMissing(destinationAudioPath, content)
   }
@@ -2991,6 +3366,7 @@ export class DeviceSyncService {
     completed: number,
     total: number,
     currentPath?: string,
+    current?: { title?: string; kind?: DeviceSyncActionKind },
   ): void {
     const force = phase === 'complete' || phase === 'writing_state' || phase === 'refreshing'
     this.throttle.emit('devices:sync:progress', force, {
@@ -3000,6 +3376,8 @@ export class DeviceSyncService {
       completed,
       total,
       currentPath,
+      currentTitle: current?.title,
+      currentKind: current?.kind,
     })
   }
 

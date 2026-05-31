@@ -146,3 +146,55 @@ export function optimizeEmbeddedArtwork(filePath: string, maxEdge: number): Embe
     file.dispose()
   }
 }
+
+export interface EmbeddedArtworkProbePicture {
+  format: SupportedArtworkFormat | null
+  width: number | null
+  height: number | null
+}
+
+export interface EmbeddedArtworkProbe {
+  title: string
+  artist: string
+  album: string
+  pictures: EmbeddedArtworkProbePicture[]
+}
+
+// Read-only counterpart to optimizeEmbeddedArtwork: opens the file once, reads
+// the basic tags and the embedded pictures' decoded dimensions, and reports them
+// WITHOUT writing anything. Used by the device "Optimizar" analysis. Does not
+// gate on file.isWritable (analysis must report oversized art on read-only files
+// too). Throws on a possibly-corrupt file so the caller can count it as an error.
+export function probeEmbeddedArtwork(filePath: string): EmbeddedArtworkProbe {
+  const file = File.createFromPath(filePath)
+  try {
+    if (file.isPossiblyCorrupt) {
+      throw new Error('Audio file is possibly corrupt')
+    }
+    const tag = file.tag
+    const title = (tag?.title ?? '').trim()
+    const artist = (tag?.firstPerformer ?? '').trim()
+    const album = (tag?.album ?? '').trim()
+    const pictures: EmbeddedArtworkProbePicture[] = []
+
+    for (const picture of tag?.pictures ?? []) {
+      const data = Buffer.from(picture.data.toByteArray())
+      const format = detectArtworkFormat(picture, data)
+      if (!format) {
+        pictures.push({ format: null, width: null, height: null })
+        continue
+      }
+      const image = nativeImage.createFromBuffer(data)
+      if (image.isEmpty()) {
+        pictures.push({ format, width: null, height: null })
+        continue
+      }
+      const size = image.getSize()
+      pictures.push({ format, width: size.width, height: size.height })
+    }
+
+    return { title, artist, album, pictures }
+  } finally {
+    file.dispose()
+  }
+}

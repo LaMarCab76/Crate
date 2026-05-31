@@ -1,26 +1,30 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Icon } from '@renderer/components/Icon'
-import { useDeviceLibrary, useDeviceStore, useSelectedDevice } from '@renderer/stores/deviceStore'
-import { useFolders, usePlaylists } from '@renderer/stores/libraryStore'
+import {
+  useDeviceArtworkAnalysis,
+  useDeviceLibrary,
+  useDeviceStore,
+  useSelectedDevice,
+} from '@renderer/stores/deviceStore'
+import { useFolders } from '@renderer/stores/libraryStore'
 import { DEVICE_ARTWORK_EDGE_MAX, DEVICE_ARTWORK_EDGE_MIN } from '@shared/constants/device-sync'
 import { fmtFileSize } from '@renderer/utils/format'
 import { basenameForPath, isValidDeviceMusicRoot, normalizeDeviceMusicRoot } from '@renderer/utils/devicePaths'
 import {
   actionKindForSelection,
-  bulkResolveSelection,
-  conflictResolutionOptions,
-  defaultDeviceSyncSelection,
+  buildSelectionFromSides,
   groupDeviceSyncActions,
-  selectionPayload,
-  selectedActionIds,
+  naturalSideForAction,
+  partitionActionsBySide,
+  seedActionSides,
   summarizeDeviceSyncSelection,
+  type DeviceSyncActionSide,
   type DeviceSyncBase,
   type DeviceSyncPlanGroupBy,
 } from '@renderer/utils/deviceSyncPlan'
 import type { DbFolder } from '@shared/types/db'
-import type { Playlist } from '@shared/types/library'
 import type {
-  DevicePlaylistSummary,
+  DeviceArtworkAnalysisItem,
   DevicePendingJournal,
   DeviceSyncAction,
   DeviceSyncActionKind,
@@ -47,7 +51,7 @@ const MODES: Array<{ mode: DeviceSyncMode; label: string; short: string; descrip
     mode: 'bidirectional_safe',
     label: 'Both',
     short: 'Both',
-    description: 'Copia cambios nuevos de ambos lados; las diferencias se resuelven con la base elegida abajo.',
+    description: 'Copia cambios nuevos de ambos lados; en la pestaña «Sincronización» elegís desde qué lado tomar las diferencias.',
   },
 ]
 
@@ -57,9 +61,49 @@ const SYNC_BASES: Array<{ value: DeviceSyncBase; label: string }> = [
   { value: 'review', label: 'Revisar c/u' },
 ]
 
+// Persisted conflict base selector. Lives in the Configuración tab (only for
+// bidirectional sync) — the chosen side wins when a track changed on both.
+function SyncBaseSelector({
+  base,
+  disabled,
+  onSetBase,
+}: {
+  base: DeviceSyncBase
+  disabled: boolean
+  onSetBase: (base: DeviceSyncBase) => void
+}) {
+  return (
+    <div className="device-plan-base-question" role="radiogroup" aria-label="Lado base para resolver las diferencias">
+      <div className="device-plan-base-question-head">
+        <Icon name="sync" size={14} />
+        <div>
+          <strong>¿Desde qué lado tomar las diferencias?</strong>
+          <em>En sync dual, si un tema cambió en ambos lados se conserva la versión del lado elegido. «Revisar c/u» decide tema por tema.</em>
+        </div>
+      </div>
+      <div className="device-plan-base-options">
+        {SYNC_BASES.map(item => (
+          <button
+            key={item.value}
+            className={base === item.value ? 'active' : ''}
+            type="button"
+            role="radio"
+            aria-checked={base === item.value}
+            disabled={disabled}
+            onClick={() => onSetBase(item.value)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 const SYNC_PHASE_LABELS: Record<string, string> = {
   discovering: 'Buscando',
   reading: 'Leyendo',
+  fetching_lyrics: 'Buscando letras',
   copying: 'Copiando',
   deleting: 'Eliminando',
   refreshing: 'Actualizando',
@@ -68,24 +112,30 @@ const SYNC_PHASE_LABELS: Record<string, string> = {
   complete: 'Completado',
 }
 
-const SYNC_ACTION_LABELS: Record<DeviceSyncActionKind, string> = {
-  copy_pc_to_device: 'PC -> Device',
-  copy_device_to_pc: 'Device -> PC',
-  replace_device: 'Usar PC',
-  replace_pc: 'Usar Device',
-  delete_device: 'Eliminar device',
-  delete_pc: 'Eliminar PC',
-  skip_conflict: 'Omitir',
+const ARTWORK_PHASE_LABELS: Record<string, string> = {
+  scanning: 'Buscando temas',
+  reading: 'Analizando artwork',
+  complete: 'Completado',
 }
 
-const SYNC_ACTION_SHORT_LABELS: Record<DeviceSyncActionKind, string> = {
-  copy_pc_to_device: 'Push',
-  copy_device_to_pc: 'Pull',
-  replace_device: 'PC',
-  replace_pc: 'Device',
-  delete_device: 'Borrar device',
-  delete_pc: 'Borrar PC',
-  skip_conflict: 'Omitir',
+// Readable "qué tema y de/hacia qué lado" line for the live sync run (Paso 3).
+const SYNC_DIRECTION_LABELS: Record<DeviceSyncActionKind, string> = {
+  copy_pc_to_device: 'Copiando al MP3',
+  replace_device: 'Actualizando en MP3',
+  copy_device_to_pc: 'Trayendo a la PC',
+  replace_pc: 'Actualizando en PC',
+  delete_device: 'Eliminando del MP3',
+  delete_pc: 'Eliminando de la PC',
+  skip_conflict: 'Omitiendo',
+}
+
+function syncRunLine(
+  kind: DeviceSyncActionKind | undefined,
+  title: string | undefined,
+  path: string | null,
+): string | null {
+  if (kind && title) return `${SYNC_DIRECTION_LABELS[kind]} · ${title}`
+  return path
 }
 
 function formatDate(value: string | null): string {
@@ -118,19 +168,24 @@ function SyncCurrentRunPanel({
   total,
   percent,
   currentPath,
+  currentTitle,
+  currentKind,
 }: {
   phase: string
   completed: number
   total: number
   percent: number
   currentPath: string | null
+  currentTitle?: string
+  currentKind?: DeviceSyncActionKind
 }) {
+  const line = syncRunLine(currentKind, currentTitle, currentPath)
   return (
     <section className="device-side-card device-sync-run-card">
       <div className="device-card-head">
         <div>
-          <h2>Sync en curso</h2>
-          <span>Estado actual de la operación activa.</span>
+          <h2>Sincronizando…</h2>
+          <span>No desconectes el dispositivo hasta que termine.</span>
         </div>
         <strong>{progressText(completed, total)}</strong>
       </div>
@@ -139,260 +194,382 @@ function SyncCurrentRunPanel({
         <div className="device-progress-track" aria-label="Sync progress">
           <b style={{ width: `${percent}%` }} />
         </div>
-        {currentPath && <em title={currentPath}>{currentPath}</em>}
+        {line && <em title={currentPath ?? undefined}>{line}</em>}
       </div>
     </section>
   )
 }
 
-function SyncPlanPanel({
+// ── Sync wizard (Sincronización tab) ────────────────────────────────────────
+// Three steps: 1) Diferencias (two columns PC|MP3, choose the winning side per
+// global/artist/album/track), 2) Resultado (how each library ends up), 3)
+// Sincronizar (confirm + live progress). The parent owns the per-action side
+// map; these components are presentational.
+
+type WizardStep = 'diff' | 'result' | 'apply'
+
+const WIZARD_STEPS: Array<{ key: WizardStep; label: string }> = [
+  { key: 'diff', label: 'Diferencias' },
+  { key: 'result', label: 'Resultado' },
+  { key: 'apply', label: 'Sincronizar' },
+]
+
+function SyncWizardStepper({
+  current,
+  disabled,
+  onStep,
+}: {
+  current: WizardStep
+  disabled: boolean
+  onStep: (step: WizardStep) => void
+}) {
+  return (
+    <div className="device-sync-steps" role="tablist" aria-label="Pasos de la sincronización">
+      {WIZARD_STEPS.map((step, index) => (
+        <button
+          key={step.key}
+          type="button"
+          role="tab"
+          aria-selected={current === step.key}
+          className={`device-sync-step ${current === step.key ? 'active' : ''}`}
+          disabled={disabled}
+          onClick={() => onStep(step.key)}
+        >
+          <b>{index + 1}</b>
+          <span>{step.label}</span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+const SIDE_OPTIONS: Array<{ side: DeviceSyncActionSide; label: string; title: string }> = [
+  { side: 'pc', label: 'PC', title: 'Usar la versión de la PC' },
+  { side: 'device', label: 'MP3', title: 'Usar la versión del MP3' },
+  { side: 'omit', label: '–', title: 'Omitir este tema' },
+]
+
+function SideToggle({
+  value,
+  disabled,
+  onPick,
+}: {
+  value: DeviceSyncActionSide
+  disabled: boolean
+  onPick: (side: DeviceSyncActionSide) => void
+}) {
+  return (
+    <span className="device-side-toggle" role="radiogroup" aria-label="Lado ganador">
+      {SIDE_OPTIONS.map(option => (
+        <button
+          key={option.side}
+          type="button"
+          role="radio"
+          aria-checked={value === option.side}
+          className={value === option.side ? 'active' : ''}
+          title={option.title}
+          disabled={disabled}
+          onClick={() => onPick(option.side)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </span>
+  )
+}
+
+// One side of the diff view. Lists the actions that touch this side, grouped by
+// artist/album, each row choosing which copy wins.
+function SyncDiffColumn({
+  side,
+  title,
+  actions,
+  actionSides,
+  groupBy,
+  loading,
+  onSetSide,
+}: {
+  side: 'pc' | 'device'
+  title: string
+  actions: DeviceSyncAction[]
+  actionSides: Record<string, DeviceSyncActionSide>
+  groupBy: DeviceSyncPlanGroupBy
+  loading: boolean
+  onSetSide: (actionIds: string[], side: DeviceSyncActionSide) => void
+}) {
+  const groups = useMemo(() => groupDeviceSyncActions(actions, groupBy), [actions, groupBy])
+  const allIds = useMemo(() => actions.map(action => action.id), [actions])
+  return (
+    <section className={`device-sync-side ${side}`}>
+      <header className="device-sync-side-head">
+        <div>
+          <strong>{title}</strong>
+          <em>{actions.length} {actions.length === 1 ? 'diferencia' : 'diferencias'}</em>
+        </div>
+        <button
+          className="btn ghost"
+          type="button"
+          disabled={loading || actions.length === 0}
+          onClick={() => onSetSide(allIds, side)}
+        >
+          {side === 'pc' ? 'Usar PC' : 'Usar MP3'}
+        </button>
+      </header>
+      <div className="device-sync-side-groups">
+        {groups.length === 0 ? (
+          <div className="device-empty compact">Sin diferencias de este lado.</div>
+        ) : groups.map(group => (
+          <section className="device-side-group" key={group.id}>
+            <div className="device-side-group-head">
+              <span>
+                <strong>{group.label}</strong>
+                <em>{group.actions.length} · {fmtFileSize(group.bytes)}</em>
+              </span>
+              <span className="device-side-group-actions">
+                <button type="button" disabled={loading} onClick={() => onSetSide(group.actions.map(a => a.id), 'pc')}>PC</button>
+                <button type="button" disabled={loading} onClick={() => onSetSide(group.actions.map(a => a.id), 'device')}>MP3</button>
+              </span>
+            </div>
+            <div className="device-side-action-list">
+              {group.actions.map(action => {
+                const onOtherSide = side === 'pc' ? action.devicePath != null : action.pcPath != null
+                const value = actionSides[action.id] ?? naturalSideForAction(action)
+                return (
+                  <div className="device-side-action" key={action.id}>
+                    <span className="device-side-action-main">
+                      <strong>{action.title}</strong>
+                      <em title={action.relativePath}>
+                        {action.artist || 'Unknown Artist'} · {action.album || 'Unknown Album'}
+                      </em>
+                    </span>
+                    <span className={`device-side-badge ${onOtherSide ? 'is-diff' : 'is-only'}`}>
+                      {onOtherSide ? 'Difiere' : side === 'pc' ? 'Falta en MP3' : 'Falta en PC'}
+                    </span>
+                    <SideToggle value={value} disabled={loading} onPick={next => onSetSide([action.id], next)} />
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function SyncDiffStep({
+  plan,
+  actionSides,
+  groupBy,
+  loading,
+  deviceName,
+  onSetSide,
+  onSetGroupBy,
+  onGlobalBase,
+}: {
+  plan: DeviceSyncPlan
+  actionSides: Record<string, DeviceSyncActionSide>
+  groupBy: DeviceSyncPlanGroupBy
+  loading: boolean
+  deviceName: string
+  onSetSide: (actionIds: string[], side: DeviceSyncActionSide) => void
+  onSetGroupBy: (groupBy: DeviceSyncPlanGroupBy) => void
+  onGlobalBase: (base: DeviceSyncBase) => void
+}) {
+  const { pc, device } = useMemo(() => partitionActionsBySide(plan.actions), [plan.actions])
+  return (
+    <div className="device-sync-diff">
+      <div className="device-sync-diff-toolbar">
+        <div className="device-side-global" role="group" aria-label="Elegir lado para todo">
+          <span>Para todo:</span>
+          <button className="btn ghost" type="button" disabled={loading} onClick={() => onGlobalBase('pc')}>Usar PC</button>
+          <button className="btn ghost" type="button" disabled={loading} onClick={() => onGlobalBase('device')}>Usar MP3</button>
+          <button className="btn ghost" type="button" disabled={loading} onClick={() => onGlobalBase('review')}>Revisar</button>
+        </div>
+        <div className="device-subtabs" role="tablist" aria-label="Agrupar por">
+          {(['artist', 'album'] as DeviceSyncPlanGroupBy[]).map(item => (
+            <button
+              key={item}
+              type="button"
+              className={`device-section-tab ${groupBy === item ? 'active' : ''}`}
+              onClick={() => onSetGroupBy(item)}
+            >
+              {item === 'artist' ? 'Artista' : 'Álbum'}
+            </button>
+          ))}
+        </div>
+      </div>
+      {plan.actions.length === 0 ? (
+        <div className="device-empty compact">Las bibliotecas ya están sincronizadas.</div>
+      ) : (
+        <div className="device-sync-columns">
+          <SyncDiffColumn side="pc" title="PC" actions={pc} actionSides={actionSides} groupBy={groupBy} loading={loading} onSetSide={onSetSide} />
+          <SyncDiffColumn side="device" title={deviceName || 'MP3'} actions={device} actionSides={actionSides} groupBy={groupBy} loading={loading} onSetSide={onSetSide} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+const RESULT_BADGES: Record<DeviceSyncActionKind, { label: string; cls: string } | null> = {
+  copy_pc_to_device: { label: '+ nuevo', cls: 'is-new' },
+  copy_device_to_pc: { label: '+ nuevo', cls: 'is-new' },
+  replace_device: { label: '↻ actualiza', cls: 'is-diff' },
+  replace_pc: { label: '↻ actualiza', cls: 'is-diff' },
+  delete_device: { label: '− quita', cls: 'is-remove' },
+  delete_pc: { label: '− quita', cls: 'is-remove' },
+  skip_conflict: null,
+}
+
+// One side of the result view: how this library ends up, with a badge marking
+// what gets copied in or removed.
+function SyncResultColumn({
+  title,
+  before,
+  after,
+  actions,
+  selection,
+  groupBy,
+}: {
+  title: string
+  before: number
+  after: number
+  actions: DeviceSyncAction[]
+  selection: DeviceSyncApplySelection | null
+  groupBy: DeviceSyncPlanGroupBy
+}) {
+  const groups = useMemo(() => groupDeviceSyncActions(actions, groupBy), [actions, groupBy])
+  const net = after - before
+  return (
+    <section className="device-sync-side result">
+      <header className="device-sync-side-head">
+        <div>
+          <strong>{title}</strong>
+          <em>{before} → {after} temas</em>
+        </div>
+        <span className={`device-side-net ${net >= 0 ? 'positive' : 'negative'}`}>{net >= 0 ? '+' : ''}{net}</span>
+      </header>
+      <div className="device-sync-side-groups">
+        {actions.length === 0 ? (
+          <div className="device-empty compact">Esta biblioteca no cambia.</div>
+        ) : groups.map(group => (
+          <section className="device-side-group" key={group.id}>
+            <div className="device-side-group-head">
+              <span><strong>{group.label}</strong><em>{group.actions.length}</em></span>
+            </div>
+            <div className="device-side-action-list">
+              {group.actions.map(action => {
+                const kind = actionKindForSelection(action, selection)
+                const badge = kind ? RESULT_BADGES[kind] : null
+                return (
+                  <div className="device-side-action" key={action.id}>
+                    <span className="device-side-action-main">
+                      <strong>{action.title}</strong>
+                      <em title={action.relativePath}>
+                        {action.artist || 'Unknown Artist'} · {action.album || 'Unknown Album'}
+                      </em>
+                    </span>
+                    {badge && <span className={`device-side-badge ${badge.cls}`}>{badge.label}</span>}
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function SyncResultStep({
+  plan,
+  selection,
+  groupBy,
+  deviceName,
+}: {
+  plan: DeviceSyncPlan
+  selection: DeviceSyncApplySelection | null
+  groupBy: DeviceSyncPlanGroupBy
+  deviceName: string
+}) {
+  const summary = useMemo(() => summarizeDeviceSyncSelection(plan, selection), [plan, selection])
+  const { pcActions, deviceActions } = useMemo(() => {
+    const pcActions: DeviceSyncAction[] = []
+    const deviceActions: DeviceSyncAction[] = []
+    for (const action of plan.actions) {
+      const kind = actionKindForSelection(action, selection)
+      if (kind === 'copy_device_to_pc' || kind === 'replace_pc' || kind === 'delete_pc') pcActions.push(action)
+      if (kind === 'copy_pc_to_device' || kind === 'replace_device' || kind === 'delete_device') deviceActions.push(action)
+    }
+    return { pcActions, deviceActions }
+  }, [plan.actions, selection])
+  return (
+    <div className="device-sync-result">
+      <div className="device-sync-result-summary">
+        Se copiarán <strong>{fmtFileSize(summary.bytesToCopy)}</strong> en total.
+      </div>
+      <div className="device-sync-columns">
+        <SyncResultColumn title="Biblioteca PC" before={summary.pcBefore} after={summary.pcAfter} actions={pcActions} selection={selection} groupBy={groupBy} />
+        <SyncResultColumn title={deviceName || 'MP3'} before={summary.deviceBefore} after={summary.deviceAfter} actions={deviceActions} selection={selection} groupBy={groupBy} />
+      </div>
+    </div>
+  )
+}
+
+// Step 3 before confirming: the final summary + the big apply button. The live
+// progress bar (SyncCurrentRunPanel) takes over while the sync runs.
+function SyncConfirmStep({
   plan,
   selection,
   loading,
-  result,
   applyBlockedReason,
-  canRecalculate,
-  base,
-  devicePlaylists,
-  pcPlaylists,
-  onRecalculate,
-  onClear,
+  result,
   onApply,
-  onToggleAction,
-  onToggleGroup,
-  onSelectAll,
-  onClearSelection,
-  onResolveConflict,
-  onSetBase,
 }: {
-  plan: DeviceSyncPlan | null
+  plan: DeviceSyncPlan
   selection: DeviceSyncApplySelection | null
   loading: boolean
-  result: DeviceSyncApplyResult | null
   applyBlockedReason: string | null
-  canRecalculate: boolean
-  base: DeviceSyncBase
-  devicePlaylists: DevicePlaylistSummary[]
-  pcPlaylists: Playlist[]
-  onRecalculate: () => void
-  onClear: () => void
+  result: DeviceSyncApplyResult | null
   onApply: () => void
-  onToggleAction: (actionId: string) => void
-  onToggleGroup: (actions: DeviceSyncAction[], selected: boolean) => void
-  onSelectAll: () => void
-  onClearSelection: () => void
-  onResolveConflict: (actionId: string, kind: DeviceSyncActionKind) => void
-  onSetBase: (base: DeviceSyncBase) => void
 }) {
-  const [groupBy, setGroupBy] = useState<DeviceSyncPlanGroupBy>('artist')
-  const selectedIds = useMemo(() => selectedActionIds(selection), [selection])
-  const selectedSummary = useMemo(
-    () => plan ? summarizeDeviceSyncSelection(plan, selection) : null,
-    [plan, selection],
-  )
-  const addToDevice = selectedSummary?.copyPcToDevice ?? 0
-  const pullToPc = selectedSummary?.copyDeviceToPc ?? 0
-  const update = selectedSummary ? selectedSummary.replaceDevice + selectedSummary.replacePc : 0
-  const remove = selectedSummary ? selectedSummary.deleteDevice + selectedSummary.deletePc : 0
-  const conflicts = selectedSummary?.conflicts ?? 0
-  const executable = selectedSummary
-    ? addToDevice + pullToPc + update + remove
-    : 0
-  const netDevice = selectedSummary ? selectedSummary.deviceAfter - selectedSummary.deviceBefore : 0
-  const visibleActions = useMemo(() => plan?.actions ?? [], [plan])
-  const groups = useMemo(
-    () => groupDeviceSyncActions(visibleActions, groupBy, pcPlaylists, devicePlaylists),
-    [devicePlaylists, groupBy, pcPlaylists, visibleActions],
-  )
-  const isBidirectional = plan?.mode === 'bidirectional_safe'
-
+  const summary = useMemo(() => summarizeDeviceSyncSelection(plan, selection), [plan, selection])
+  const toDevice = summary.copyPcToDevice + summary.replaceDevice
+  const toPc = summary.copyDeviceToPc + summary.replacePc
+  const removed = summary.deleteDevice + summary.deletePc
+  const executable = toDevice + toPc + removed
   return (
-    <section className="device-side-card device-plan-card">
+    <section className="device-side-card device-sync-confirm">
       <div className="device-card-head">
         <div>
-          <h2>Cambios a sincronizar</h2>
-          <span>{plan ? 'Revisá las diferencias antes de aplicar el sync.' : 'Calculando las diferencias del dispositivo…'}</span>
+          <h2>Confirmar sincronización</h2>
+          <span>Revisá el resumen y aplicá los cambios.</span>
         </div>
-        <button className="btn" type="button" disabled={loading || !canRecalculate} onClick={onRecalculate}>
-          <Icon name="rotate" size={12} /> Recalcular
+      </div>
+      <div className="device-confirm-stats">
+        <div><b className="mono">{toDevice}</b><span>Al MP3</span></div>
+        <div><b className="mono">{toPc}</b><span>A la PC</span></div>
+        <div><b className="mono">{removed}</b><span>Se eliminan</span></div>
+        <div><b className="mono">{fmtFileSize(summary.bytesToCopy)}</b><span>A copiar</span></div>
+      </div>
+      {applyBlockedReason && <div className="device-warning inline">{applyBlockedReason}</div>}
+      {result && (
+        <div className={result.failed.length > 0 ? 'device-error inline' : 'sync-result-ok inline'}>
+          {result.failed.length > 0
+            ? `${result.failed.length} operaciones fallaron. ${result.failed[0]?.error ?? ''}`
+            : `Se aplicaron ${result.applied} operaciones. Se optimizaron ${result.artwork.optimized} carátulas y se ahorraron ${fmtFileSize(result.artwork.bytesSaved)}.`}
+        </div>
+      )}
+      <div className="device-plan-actions">
+        <button
+          className="btn primary"
+          type="button"
+          disabled={loading || executable === 0 || result != null || applyBlockedReason != null}
+          onClick={onApply}
+        >
+          <Icon name="sync" size={13} /> Sincronizar ahora
         </button>
       </div>
-
-      {plan ? (
-        <>
-          <div className="device-plan-rows">
-            <div className="device-plan-row add">
-              <span><i><Icon name="plus" size={11} /></i>Add to device</span>
-              <strong>{addToDevice}</strong>
-            </div>
-            <div className="device-plan-row pull">
-              <span><i><Icon name="download" size={11} /></i>Pull to PC</span>
-              <strong>{pullToPc}</strong>
-            </div>
-            <div className="device-plan-row update">
-              <span><i><Icon name="sync" size={11} /></i>Update tags & artwork</span>
-              <strong>{update}</strong>
-            </div>
-            <div className="device-plan-row remove">
-              <span><i><Icon name="trash" size={11} /></i>Remove</span>
-              <strong>{remove}</strong>
-            </div>
-            {conflicts > 0 && (
-              <div className="device-plan-row conflict">
-                <span><i><Icon name="info" size={11} /></i>Conflicts</span>
-                <strong>{conflicts}</strong>
-              </div>
-            )}
-          </div>
-          <div className="device-plan-transfer">
-            <span>Transfer · <strong>{fmtFileSize(selectedSummary?.bytesToCopy ?? 0)}</strong></span>
-            <span className={netDevice >= 0 ? 'positive' : 'negative'}>
-              {netDevice >= 0 ? '+' : ''}{netDevice} net
-            </span>
-          </div>
-
-          {isBidirectional && (
-            <div className="device-plan-base" role="radiogroup" aria-label="Base para las diferencias">
-              <span>Base de las diferencias</span>
-              <div className="device-plan-base-options">
-                {SYNC_BASES.map(item => (
-                  <button
-                    key={item.value}
-                    className={base === item.value ? 'active' : ''}
-                    type="button"
-                    role="radio"
-                    aria-checked={base === item.value}
-                    disabled={loading}
-                    onClick={() => onSetBase(item.value)}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="device-plan-toolbar">
-            <div className="device-plan-tabs" role="tablist" aria-label="Agrupar cambios de sincronización">
-              {(['artist', 'album', 'playlist', 'track'] as DeviceSyncPlanGroupBy[]).map(item => (
-                <button
-                  key={item}
-                  className={groupBy === item ? 'active' : ''}
-                  type="button"
-                  onClick={() => setGroupBy(item)}
-                >
-                  {item === 'artist' ? 'Artista' : item === 'album' ? 'Álbum' : item === 'playlist' ? 'Playlist' : 'Tema'}
-                </button>
-              ))}
-            </div>
-            <div className="device-plan-bulk">
-              <button className="btn ghost" type="button" disabled={loading} onClick={onSelectAll}>
-                Todo
-              </button>
-              <button className="btn ghost" type="button" disabled={loading} onClick={onClearSelection}>
-                Nada
-              </button>
-            </div>
-          </div>
-          <div className="device-plan-groups">
-            {groups.length === 0 ? (
-              <div className="device-empty compact">No hay cambios para aplicar.</div>
-            ) : groups.slice(0, 12).map(group => {
-              const selectedInGroup = group.actions.filter(action => {
-                const kind = actionKindForSelection(action, selection)
-                return kind != null && kind !== 'skip_conflict'
-              }).length
-              const allSelected = selectedInGroup === group.actions.length && group.actions.length > 0
-              return (
-                <section className="device-plan-group" key={group.id}>
-                  <button
-                    className={`device-plan-group-head ${allSelected ? 'selected' : ''}`}
-                    type="button"
-                    disabled={loading}
-                    onClick={() => onToggleGroup(group.actions, !allSelected)}
-                  >
-                    <span>
-                      <strong>{group.label}</strong>
-                      <em>{selectedInGroup}/{group.actions.length} cambios · {fmtFileSize(group.bytes)}</em>
-                    </span>
-                    <Icon name={allSelected ? 'check' : 'plus'} size={13} />
-                  </button>
-                  <div className="device-plan-action-list">
-                    {group.actions.slice(0, 8).map(action => {
-                      const selectedKind = actionKindForSelection(action, selection)
-                      const isConflict = action.kind === 'skip_conflict'
-                      return (
-                        <div className={`device-plan-action ${isConflict ? 'conflict' : ''}`} key={action.id}>
-                          <button
-                            className={`device-plan-action-toggle ${selectedIds.has(action.id) ? 'active' : ''}`}
-                            type="button"
-                            disabled={loading || isConflict}
-                            onClick={() => onToggleAction(action.id)}
-                            aria-label={selectedIds.has(action.id) ? 'Quitar cambio' : 'Agregar cambio'}
-                          >
-                            <Icon name={selectedIds.has(action.id) ? 'check' : 'plus'} size={12} />
-                          </button>
-                          <span className="device-plan-action-main">
-                            <strong>{action.title}</strong>
-                            <em title={action.relativePath}>{action.artist || 'Unknown Artist'} · {action.album || 'Unknown Album'} · {action.reason}</em>
-                          </span>
-                          {isConflict ? (
-                            <span className="device-conflict-choices">
-                              {conflictResolutionOptions(action).map(kind => (
-                                <button
-                                  key={kind}
-                                  className={selectedKind === kind ? 'active' : ''}
-                                  type="button"
-                                  disabled={loading}
-                                  title={SYNC_ACTION_LABELS[kind]}
-                                  onClick={() => onResolveConflict(action.id, kind)}
-                                >
-                                  {SYNC_ACTION_SHORT_LABELS[kind]}
-                                </button>
-                              ))}
-                            </span>
-                          ) : (
-                            <strong className="device-plan-action-kind">{SYNC_ACTION_LABELS[action.kind]}</strong>
-                          )}
-                        </div>
-                      )
-                    })}
-                    {group.actions.length > 8 && (
-                      <div className="device-empty compact">{group.actions.length - 8} cambios más en este grupo</div>
-                    )}
-                  </div>
-                </section>
-              )
-            })}
-            {groups.length > 12 && (
-              <div className="device-empty compact">{groups.length - 12} grupos más ocultos</div>
-            )}
-          </div>
-          {applyBlockedReason && <div className="device-warning inline">{applyBlockedReason}</div>}
-          {result && (
-            <div className={result.failed.length > 0 ? 'device-error inline' : 'sync-result-ok inline'}>
-              {result.failed.length > 0
-                ? `${result.failed.length} operations failed. ${result.failed[0]?.error ?? ''}`
-                : `Applied ${result.applied} operations. Optimized ${result.artwork.optimized} artwork files and saved ${fmtFileSize(result.artwork.bytesSaved)}.`}
-            </div>
-          )}
-          <div className="device-plan-actions">
-            <button className="btn ghost" type="button" disabled={loading} onClick={onClear}>
-              Clear
-            </button>
-            <button
-              className="btn primary"
-              type="button"
-              disabled={loading || executable === 0 || result != null || applyBlockedReason != null}
-              onClick={onApply}
-            >
-              <Icon name="sync" size={13} /> Sync now
-            </button>
-          </div>
-        </>
-      ) : (
-        <div className="device-empty compact">{loading ? 'Calculando cambios…' : 'No hay cambios calculados todavía.'}</div>
-      )}
     </section>
   )
 }
@@ -431,7 +608,160 @@ function PendingJournalList({
   )
 }
 
-export function DeviceSyncView({ deviceId }: { deviceId: string }) {
+function ArtworkOversizedList({
+  items,
+  maxEdge,
+}: {
+  items: DeviceArtworkAnalysisItem[]
+  maxEdge: number
+}) {
+  if (items.length === 0) {
+    return (
+      <div className="device-empty">
+        Ningún tema supera el límite del dispositivo ({maxEdge}px).
+      </div>
+    )
+  }
+  return (
+    <div className="device-artwork-table">
+      <div className="device-artwork-row head">
+        <span>Tema</span>
+        <span>Artista</span>
+        <span>Álbum</span>
+        <span>Formato</span>
+        <span className="device-artwork-res">Resolución</span>
+      </div>
+      {items.slice(0, 500).map(item => (
+        <div className="device-artwork-row" key={item.key}>
+          <span className="device-track-title" title={item.relativePath}>{item.title}</span>
+          <span>{item.artist || 'Unknown Artist'}</span>
+          <span>{item.album || 'Unknown Album'}</span>
+          <span className="device-artwork-format">{item.format ? item.format.toUpperCase() : '—'}</span>
+          <span className="device-artwork-res mono">
+            {item.width != null && item.height != null ? `${item.width}×${item.height}` : '—'}
+            <em> &gt; {maxEdge}px</em>
+          </span>
+        </div>
+      ))}
+      {items.length > 500 && (
+        <div className="device-empty compact">{items.length - 500} temas más ocultos</div>
+      )}
+    </div>
+  )
+}
+
+function ArtworkOptimizePanel({
+  deviceId,
+  artworkMaxEdge,
+}: {
+  deviceId: string
+  artworkMaxEdge: number
+}) {
+  const analyzeArtwork = useDeviceStore(s => s.analyzeArtwork)
+  const progress = useDeviceStore(s => s.artworkAnalyzeProgress)
+  const analysis = useDeviceArtworkAnalysis(deviceId)
+  const [analyzing, setAnalyzing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const runAnalysis = useCallback(async () => {
+    setAnalyzing(true)
+    setError(null)
+    try {
+      await analyzeArtwork(deviceId)
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setAnalyzing(false)
+    }
+  }, [analyzeArtwork, deviceId])
+
+  const activeProgress = analyzing ? progress : null
+  const pct = activeProgress && activeProgress.total > 0
+    ? Math.min(100, Math.round((activeProgress.scanned / activeProgress.total) * 100))
+    : 0
+  const summary = analysis?.summary
+
+  return (
+    <section className="device-sync-stage device-sync-activity-tab device-artwork-optimize">
+      <div className="device-card-head compact">
+        <div>
+          <h2>Optimizar artwork</h2>
+          <span>
+            Analiza los temas que ya están en el dispositivo y detecta los que tienen artwork
+            mayor al límite de <strong>{artworkMaxEdge}px</strong>. Es solo lectura: no modifica archivos.
+          </span>
+        </div>
+        <button className="btn primary" type="button" onClick={runAnalysis} disabled={analyzing}>
+          <Icon name="search" size={13} /> {analyzing ? 'Analizando…' : 'Analizar artwork'}
+        </button>
+      </div>
+
+      {error && <div className="device-error inline">{error}</div>}
+
+      {analyzing && (
+        <div className="device-sync-inline-progress">
+          <span>
+            {ARTWORK_PHASE_LABELS[activeProgress?.phase ?? 'scanning'] ?? 'Analizando artwork'}
+            {activeProgress ? ` · ${activeProgress.scanned}/${activeProgress.total}` : ''}
+          </span>
+          <div className="device-progress-track" aria-hidden="true">
+            <b style={{ width: `${pct}%` }} />
+          </div>
+        </div>
+      )}
+
+      {!analyzing && analysis && summary && (
+        <>
+          <div className="device-artwork-summary">
+            <div className="device-artwork-stat oversized">
+              <b className="mono">{summary.oversized}</b>
+              <span>Superan el límite</span>
+            </div>
+            <div className="device-artwork-stat">
+              <b className="mono">{summary.withinLimit}</b>
+              <span>Dentro del límite</span>
+            </div>
+            <div className="device-artwork-stat">
+              <b className="mono">{summary.noArtwork}</b>
+              <span>Sin artwork</span>
+            </div>
+            <div className="device-artwork-stat">
+              <b className="mono">{summary.scanned}</b>
+              <span>Analizados</span>
+            </div>
+          </div>
+          {(summary.unsupported > 0 || summary.errors > 0) && (
+            <div className="device-library-note">
+              {summary.unsupported > 0 && <>{summary.unsupported} con formato de imagen no soportado. </>}
+              {summary.errors > 0 && <>{summary.errors} no se pudieron leer.</>}
+            </div>
+          )}
+          <ArtworkOversizedList items={analysis.items} maxEdge={analysis.artworkMaxEdge} />
+        </>
+      )}
+
+      {!analyzing && !analysis && (
+        <div className="device-empty">
+          Tocá «Analizar artwork» para revisar los temas del dispositivo.
+        </div>
+      )}
+    </section>
+  )
+}
+
+// Sub-tabs inside the Sync section. Rendered as the navbar's second row (in
+// App.tsx) so the active sub-view is driven from the top chrome.
+export type DeviceSyncTab = 'sync' | 'optimize' | 'config'
+
+export function DeviceSyncView({
+  deviceId,
+  syncTab,
+  onSyncTabChange,
+}: {
+  deviceId: string
+  syncTab: DeviceSyncTab
+  onSyncTabChange: (tab: DeviceSyncTab) => void
+}) {
   const devices = useDeviceStore(s => s.devices)
   const pendingJournals = useDeviceStore(s => s.pendingJournals)
   const plan = useDeviceStore(s => s.plan)
@@ -452,19 +782,25 @@ export function DeviceSyncView({ deviceId }: { deviceId: string }) {
   const selectedDevice = useSelectedDevice()
   const selectDevice = useDeviceStore(s => s.selectDevice)
   const folders = useFolders()
-  const pcPlaylists = usePlaylists()
 
   const [mode, setMode] = useState<DeviceSyncMode>('bidirectional_safe')
   const [musicRoot, setMusicRoot] = useState('')
   const [artworkMaxEdge, setArtworkMaxEdge] = useState('')
+  const [fetchMissingLyrics, setFetchMissingLyrics] = useState(true)
   const [sourceLibraryIds, setSourceLibraryIds] = useState<number[]>([])
   const [destinationFolderId, setDestinationFolderId] = useState<number | null>(null)
   const [libraryPickerOpen, setLibraryPickerOpen] = useState(false)
   const [pathError, setPathError] = useState<string | null>(null)
   const [applyResult, setApplyResult] = useState<DeviceSyncApplyResult | null>(null)
-  const [selectedPlanActionIds, setSelectedPlanActionIds] = useState<Set<string>>(new Set())
-  const [conflictResolutions, setConflictResolutions] = useState<Record<string, DeviceSyncActionKind>>({})
-  const [syncBase, setSyncBase] = useState<DeviceSyncBase>('review')
+  // Per-action winning side the wizard mutates (global / artist / album / track).
+  // The apply payload is derived from this via buildSelectionFromSides.
+  const [actionSides, setActionSides] = useState<Record<string, DeviceSyncActionSide>>({})
+  const [wizardStep, setWizardStep] = useState<WizardStep>('diff')
+  const [planGroupBy, setPlanGroupBy] = useState<DeviceSyncPlanGroupBy>('artist')
+  const [applying, setApplying] = useState(false)
+  // Conflict base is a persisted per-device setting (Configuración tab), not
+  // ephemeral UI state — it's remembered across sessions.
+  const syncBase: DeviceSyncBase = selectedDevice?.syncBase ?? 'review'
 
   useEffect(() => {
     void load()
@@ -489,6 +825,7 @@ export function DeviceSyncView({ deviceId }: { deviceId: string }) {
     setMode(selectedDevice.defaultMode)
     setMusicRoot(selectedDevice.musicRoot)
     setArtworkMaxEdge(String(selectedDevice.artworkMaxEdge))
+    setFetchMissingLyrics(selectedDevice.fetchMissingLyrics)
     const folderIds = new Set(folders.map(folder => folder.id))
     const nextSourceIds = selectedDevice.sourceLibraryIds.length > 0
       ? selectedDevice.sourceLibraryIds.filter(id => folderIds.has(id))
@@ -506,6 +843,7 @@ export function DeviceSyncView({ deviceId }: { deviceId: string }) {
     selectedDevice?.musicRoot,
     selectedDevice?.pcTargetPath,
     selectedDevice?.artworkMaxEdge,
+    selectedDevice?.fetchMissingLyrics,
     selectedDevice?.sourceLibraryIds,
     folders,
   ])
@@ -523,8 +861,8 @@ export function DeviceSyncView({ deviceId }: { deviceId: string }) {
   }
   const visiblePlan = plan?.deviceId === selectedDevice?.id ? plan : null
   const currentPlanSelection = useMemo(
-    () => visiblePlan ? selectionPayload(selectedPlanActionIds, conflictResolutions) : null,
-    [conflictResolutions, selectedPlanActionIds, visiblePlan],
+    () => visiblePlan ? buildSelectionFromSides(visiblePlan, actionSides) : null,
+    [actionSides, visiblePlan],
   )
   const selectedDeviceId = selectedDevice?.id
   const activeProgress = useMemo(() => {
@@ -575,15 +913,14 @@ export function DeviceSyncView({ deviceId }: { deviceId: string }) {
 
   useEffect(() => {
     if (!visiblePlan) {
-      setSelectedPlanActionIds(new Set())
-      setConflictResolutions({})
-      setSyncBase('review')
+      setActionSides({})
       return
     }
-    const defaults = defaultDeviceSyncSelection(visiblePlan)
-    setSelectedPlanActionIds(new Set(defaults.actionIds ?? []))
-    setConflictResolutions({})
-    setSyncBase('review')
+    // Seed the per-action side choices from the persisted base so a new plan
+    // already reflects the device's remembered preference. Reset to step 1.
+    setActionSides(seedActionSides(visiblePlan, syncBase))
+    setWizardStep('diff')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visiblePlan?.id])
 
   const existingFolderIds = new Set(folders.map(folder => folder.id))
@@ -597,6 +934,7 @@ export function DeviceSyncView({ deviceId }: { deviceId: string }) {
     normalizedMusicRoot !== selectedDevice.musicRoot ||
     planPcTargetPath !== selectedDevice.pcTargetPath ||
     artworkMaxEdgeValue !== selectedDevice.artworkMaxEdge ||
+    fetchMissingLyrics !== selectedDevice.fetchMissingLyrics ||
     !sameNumberSet(sourceLibraryIds, originalLibraryIds)
   )
 
@@ -610,7 +948,8 @@ export function DeviceSyncView({ deviceId }: { deviceId: string }) {
   const destinationBlocked = needsDestination && !destinationFolder
     ? 'Elegí una biblioteca destino para los archivos entrantes.'
     : null
-  const applyBlockedReason = portableBlocked ?? destinationBlocked
+  const indexBlocked = visiblePlan?.deviceIndexWarning ?? null
+  const applyBlockedReason = portableBlocked ?? destinationBlocked ?? indexBlocked
 
   const configValid = artworkMaxEdgeValid && musicRootValid && sourceLibrariesValid
 
@@ -641,9 +980,10 @@ export function DeviceSyncView({ deviceId }: { deviceId: string }) {
       musicRoot: normalizedMusicRoot,
       pcTargetPath: planPcTargetPath || selectedDevice.pcTargetPath,
       artworkMaxEdge: artworkMaxEdgeValue,
+      fetchMissingLyrics,
       sourceLibraryIds: selectedSourceFolders.map(folder => folder.id),
     })
-  }, [selectedDevice, configValid, updateSettings, mode, normalizedMusicRoot, planPcTargetPath, artworkMaxEdgeValue, selectedSourceFolders])
+  }, [selectedDevice, configValid, updateSettings, mode, normalizedMusicRoot, planPcTargetPath, artworkMaxEdgeValue, fetchMissingLyrics, selectedSourceFolders])
 
   const buildPlan = useCallback(async () => {
     if (!selectedDevice || !configValid) return
@@ -658,6 +998,7 @@ export function DeviceSyncView({ deviceId }: { deviceId: string }) {
     mode,
     normalizedMusicRoot,
     artworkMaxEdgeValue,
+    fetchMissingLyrics ? '1' : '0',
     [...sourceLibraryIds].sort((a, b) => a - b).join(','),
     planPcTargetPath,
   ].join('|')
@@ -681,68 +1022,31 @@ export function DeviceSyncView({ deviceId }: { deviceId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configSignature, configValid, deviceAvailable])
 
-  const togglePlanAction = useCallback((actionId: string) => {
-    setSelectedPlanActionIds(current => {
-      const next = new Set(current)
-      if (next.has(actionId)) next.delete(actionId)
-      else next.add(actionId)
-      return next
-    })
-  }, [])
-
-  const togglePlanGroup = useCallback((actions: DeviceSyncAction[], selected: boolean) => {
-    setSelectedPlanActionIds(current => {
-      const next = new Set(current)
-      for (const action of actions) {
-        if (action.kind === 'skip_conflict') continue
-        if (selected) next.add(action.id)
-        else next.delete(action.id)
-      }
-      return next
-    })
-    if (!selected) {
-      setConflictResolutions(current => {
-        const next = { ...current }
-        for (const action of actions) delete next[action.id]
-        return next
-      })
-    }
-  }, [])
-
-  const selectAllPlanActions = useCallback(() => {
-    if (!visiblePlan) return
-    const defaults = defaultDeviceSyncSelection(visiblePlan)
-    setSelectedPlanActionIds(new Set(defaults.actionIds ?? []))
-  }, [visiblePlan])
-
-  const clearPlanSelection = useCallback(() => {
-    setSelectedPlanActionIds(new Set())
-    setConflictResolutions({})
-    setSyncBase('review')
-  }, [])
-
-  const resolvePlanConflict = useCallback((actionId: string, kind: DeviceSyncActionKind) => {
-    setConflictResolutions(current => {
+  // Set the winning side for a set of actions (one track, a group, or a whole
+  // column). The apply payload re-derives from actionSides automatically.
+  const setSideForActions = useCallback((actionIds: string[], side: DeviceSyncActionSide) => {
+    if (actionIds.length === 0) return
+    setActionSides(current => {
       const next = { ...current }
-      if (kind === 'skip_conflict') delete next[actionId]
-      else next[actionId] = kind
-      return next
-    })
-    setSelectedPlanActionIds(current => {
-      const next = new Set(current)
-      if (kind === 'skip_conflict') next.delete(actionId)
-      else next.add(actionId)
+      for (const id of actionIds) next[id] = side
       return next
     })
   }, [])
 
-  const applyPlanBase = useCallback((base: DeviceSyncBase) => {
-    setSyncBase(base)
+  // Diff-step "Para todo" controls: re-seed every action toward a base for this
+  // session (does not persist the device preference).
+  const applyGlobalBase = useCallback((base: DeviceSyncBase) => {
     if (!visiblePlan) return
-    const { actionIds, conflictResolutions: resolutions } = bulkResolveSelection(visiblePlan, base)
-    setSelectedPlanActionIds(actionIds)
-    setConflictResolutions(resolutions)
+    setActionSides(seedActionSides(visiblePlan, base))
   }, [visiblePlan])
+
+  // Configuración tab base selector: persist the preference and re-seed the wizard.
+  const applyPlanBase = useCallback((base: DeviceSyncBase) => {
+    if (!selectedDevice) return
+    void updateSettings(selectedDevice.id, { syncBase: base })
+    if (!visiblePlan) return
+    setActionSides(seedActionSides(visiblePlan, base))
+  }, [selectedDevice, updateSettings, visiblePlan])
 
   const applyCurrentPlan = useCallback(async () => {
     if (!visiblePlan || applyBlockedReason) return
@@ -751,9 +1055,15 @@ export function DeviceSyncView({ deviceId }: { deviceId: string }) {
       clearPlan()
       return
     }
-    const result = await applyPlan(visiblePlan.id, currentPlanSelection ?? undefined)
-    setApplyResult(result)
-    await scan(visiblePlan.deviceId)
+    setApplying(true)
+    setWizardStep('apply')
+    try {
+      const result = await applyPlan(visiblePlan.id, currentPlanSelection ?? undefined)
+      setApplyResult(result)
+      await scan(visiblePlan.deviceId)
+    } finally {
+      setApplying(false)
+    }
   }, [visiblePlan, applyBlockedReason, devices, applyPlan, currentPlanSelection, scan, clearPlan])
 
   const resumePendingJournal = useCallback(async (journalId: string) => {
@@ -765,7 +1075,24 @@ export function DeviceSyncView({ deviceId }: { deviceId: string }) {
     await scan(result.deviceId)
   }, [devices, resumeJournal, scan])
 
-  const activeProgressPath = activeProgress === syncProgress ? syncProgress?.currentPath ?? null : null
+  const isSyncRun = activeProgress === syncProgress
+  const activeProgressPath = isSyncRun ? syncProgress?.currentPath ?? null : null
+  const activeProgressTitle = isSyncRun ? syncProgress?.currentTitle : undefined
+  const activeProgressKind = isSyncRun ? syncProgress?.currentKind : undefined
+  // "Is a sync actively running for this device?" — derived from the store so it
+  // survives this component unmounting/remounting (the sync keeps going in main),
+  // unlike the local `applying` flag which resets to false on remount.
+  const syncRunning = isSyncRun && activeProgress != null
+  // Editing the plan / recalculating stays locked for the whole run, even after a
+  // remount where `applying` would have been lost.
+  const busy = applying || syncRunning
+
+  // Coming back to the sync screen while a sync is still running lands on the live
+  // progress step instead of the editable diff (which looked like a cancelled sync).
+  // Only fires on the rising edge, so the user can still browse diff/result mid-sync.
+  useEffect(() => {
+    if (syncRunning) setWizardStep('apply')
+  }, [syncRunning])
 
   if (!selectedDevice) {
     return (
@@ -790,7 +1117,6 @@ export function DeviceSyncView({ deviceId }: { deviceId: string }) {
         <span className={`device-connect-dot ${selectedDevice.isAvailable ? 'online' : ''}`}>
           {selectedDevice.isAvailable ? 'Connected' : 'Offline'}
         </span>
-        <h1>{selectedDevice.name} Sync</h1>
         <p title={selectedDevice.rootPath}>{selectedDevice.rootPath} · {stats.trackCount.toLocaleString()} temas indexados</p>
         {activeProgress && (
           <div className="device-sync-inline-progress">
@@ -802,6 +1128,14 @@ export function DeviceSyncView({ deviceId }: { deviceId: string }) {
         )}
       </header>
 
+      {syncTab === 'optimize' && (
+        <ArtworkOptimizePanel
+          deviceId={selectedDevice.id}
+          artworkMaxEdge={selectedDevice.artworkMaxEdge}
+        />
+      )}
+
+      {syncTab === 'config' && (
       <section className="device-main-card device-config-tile device-sync-control-card device-sync-setup-card">
         <div className="device-card-head compact">
           <div>
@@ -835,6 +1169,10 @@ export function DeviceSyncView({ deviceId }: { deviceId: string }) {
                 ))}
               </div>
             </div>
+
+            {mode === 'bidirectional_safe' && (
+              <SyncBaseSelector base={syncBase} disabled={loading} onSetBase={applyPlanBase} />
+            )}
 
             <label className="device-field device-node-field">
               <span>Carpeta de música en {selectedDevice.name}</span>
@@ -948,22 +1286,33 @@ export function DeviceSyncView({ deviceId }: { deviceId: string }) {
                   </div>
                 )}
               </section>
-
-              <div className="device-config-bottom">
-                <label className="device-field device-artwork-field">
-                  <span>Artwork size</span>
-                  <input
-                    type="number"
-                    min={DEVICE_ARTWORK_EDGE_MIN}
-                    max={DEVICE_ARTWORK_EDGE_MAX}
-                    step={1}
-                    value={artworkMaxEdge}
-                    onChange={event => setArtworkMaxEdge(event.target.value)}
-                    aria-label="Device artwork limit"
-                  />
-                </label>
-              </div>
             </div>
+          </div>
+
+          <div className="device-config-bottom">
+            <label className="device-field device-artwork-field">
+              <span>Artwork size</span>
+              <input
+                type="number"
+                min={DEVICE_ARTWORK_EDGE_MIN}
+                max={DEVICE_ARTWORK_EDGE_MAX}
+                step={1}
+                value={artworkMaxEdge}
+                onChange={event => setArtworkMaxEdge(event.target.value)}
+                aria-label="Device artwork limit"
+              />
+            </label>
+            <label className="device-toggle-field">
+              <input
+                type="checkbox"
+                checked={fetchMissingLyrics}
+                onChange={event => setFetchMissingLyrics(event.target.checked)}
+              />
+              <span>
+                <strong>Buscar letras faltantes al sincronizar</strong>
+                <em>Descarga online (LRCLIB) las letras que faltan al copiar al MP3. Las letras ya existentes se sincronizan igual.</em>
+              </span>
+            </label>
           </div>
         </div>
 
@@ -979,49 +1328,140 @@ export function DeviceSyncView({ deviceId }: { deviceId: string }) {
           {needsDestination && <> Device -&gt; PC importa a la raíz de <code>{destinationFolder ? folderLabel(destinationFolder) : '—'}</code>.</>}
         </div>
       </section>
+      )}
 
+      {syncTab === 'sync' && (
       <section className="device-sync-stage device-sync-activity-tab">
-        {activeProgress ? (
-          <SyncCurrentRunPanel
-            phase={activeProgress.phase}
-            completed={progressCompleted}
-            total={progressTotal}
-            percent={progressPct}
-            currentPath={activeProgressPath}
-          />
+        {!configValid ? (
+          <div className="device-warning inline device-sync-config-cta">
+            <span>Completá la configuración para calcular los cambios a sincronizar.</span>
+            <button className="btn" type="button" onClick={() => onSyncTabChange('config')}>
+              <Icon name="sliders" size={13} /> Ir a Configuración
+            </button>
+          </div>
+        ) : !visiblePlan ? (
+          <section className="device-side-card">
+            <div className="device-card-head">
+              <div>
+                <h2>Cambios a sincronizar</h2>
+                <span>Calculando las diferencias del dispositivo…</span>
+              </div>
+              <button className="btn" type="button" disabled={loading || !selectedDevice.isAvailable} onClick={() => void buildPlan()}>
+                <Icon name="rotate" size={12} /> Recalcular
+              </button>
+            </div>
+            <div className="device-empty compact">{loading ? 'Calculando cambios…' : 'No hay cambios calculados todavía.'}</div>
+          </section>
         ) : (
-          <SyncPlanPanel
-            plan={visiblePlan}
-            selection={currentPlanSelection}
+          <div className="device-sync-wizard">
+            <div className="device-sync-wizard-head">
+              <SyncWizardStepper current={wizardStep} disabled={false} onStep={setWizardStep} />
+              <button
+                className="btn ghost"
+                type="button"
+                disabled={loading || busy || !selectedDevice.isAvailable}
+                onClick={() => void buildPlan()}
+              >
+                <Icon name="rotate" size={12} /> Recalcular
+              </button>
+            </div>
+
+            {wizardStep === 'diff' && (
+              <SyncDiffStep
+                plan={visiblePlan}
+                actionSides={actionSides}
+                groupBy={planGroupBy}
+                loading={busy}
+                deviceName={selectedDevice.name}
+                onSetSide={setSideForActions}
+                onSetGroupBy={setPlanGroupBy}
+                onGlobalBase={applyGlobalBase}
+              />
+            )}
+            {wizardStep === 'result' && (
+              <SyncResultStep
+                plan={visiblePlan}
+                selection={currentPlanSelection}
+                groupBy={planGroupBy}
+                deviceName={selectedDevice.name}
+              />
+            )}
+            {wizardStep === 'apply' && (
+              activeProgress && isSyncRun ? (
+                <SyncCurrentRunPanel
+                  phase={activeProgress.phase}
+                  completed={progressCompleted}
+                  total={progressTotal}
+                  percent={progressPct}
+                  currentPath={activeProgressPath}
+                  currentTitle={activeProgressTitle}
+                  currentKind={activeProgressKind}
+                />
+              ) : (
+                <SyncConfirmStep
+                  plan={visiblePlan}
+                  selection={currentPlanSelection}
+                  loading={loading}
+                  applyBlockedReason={applyBlockedReason}
+                  result={applyResult}
+                  onApply={() => void applyCurrentPlan()}
+                />
+              )
+            )}
+
+            {/* The live-progress panel owns the screen while a sync runs; Atrás/Cerrar
+                make no sense there (navigation is via the stepper tabs above). */}
+            {!(wizardStep === 'apply' && syncRunning) && (
+              <div className="device-sync-wizard-nav">
+                <button
+                  className="btn ghost"
+                  type="button"
+                  disabled={wizardStep === 'diff'}
+                  onClick={() => setWizardStep(wizardStep === 'apply' ? 'result' : 'diff')}
+                >
+                  <Icon name="back" size={13} /> Atrás
+                </button>
+                {wizardStep === 'apply' ? (
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    disabled={applying}
+                    onClick={() => {
+                      clearPlan()
+                      setApplyResult(null)
+                      setActionSides({})
+                      setWizardStep('diff')
+                    }}
+                  >
+                    Cerrar
+                  </button>
+                ) : (
+                  <button
+                    className="btn primary"
+                    type="button"
+                    onClick={() => setWizardStep(wizardStep === 'diff' ? 'result' : 'apply')}
+                  >
+                    Siguiente <Icon name="fwd" size={13} />
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        {/* Mientras una sync corre, el journal en disco sigue con status 'running' y
+            aparecería como "Sync interrumpida" al lado del progreso en vivo. Ocultar la
+            lista durante la corrida; al terminar, un journal realmente pendiente/fallido
+            vuelve a mostrarse. */}
+        {!busy && (
+          <PendingJournalList
+            journals={devicePendingJournals}
             loading={loading}
-            result={applyResult}
-            applyBlockedReason={applyBlockedReason}
-            canRecalculate={selectedDevice.isAvailable && configValid}
-            base={syncBase}
-            devicePlaylists={library?.playlists ?? []}
-            pcPlaylists={pcPlaylists}
-            onRecalculate={() => void buildPlan()}
-            onClear={() => {
-              clearPlan()
-              setApplyResult(null)
-              clearPlanSelection()
-            }}
-            onApply={() => void applyCurrentPlan()}
-            onToggleAction={togglePlanAction}
-            onToggleGroup={togglePlanGroup}
-            onSelectAll={selectAllPlanActions}
-            onClearSelection={clearPlanSelection}
-            onResolveConflict={resolvePlanConflict}
-            onSetBase={applyPlanBase}
+            onResume={journalId => void resumePendingJournal(journalId)}
+            onDiscard={journalId => void discardJournal(journalId)}
           />
         )}
-        <PendingJournalList
-          journals={devicePendingJournals}
-          loading={loading}
-          onResume={journalId => void resumePendingJournal(journalId)}
-          onDiscard={journalId => void discardJournal(journalId)}
-        />
       </section>
+      )}
     </div>
   )
 }

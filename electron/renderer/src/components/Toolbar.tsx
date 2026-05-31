@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Icon } from './Icon'
 import type { View } from '@renderer/App'
+import { useDeviceStore } from '@renderer/stores/deviceStore'
 
 interface ToolbarProps {
   view: View
@@ -80,6 +81,14 @@ export function Toolbar({
   const activeQuery = isViewMode ? viewQuery : searchQuery
   const searchInputRef = useRef<HTMLInputElement>(null)
 
+  // For device views, show the device name as the title (e.g. "H2-SD") instead
+  // of the generic section label ("Device Sync", …). The second-row tabs already
+  // convey which sub-section is active.
+  const devices = useDeviceStore(s => s.devices)
+  const deviceName =
+    view.kind === 'device' ? devices.find(d => d.id === view.deviceId)?.name ?? null : null
+  const title = deviceName ?? titleForView(view)
+
   // Auto-focus when entering the global SearchView.
   useEffect(() => {
     if (!isSearchView) return
@@ -114,7 +123,7 @@ export function Toolbar({
       <button className="tb-nav-btn" disabled={idx >= history.length - 1} onClick={onForward} title="Forward">
         <Icon name="fwd" size={15} />
       </button>
-      <div className="tb-title">{titleForView(view)}</div>
+      <div className="tb-title">{title}</div>
 
       <div className={`tb-search${isActive ? ' is-active' : ''}${viewQueryable ? ' has-scope' : ''}`} onClick={focusSearch}>
         <Icon name="search" size={13} style={{ color: 'var(--text-tertiary)' }} />

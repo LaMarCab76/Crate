@@ -653,9 +653,8 @@ function PlaybackLyricsSection({ tweak, setTweak }: Props) {
       <div className="set-card">
         <LyricsGlobalOffsetSetting tweak={tweak} setTweak={setTweak} />
         {([
-          ['lyricsAutoFetch', 'Buscar letras automáticamente', 'Al reproducir, busca letras en línea (LRCLIB) si no hay en caché.'],
+          ['lyricsAutoFetch', 'Buscar letras automáticamente', 'Al reproducir, busca letras en línea (LRCLIB) si no hay un archivo .lrc.'],
           ['lyricsPreferSynced', 'Preferir letras sincronizadas', 'Usa la versión con tiempos cuando esté disponible.'],
-          ['lyricsCacheLocal', 'Guardar letras en caché local', 'Cachea los resultados en la base de datos.'],
         ] as const).map(([key, label, sub]) => (
           <div className="set-row" key={key}>
             <div>

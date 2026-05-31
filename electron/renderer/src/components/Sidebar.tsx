@@ -25,30 +25,6 @@ interface SidebarProps {
   favoriteTracksCount: number
 }
 
-const COLLAPSED_DEVICE_DETAILS_KEY = 'crate.sidebar.collapsedDeviceDetails'
-
-function loadCollapsedDeviceDetails(): Set<string> {
-  if (typeof window === 'undefined') return new Set()
-  try {
-    const raw = window.localStorage.getItem(COLLAPSED_DEVICE_DETAILS_KEY)
-    if (!raw) return new Set()
-    const parsed = JSON.parse(raw)
-    return new Set(Array.isArray(parsed) ? parsed.filter(item => typeof item === 'string') : [])
-  } catch {
-    return new Set()
-  }
-}
-
-function persistCollapsedDeviceDetails(ids: Set<string>): void {
-  if (typeof window === 'undefined') return
-  try {
-    if (ids.size === 0) window.localStorage.removeItem(COLLAPSED_DEVICE_DETAILS_KEY)
-    else window.localStorage.setItem(COLLAPSED_DEVICE_DETAILS_KEY, JSON.stringify([...ids]))
-  } catch {
-    /* ignore */
-  }
-}
-
 function SectionLabel({ label, onAdd, title }: { label: string; onAdd?: () => void; title?: string }) {
   return (
     <div className="sb-section-label">
@@ -82,7 +58,6 @@ export function Sidebar({
   const loadDevices = useDeviceStore(s => s.load)
   const refreshVolumes = useDeviceStore(s => s.refreshVolumes)
   const defaultArtworkMaxEdge = useTweakStore(s => s.tweak.deviceArtworkMaxEdge)
-  const [collapsedDeviceDetails, setCollapsedDeviceDetails] = useState<Set<string>>(() => loadCollapsedDeviceDetails())
   const [connectTarget, setConnectTarget] = useState<DeviceConnectTarget | null>(null)
 
   useEffect(() => {
@@ -95,26 +70,10 @@ export function Sidebar({
     if (picked) await addFolder(picked)
   }
   const addDevice = () => setView({ kind: 'settings' })
-  const toggleDeviceDetails = (deviceId: string) => {
-    setCollapsedDeviceDetails(current => {
-      const next = new Set(current)
-      if (next.has(deviceId)) next.delete(deviceId)
-      else next.add(deviceId)
-      persistCollapsedDeviceDetails(next)
-      return next
-    })
-  }
 
   const Item = ({ id, icon, label, badge, onClick }: { id: string; icon: IconName; label: string; badge?: string | number; onClick: () => void }) => (
     <div className={`sb-item ${selectedKey === id ? 'active' : ''}`} onClick={onClick} role="button" tabIndex={0}>
       <span className="ic"><Icon name={icon} size={14} /></span>
-      <span>{label}</span>
-      {badge != null && <span className="badge">{badge}</span>}
-    </div>
-  )
-  const DeviceItem = ({ id, icon, label, badge, section }: { id: string; icon: IconName; label: string; badge?: string | number; section: View & { kind: 'device' } }) => (
-    <div className={`sb-item sb-sub-item ${selectedKey === id ? 'active' : ''}`} onClick={() => setView(section)} role="button" tabIndex={0}>
-      <span className="ic"><Icon name={icon} size={13} /></span>
       <span>{label}</span>
       {badge != null && <span className="badge">{badge}</span>}
     </div>
@@ -156,54 +115,20 @@ export function Sidebar({
           <Item id="devices" icon="device" label="Ajustes de dispositivos" onClick={() => setView({ kind: 'settings' })} />
         )}
         {devices.map(device => {
-          const collapsed = collapsedDeviceDetails.has(device.id)
           const deviceKeyPrefix = `dev-${device.id}-`
-          const selectedDeviceChild = selectedKey?.startsWith(deviceKeyPrefix) ?? false
-          const headerActive = selectedKey === `${deviceKeyPrefix}dashboard` || (collapsed && selectedDeviceChild)
           return (
             <div className="sb-device-group" key={device.id}>
               <div
-                className={`sb-item sb-device-row ${headerActive ? 'active' : ''}`}
+                className={`sb-item sb-device-row ${selectedKey?.startsWith(deviceKeyPrefix) ? 'active' : ''}`}
                 onClick={() => setView({ kind: 'device', deviceId: device.id, section: 'dashboard' })}
                 role="button"
                 tabIndex={0}
                 title={device.rootPath}
               >
-                <span
-                  className="sb-device-toggle"
-                  role="button"
-                  tabIndex={0}
-                  aria-label={collapsed ? `Mostrar detalles de ${device.name}` : `Ocultar detalles de ${device.name}`}
-                  aria-expanded={!collapsed}
-                  title={collapsed ? 'Mostrar detalles' : 'Ocultar detalles'}
-                  onClick={event => {
-                    event.stopPropagation()
-                    toggleDeviceDetails(device.id)
-                  }}
-                  onKeyDown={event => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault()
-                      event.stopPropagation()
-                      toggleDeviceDetails(device.id)
-                    }
-                  }}
-                >
-                  <Icon name={collapsed ? 'chevR' : 'chevD'} size={12} stroke={1.8} />
-                </span>
                 <span className="ic"><Icon name="device" size={14} /></span>
                 <span>{device.name}</span>
                 <span className={`badge ${device.isAvailable ? 'online' : ''}`}>{device.isAvailable ? 'on' : 'off'}</span>
               </div>
-              {!collapsed && (
-                <>
-                  <DeviceItem id={`dev-${device.id}-sync`} icon="sync" label="Sync" section={{ kind: 'device', deviceId: device.id, section: 'sync' }} />
-                  <DeviceItem id={`dev-${device.id}-library`} icon="album" label="Biblioteca" badge={device.trackCount || undefined} section={{ kind: 'device', deviceId: device.id, section: 'library' }} />
-                  <DeviceItem id={`dev-${device.id}-playlists`} icon="queue" label="Playlists" section={{ kind: 'device', deviceId: device.id, section: 'playlists' }} />
-                  {device.hasRockbox && (
-                    <DeviceItem id={`dev-${device.id}-rockboxThemes`} icon="sparkle" label="Rockbox Themes" section={{ kind: 'device', deviceId: device.id, section: 'rockboxThemes' }} />
-                  )}
-                </>
-              )}
             </div>
           )
         })}

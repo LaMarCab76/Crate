@@ -5865,6 +5865,86 @@ button:disabled { cursor: not-allowed; }
   color: var(--text-primary);
   font-weight: 600;
 }
+
+/* Device "Optimizar" section: read-only artwork analysis. */
+.device-sync-stage.device-artwork-optimize {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.device-artwork-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
+  gap: 10px;
+}
+.device-artwork-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 14px;
+  border: 0.5px solid color-mix(in oklab, var(--bg-tint) 12%, var(--divider));
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--bg-tint) 5%, var(--bg-elev));
+}
+.device-artwork-stat b {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.device-artwork-stat span {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.device-artwork-stat.oversized {
+  border-color: rgba(239, 118, 118, 0.4);
+  background: rgba(239, 118, 118, 0.12);
+}
+.device-artwork-stat.oversized b { color: #f08a8a; }
+.device-artwork-table {
+  overflow: hidden;
+  border: 0.5px solid color-mix(in oklab, var(--bg-tint) 16%, var(--divider));
+  border-radius: 8px;
+  background:
+    linear-gradient(color-mix(in oklab, var(--bg-tint) 9%, transparent), color-mix(in oklab, var(--bg-tint) 5%, transparent)),
+    var(--bg-panel);
+}
+.device-artwork-row {
+  min-height: 34px;
+  display: grid;
+  grid-template-columns: minmax(160px, 1.6fr) minmax(110px, 1fr) minmax(110px, 1fr) 64px minmax(150px, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 0 12px;
+  border-bottom: 0.5px solid color-mix(in oklab, var(--bg-tint) 10%, var(--divider));
+  background: color-mix(in oklab, var(--bg-tint) 4%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.device-artwork-row:last-child { border-bottom: none; }
+.device-artwork-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.device-artwork-row.head {
+  min-height: 30px;
+  background: color-mix(in oklab, var(--bg-tint) 10%, transparent);
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.device-artwork-format {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-tertiary);
+}
+.device-artwork-res em {
+  color: var(--text-tertiary);
+  font-style: normal;
+}
 .device-browser-page { padding-bottom: 28px; }
 .device-browser-summary {
   display: flex;
@@ -6500,7 +6580,7 @@ button:disabled { cursor: not-allowed; }
   max-width: 760px;
 }
 .device-sync-stage.device-sync-activity-tab {
-  max-width: 880px;
+  max-width: 1180px;
   gap: 14px;
 }
 .device-sync-header {
@@ -6553,9 +6633,8 @@ button:disabled { cursor: not-allowed; }
 }
 .device-sync-control-hero {
   min-width: 0;
-  margin-bottom: 16px;
-  padding-bottom: 15px;
-  border-bottom: 0.5px solid color-mix(in oklab, var(--bg-tint) 14%, var(--divider));
+  margin-bottom: 12px;
+  padding-bottom: 0;
 }
 .device-sync-control-hero h1 {
   margin: 6px 0 0;
@@ -7016,8 +7095,47 @@ button:disabled { cursor: not-allowed; }
   padding: 2px 7px;
 }
 .device-config-bottom {
+  grid-column: 1 / -1;
   display: flex;
-  justify-content: flex-start;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 14px 24px;
+  margin-top: 4px;
+  padding-top: 16px;
+  border-top: 0.5px solid color-mix(in oklab, var(--bg-tint) 12%, var(--divider));
+}
+.device-config-bottom .device-artwork-field {
+  flex: 0 0 auto;
+  width: 150px;
+}
+.device-config-bottom .device-toggle-field {
+  flex: 1 1 280px;
+}
+.device-toggle-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  cursor: pointer;
+}
+.device-toggle-field input {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+.device-toggle-field span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.device-toggle-field strong {
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 550;
+}
+.device-toggle-field em {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-style: normal;
 }
 .device-plan-rows {
   display: grid;
@@ -7115,20 +7233,54 @@ button:disabled { cursor: not-allowed; }
   background: var(--bg-selected);
   color: var(--text-primary);
 }
-.device-plan-base {
+/* The bidirectional "which side wins" question, shown at the top of the diff
+   so the base is chosen before reviewing the changes. */
+.device-plan-base-question {
   min-width: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 0.5px solid color-mix(in oklab, var(--accent) 30%, var(--divider));
+  border-radius: 9px;
+  background: color-mix(in oklab, var(--accent) 7%, var(--bg-elev));
 }
-.device-plan-base > span {
+.device-plan-base-question-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--accent);
+}
+.device-plan-base-question-head > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.device-plan-base-question-head strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+}
+.device-plan-base-question-head em {
   color: var(--text-tertiary);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: 11.5px;
+  font-style: normal;
+  line-height: 1.35;
+}
+/* The two-class selector overrides .device-warning.inline's bottom margin so
+   the stage grid gap is the only spacing below the CTA. */
+.device-warning.device-sync-config-cta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 0;
 }
 .device-plan-base-options {
   display: inline-flex;
@@ -7153,32 +7305,79 @@ button:disabled { cursor: not-allowed; }
   background: var(--bg-selected);
   color: var(--text-primary);
 }
-.device-lib-view-switch {
-  display: inline-flex;
-  gap: 6px;
-  padding: 3px;
-  border: 0.5px solid color-mix(in oklab, var(--bg-tint) 14%, var(--divider));
-  border-radius: 8px;
-  background: color-mix(in oklab, var(--bg-tint) 5%, var(--bg-elev));
+/* Device section tabs: a second line under the toolbar (all device views),
+   plus an in-view sub-tab strip (Álbumes/Artistas/Temas) inside Biblioteca.
+   Both share the underlined .device-section-tab look. */
+.device-section-tabs {
+  flex-shrink: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 38px;
+  padding: 0 12px;
+  background:
+    linear-gradient(color-mix(in oklab, var(--bg-tint) 22%, transparent),
+                    color-mix(in oklab, var(--bg-tint) 22%, transparent)),
+    var(--bg-window);
+  border-bottom: 0.5px solid var(--divider);
+  overflow-x: auto;
+  scrollbar-width: none;
 }
-.device-lib-view-switch button {
+.device-section-tabs::-webkit-scrollbar { display: none; }
+/* Second navbar row: the Sync section's sub-tabs (Sincronización/Optimizar/
+   Configuración), directly under the primary device tabs. Shorter and more
+   muted so the two rows read as a hierarchy. */
+.device-section-subtabs {
+  height: 34px;
+  background:
+    linear-gradient(color-mix(in oklab, var(--bg-tint) 11%, transparent),
+                    color-mix(in oklab, var(--bg-tint) 11%, transparent)),
+    var(--bg-window);
+}
+.device-subtabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 34px;
+  margin-bottom: 14px;
+  border-bottom: 0.5px solid var(--divider);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.device-subtabs::-webkit-scrollbar { display: none; }
+.device-section-tab {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 28px;
+  gap: 7px;
+  height: 100%;
+  padding: 0 11px;
   border: none;
-  border-radius: 6px;
+  border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--text-tertiary);
   font: inherit;
-  font-size: 12px;
-  padding: 0 10px;
+  font-size: 12.5px;
+  font-weight: 550;
+  white-space: nowrap;
   cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
 }
-.device-lib-view-switch button.active {
-  background: var(--bg-selected);
+.device-section-tab:hover { color: var(--text-secondary); }
+.device-section-tab.active {
   color: var(--text-primary);
+  border-bottom-color: var(--accent);
 }
+.device-tab-badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-selected);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 1.5;
+}
+.device-section-tab.active .device-tab-badge { color: var(--text-primary); }
 .device-select {
   width: 100%;
   height: 32px;
@@ -7333,6 +7532,294 @@ button:disabled { cursor: not-allowed; }
   gap: 8px;
   margin-top: 14px;
 }
+
+/* ── Sync wizard (Sincronización tab) ──────────────────────────────────────
+   3-step flow: Diferencias (two PC|MP3 columns) → Resultado → Sincronizar. */
+.device-sync-wizard {
+  display: grid;
+  gap: 14px;
+}
+.device-sync-wizard-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.device-sync-steps {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+.device-sync-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 14px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+.device-sync-step:hover:not(:disabled) { color: var(--text-secondary); }
+.device-sync-step:disabled { cursor: default; opacity: 0.7; }
+.device-sync-step b {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--bg-selected);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+}
+.device-sync-step.active { color: var(--text-primary); border-bottom-color: var(--accent); }
+.device-sync-step.active b { background: var(--accent); color: var(--bg-window); }
+.device-sync-wizard-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.device-sync-diff,
+.device-sync-result { display: grid; gap: 12px; }
+.device-sync-diff-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.device-side-global {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.device-side-global > span {
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.device-sync-result-summary {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+/* Two side-by-side columns (PC | MP3) shared by the diff and result steps.
+   Each column sizes to its own content (align-items: start) so a short side
+   never inherits the tall side's height. */
+.device-sync-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 16px;
+}
+.device-sync-side {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border: 0.5px solid color-mix(in oklab, var(--bg-tint) 13%, var(--divider));
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--bg-tint) 4%, var(--bg-elev));
+}
+.device-sync-side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 0.5px solid color-mix(in oklab, var(--bg-tint) 10%, var(--divider));
+}
+.device-sync-side-head strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 750;
+}
+.device-sync-side-head em {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-style: normal;
+}
+.device-side-net {
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.device-side-net.positive { color: #6ee7a5; }
+.device-side-net.negative { color: #f08a8a; }
+.device-sync-side-groups {
+  flex: 1;
+  min-height: 0;
+  max-height: 540px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+}
+.device-side-group {
+  flex: none;
+  overflow: hidden;
+  border: 0.5px solid color-mix(in oklab, var(--bg-tint) 12%, var(--divider));
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+.device-side-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border-bottom: 0.5px solid color-mix(in oklab, var(--bg-tint) 9%, var(--divider));
+}
+.device-side-group-head > span:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.device-side-group-head strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+.device-side-group-head em {
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  font-style: normal;
+}
+.device-side-group-actions {
+  display: inline-flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.device-side-group-actions button {
+  height: 22px;
+  padding: 0 8px;
+  border: 0.5px solid var(--divider);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.device-side-group-actions button:hover:not(:disabled) { color: var(--text-secondary); }
+.device-side-action-list {
+  display: flex;
+  flex-direction: column;
+}
+.device-side-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 0.5px solid color-mix(in oklab, var(--bg-tint) 7%, var(--divider));
+}
+.device-side-action:last-child { border-bottom: none; }
+.device-side-action-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.device-side-action-main strong,
+.device-side-action-main em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.device-side-action-main strong {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 650;
+}
+.device-side-action-main em {
+  color: var(--text-tertiary);
+  font-size: 10.8px;
+  font-style: normal;
+}
+.device-side-badge {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.device-side-badge.is-only { background: rgba(104,167,216,0.14); color: #8bc5f1; }
+.device-side-badge.is-diff { background: rgba(244,201,93,0.14); color: #f4c95d; }
+.device-side-badge.is-new { background: rgba(110,231,165,0.14); color: #6ee7a5; }
+.device-side-badge.is-remove { background: rgba(240,138,138,0.14); color: #f08a8a; }
+
+/* Per-track PC|MP3|omit segmented control. */
+.device-side-toggle {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+  padding: 2px;
+  border: 0.5px solid color-mix(in oklab, var(--bg-tint) 14%, var(--divider));
+  border-radius: 7px;
+  background: color-mix(in oklab, var(--bg-tint) 5%, var(--bg-elev));
+}
+.device-side-toggle button {
+  min-width: 28px;
+  height: 22px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 0 7px;
+  cursor: pointer;
+}
+.device-side-toggle button.active {
+  background: var(--bg-selected);
+  color: var(--text-primary);
+}
+
+.device-confirm-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.device-confirm-stats > div {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 0.5px solid color-mix(in oklab, var(--bg-tint) 12%, var(--divider));
+  border-radius: 9px;
+  background: color-mix(in oklab, var(--bg-tint) 4%, var(--bg-elev));
+}
+.device-confirm-stats b {
+  color: var(--text-primary);
+  font-size: 19px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+.device-confirm-stats span {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
 .device-sync-run-card .device-card-head > strong {
   color: var(--text-primary);
   font-size: 13px;

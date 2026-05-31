@@ -50,6 +50,9 @@ function assertConnectPayload(value: unknown): DeviceConnectPayload {
       assertSafePath(payload.pcTargetPath, 'PC target path')
     }
   }
+  if (payload.fetchMissingLyrics !== undefined && typeof payload.fetchMissingLyrics !== 'boolean') {
+    throw new Error('Invalid fetchMissingLyrics flag')
+  }
   if (payload.sourceLibraryIds !== undefined) {
     if (
       !Array.isArray(payload.sourceLibraryIds) ||
@@ -79,6 +82,9 @@ function assertSettingsUpdate(value: unknown): DeviceSettingsUpdate {
   if (payload.artworkMaxEdge !== undefined) {
     assertArtworkEdge(payload.artworkMaxEdge)
   }
+  if (payload.fetchMissingLyrics !== undefined && typeof payload.fetchMissingLyrics !== 'boolean') {
+    throw new Error('Invalid fetchMissingLyrics flag')
+  }
   if (payload.musicRoot !== undefined && typeof payload.musicRoot !== 'string') {
     throw new Error('Invalid device music root')
   }
@@ -89,6 +95,11 @@ function assertSettingsUpdate(value: unknown): DeviceSettingsUpdate {
       payload.defaultMode !== 'bidirectional_safe'
     ) {
       throw new Error('Invalid sync mode')
+    }
+  }
+  if (payload.syncBase !== undefined) {
+    if (payload.syncBase !== 'pc' && payload.syncBase !== 'device' && payload.syncBase !== 'review') {
+      throw new Error('Invalid sync base')
     }
   }
   if (payload.pcTargetPath !== undefined) {
@@ -184,6 +195,9 @@ export function registerDevicesChannel(): void {
   )
   ipcMain.handle('devices:library', (_, deviceId: unknown) =>
     service.deviceLibrary(assertNonEmptyString(deviceId, 'device id')),
+  )
+  ipcMain.handle('devices:analyzeArtwork', (_, deviceId: unknown) =>
+    service.analyzeDeviceArtwork(assertNonEmptyString(deviceId, 'device id')),
   )
   ipcMain.handle('devices:rockboxThemes', (_, deviceId: unknown) =>
     service.rockboxThemes(assertNonEmptyString(deviceId, 'device id')),

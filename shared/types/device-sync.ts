@@ -1,7 +1,12 @@
 export type DeviceSyncMode = 'pc_to_device' | 'device_to_pc' | 'bidirectional_safe'
 
+// Conflict base for bidirectional sync: which side wins when a track changed on
+// both. 'review' resolves per track. Persisted per device.
+export type DeviceSyncBase = 'pc' | 'device' | 'review'
+
 export type DeviceScanPhase = 'discovering' | 'reading' | 'complete'
 export type DeviceSyncPhase =
+  | 'fetching_lyrics'
   | 'copying'
   | 'deleting'
   | 'refreshing'
@@ -17,6 +22,50 @@ export interface DeviceArtworkOptimizationSummary {
   skipped: number
   failed: number
   bytesSaved: number
+}
+
+// Read-only artwork analysis (the "Optimizar" section): scans the tracks already
+// present on the device and reports which embedded artwork exceeds the device's
+// max edge. It never modifies files.
+export type ArtworkStatus = 'oversized' | 'within_limit' | 'no_artwork' | 'unsupported'
+
+export interface DeviceArtworkAnalysisItem {
+  key: string
+  relativePath: string
+  title: string
+  artist: string
+  album: string
+  format: 'jpeg' | 'png' | null
+  width: number | null
+  height: number | null
+  status: ArtworkStatus
+}
+
+export interface DeviceArtworkAnalysisSummary {
+  scanned: number
+  oversized: number
+  withinLimit: number
+  noArtwork: number
+  unsupported: number
+  errors: number
+}
+
+export interface DeviceArtworkAnalysisResult {
+  deviceId: string
+  artworkMaxEdge: number
+  analyzedAt: string
+  summary: DeviceArtworkAnalysisSummary
+  // Only the tracks whose artwork exceeds the device limit (status === 'oversized').
+  items: DeviceArtworkAnalysisItem[]
+}
+
+export type DeviceArtworkAnalysisPhase = 'scanning' | 'reading' | 'complete'
+
+export interface DeviceArtworkAnalysisProgressEvent {
+  deviceId: string
+  scanned: number
+  total: number
+  phase: DeviceArtworkAnalysisPhase
 }
 
 export interface DeviceCandidate {
@@ -50,8 +99,12 @@ export interface DeviceRecord {
   rootPath: string
   musicRoot: string
   defaultMode: DeviceSyncMode
+  // Conflict base used in bidirectional sync (Configuración tab). Persisted.
+  syncBase: DeviceSyncBase
   pcTargetPath: string
   artworkMaxEdge: number
+  // When true, missing lyrics are fetched online (LRCLIB) during PC->device sync.
+  fetchMissingLyrics: boolean
   hasRockbox: boolean
   isAvailable: boolean
   trackCount: number
@@ -261,14 +314,17 @@ export interface DeviceConnectPayload {
   defaultMode?: DeviceSyncMode
   pcTargetPath?: string
   artworkMaxEdge?: number
+  fetchMissingLyrics?: boolean
   sourceLibraryIds?: number[]
 }
 
 export interface DeviceSettingsUpdate {
   artworkMaxEdge?: number
+  fetchMissingLyrics?: boolean
   musicRoot?: string
   sourceLibraryIds?: number[]
   defaultMode?: DeviceSyncMode
+  syncBase?: DeviceSyncBase
   pcTargetPath?: string
 }
 
@@ -341,6 +397,11 @@ export interface DeviceSyncPlan {
   pcTargetPath: string
   actions: DeviceSyncAction[]
   summary: DeviceSyncPlanSummary
+  // Set when the device index came back empty even though the device should
+  // have content (files found but unreadable, or a prior non-zero count). In
+  // that case `actions` is withheld so the plan never proposes copying the
+  // whole library; the UI shows this message and asks for a rescan.
+  deviceIndexWarning?: string | null
 }
 
 export interface DeviceSyncProgressEvent {
@@ -350,6 +411,11 @@ export interface DeviceSyncProgressEvent {
   completed: number
   total: number
   currentPath?: string
+  // Set during the copy/delete phase so the UI can show a readable line for the
+  // item being processed ("Copiando a MP3 · Title") instead of just the path.
+  // Left undefined for phases without a single action (lyrics/artwork/refreshing).
+  currentTitle?: string
+  currentKind?: DeviceSyncActionKind
 }
 
 export interface DeviceSyncFailure {

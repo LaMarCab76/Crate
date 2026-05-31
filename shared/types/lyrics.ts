@@ -84,11 +84,9 @@ export interface LyricsSelectionProgress {
 export interface LyricsSettingsState {
   autoFetch: boolean
   preferSynced: boolean
-  cacheLocal: boolean
 }
 
 export const LYRICS_SETTINGS_DEFAULTS: LyricsSettingsState = {
   autoFetch: true,
   preferSynced: true,
-  cacheLocal: true,
 }

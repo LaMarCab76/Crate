@@ -3,6 +3,7 @@ import Database, { type Database as BetterSqliteDatabase } from 'better-sqlite3'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { runMigrations } from './migrator'
+import { materializeLyricsSidecars } from './lyricsSidecarBackfill'
 
 let dbInstance: BetterSqliteDatabase | null = null
 
@@ -32,6 +33,9 @@ export function getDatabase(): BetterSqliteDatabase {
     )
   }
 
+  // Write any DB-cached lyrics out to `.lrc` sidecars before migration 0019
+  // drops the lyrics tables, so the move to sidecar-only storage loses no data.
+  materializeLyricsSidecars(db)
   runMigrations(db)
 
   dbInstance = db

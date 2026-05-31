@@ -465,28 +465,29 @@ export function DeviceLibraryView({
           </div>
         </div>
         <div className="actions">
-          {section === 'library' && (
-            <div className="device-lib-view-switch" role="tablist" aria-label="Vista de biblioteca">
-              {DEVICE_LIB_VIEWS.map(item => (
-                <button
-                  key={item.value}
-                  className={libView === item.value ? 'active' : ''}
-                  type="button"
-                  role="tab"
-                  aria-selected={libView === item.value}
-                  title={item.label}
-                  onClick={() => changeLibView(item.value)}
-                >
-                  <Icon name={item.icon} size={13} /> {item.label}
-                </button>
-              ))}
-            </div>
-          )}
           <button className="btn" type="button" disabled={loading} onClick={refresh}>
             <Icon name="rotate" size={13} /> Actualizar
           </button>
         </div>
       </div>
+
+      {section === 'library' && (
+        <nav className="device-subtabs" role="tablist" aria-label="Vista de biblioteca">
+          {DEVICE_LIB_VIEWS.map(item => (
+            <button
+              key={item.value}
+              className={`device-section-tab ${libView === item.value ? 'active' : ''}`}
+              type="button"
+              role="tab"
+              aria-selected={libView === item.value}
+              title={item.label}
+              onClick={() => changeLibView(item.value)}
+            >
+              <Icon name={item.icon} size={13} /> {item.label}
+            </button>
+          ))}
+        </nav>
+      )}
 
       {error && <div className="device-error">{error}</div>}
 

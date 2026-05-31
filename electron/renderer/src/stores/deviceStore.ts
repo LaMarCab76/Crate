@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import type {
+  DeviceArtworkAnalysisProgressEvent,
+  DeviceArtworkAnalysisResult,
   DeviceCandidate,
   DeviceConnectPayload,
   DeviceLibraryResult,
@@ -29,10 +31,12 @@ interface DeviceState {
   deviceLibraries: Record<string, DeviceLibraryResult>
   deviceOverviews: Record<string, DeviceOverviewResult>
   rockboxThemeLibraries: Record<string, RockboxThemeLibraryResult>
+  artworkAnalysis: Record<string, DeviceArtworkAnalysisResult>
   scanResult: DeviceScanResult | null
   plan: DeviceSyncPlan | null
   scanProgress: DeviceScanProgressEvent | null
   syncProgress: DeviceSyncProgressEvent | null
+  artworkAnalyzeProgress: DeviceArtworkAnalysisProgressEvent | null
   themeInstallResult: RockboxThemeInstallResult | null
   selectedDeviceId: string | null
   loading: boolean
@@ -51,6 +55,7 @@ interface DeviceState {
   deleteRockboxTheme(deviceId: string, themeId: string): Promise<RockboxThemeDeleteResult>
   selectDevice(id: string): void
   scan(deviceId?: string): Promise<void>
+  analyzeArtwork(deviceId?: string): Promise<DeviceArtworkAnalysisResult>
   planSync(mode: DeviceSyncMode, pcTargetPath?: string): Promise<DeviceSyncPlan>
   applyPlan(planId: string, selection?: DeviceSyncApplySelection): Promise<DeviceSyncApplyResult>
   resumeJournal(journalId: string): Promise<DeviceSyncApplyResult>
@@ -118,10 +123,12 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
   deviceLibraries: {},
   deviceOverviews: {},
   rockboxThemeLibraries: {},
+  artworkAnalysis: {},
   scanResult: null,
   plan: null,
   scanProgress: null,
   syncProgress: null,
+  artworkAnalyzeProgress: null,
   themeInstallResult: null,
   selectedDeviceId: null,
   loading: false,
@@ -457,6 +464,24 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     }
   },
 
+  async analyzeArtwork(deviceId) {
+    const id = currentDeviceId(get(), deviceId)
+    set({ loading: true, error: null, artworkAnalyzeProgress: null })
+    try {
+      const result = await window.api.devices.analyzeArtwork(id)
+      set(state => ({
+        artworkAnalysis: { ...state.artworkAnalysis, [id]: result },
+        selectedDeviceId: id,
+        loading: false,
+        artworkAnalyzeProgress: null,
+      }))
+      return result
+    } catch (err) {
+      set({ loading: false, error: (err as Error).message, artworkAnalyzeProgress: null })
+      throw err
+    }
+  },
+
   async planSync(mode, pcTargetPath) {
     const deviceId = currentDeviceId(get())
     set({ loading: true, error: null, plan: null })
@@ -544,6 +569,9 @@ function initializeDeviceListeners(): void {
   const offSync = window.api.devices.onSyncProgress(event => {
     useDeviceStore.setState({ syncProgress: event })
   })
+  const offArtwork = window.api.devices.onArtworkAnalyzeProgress(event => {
+    useDeviceStore.setState({ artworkAnalyzeProgress: event })
+  })
   const offVolumes = window.api.devices.onVolumesChanged((snapshot: DeviceVolumeSnapshot) => {
     useDeviceStore.setState(state => ({
       devices: snapshot.devices,
@@ -552,7 +580,7 @@ function initializeDeviceListeners(): void {
       selectedDeviceId: nextSelectedDeviceId(state.selectedDeviceId, snapshot.devices),
     }))
   })
-  deviceListenerCleanups = [offScan, offSync, offVolumes]
+  deviceListenerCleanups = [offScan, offSync, offArtwork, offVolumes]
 }
 
 initializeDeviceListeners()
@@ -575,6 +603,12 @@ export function useSelectedDevice(): DeviceRecord | null {
 export function useDeviceLibrary(deviceId: string | null): DeviceLibraryResult | null {
   return useDeviceStore(state =>
     deviceId ? state.deviceLibraries[deviceId] ?? null : null,
+  )
+}
+
+export function useDeviceArtworkAnalysis(deviceId: string | null): DeviceArtworkAnalysisResult | null {
+  return useDeviceStore(state =>
+    deviceId ? state.artworkAnalysis[deviceId] ?? null : null,
   )
 }
 

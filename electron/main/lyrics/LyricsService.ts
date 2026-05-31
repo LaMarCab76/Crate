@@ -1,8 +1,8 @@
 import { dialog } from 'electron'
-import { existsSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { getRepos, type Repos } from '../db/repositories'
 import { broadcast } from '../ipc/events'
-import type { DbTrack, DbTrackLyrics } from '@shared/types/db'
+import type { DbTrack } from '@shared/types/db'
 import type {
   LyricsCandidate,
   LyricsResult,
@@ -12,7 +12,6 @@ import type {
   LyricsSelectionSummary,
 } from '@shared/types/lyrics'
 import { isSyncedLrc, setLrcOffset } from '@shared/lyrics/lrc'
-import { getLyricsSettings } from './LyricsSettings'
 import {
   ACCEPT_AUTO,
   ACCEPT_REVIEW,
@@ -20,13 +19,12 @@ import {
   scoreCandidate,
   toConfidence,
 } from './LyricsMatcher'
-import { LrclibProvider, LrclibRateLimitError, type LrclibQuery, type LrclibRaw } from './providers/LrclibProvider'
+import { LrclibProvider, type LrclibQuery, type LrclibRaw } from './providers/LrclibProvider'
 import { readEmbeddedLyrics } from './providers/EmbeddedLyricsProvider'
-import { readSidecarLrc, sidecarPathFor } from './providers/SidecarLrcProvider'
+import { readSidecarLrc } from './providers/SidecarLrcProvider'
 import { writeSidecarLrc, removeSidecarLrc } from './writers/SidecarLrcWriter'
 
 const NOT_FOUND_TTL_MS = 7 * 24 * 60 * 60 * 1000
-const LOW_CONFIDENCE = 0.8 // < this (for an lrclib row not user-edited) => 'low_confidence'
 
 function emptyView(trackId: number, status: LyricsStatus): LyricsView {
   return {
@@ -43,37 +41,49 @@ function emptyView(trackId: number, status: LyricsStatus): LyricsView {
   }
 }
 
-function viewFromRow(row: DbTrackLyrics): LyricsView {
-  const instrumental = row.instrumental === 1
-  const synced = row.synced_lyrics_lrc
-  const plain = row.plain_lyrics
+// Build the renderer-facing view from on-disk content (a sidecar `.lrc` or an
+// embedded tag read). `isUserEdited` / `low_confidence` are no longer persisted
+// (they lived in the DB) — a freshly written sidecar simply reads back as
+// found_synced / found_plain.
+function viewFromResult(
+  trackId: number,
+  res: LyricsResult,
+  flags: { sidecarWritten: boolean; embeddedInFile: boolean },
+): LyricsView {
+  const synced = res.syncedLyricsLrc ?? null
+  const plain = res.plainLyrics ?? null
   let status: LyricsStatus
-  if (instrumental) status = 'instrumental'
+  if (res.instrumental) status = 'instrumental'
   else if (synced) status = 'found_synced'
   else if (plain) status = 'found_plain'
   else status = 'none'
 
-  if (
-    (status === 'found_synced' || status === 'found_plain') &&
-    row.is_user_edited !== 1 &&
-    row.source === 'lrclib' &&
-    row.confidence > 0 &&
-    row.confidence < LOW_CONFIDENCE
-  ) {
-    status = 'low_confidence'
-  }
-
   return {
-    trackId: row.track_id,
+    trackId,
     status,
-    source: row.source as LyricsSource,
+    source: res.source,
     plainLyrics: plain,
     syncedLyricsLrc: synced,
-    instrumental,
-    isUserEdited: row.is_user_edited === 1,
-    embeddedInFile: row.embedded_in_file === 1,
-    sidecarWritten: row.sidecar_written === 1,
-    confidence: row.confidence,
+    instrumental: res.instrumental,
+    isUserEdited: false,
+    embeddedInFile: flags.embeddedInFile,
+    sidecarWritten: flags.sidecarWritten,
+    confidence: res.confidence,
+  }
+}
+
+function userView(trackId: number, plain: string | null, synced: string | null, sidecarWritten: boolean): LyricsView {
+  return {
+    trackId,
+    status: synced ? 'found_synced' : 'found_plain',
+    source: 'user',
+    plainLyrics: plain,
+    syncedLyricsLrc: synced,
+    instrumental: false,
+    isUserEdited: true,
+    embeddedInFile: false,
+    sidecarWritten,
+    confidence: 1,
   }
 }
 
@@ -103,6 +113,12 @@ export class LyricsService {
   private repos: Repos
   private lrclib = new LrclibProvider()
 
+  // Session-only memory of tracks LRCLIB had no usable match for, so repeated
+  // plays / sync passes don't re-hit the network. Replaces the persistent
+  // `lyrics_failures` TTL now that lyrics state lives only on disk. Resets on
+  // restart — a not-found track may be queried once more after relaunch.
+  private notFound = new Map<number, number>() // trackId -> epoch ms of last miss
+
   constructor() {
     this.repos = getRepos()
   }
@@ -113,30 +129,14 @@ export class LyricsService {
     const track = this.repos.tracks.getById(trackId)
     if (!track) return emptyView(trackId, 'none')
 
-    const row = this.repos.lyrics.getByTrackId(trackId)
-    if (row) {
-      this.materializeSidecar(track, row)
-      return viewFromRow(this.repos.lyrics.getByTrackId(trackId) ?? row)
-    }
-
-    // No DB row yet: read local file sources in priority order and seed.
-    const embedded = readEmbeddedLyrics(track.path)
-    if (embedded) {
-      const seeded = this.seedFromResult(trackId, embedded)
-      this.repos.lyrics.markEmbedded(trackId, true)
-      this.materializeSidecar(track, seeded)
-      return viewFromRow(this.repos.lyrics.getByTrackId(trackId) ?? seeded)
-    }
-
+    // Sidecar is the source of truth; embedded tags are a secondary read source.
     const sidecar = readSidecarLrc(track.path)
-    if (sidecar) {
-      const seeded = this.seedFromResult(trackId, sidecar)
-      this.repos.lyrics.markSidecarWritten(trackId, true, sidecarPathFor(track.path))
-      return viewFromRow(this.repos.lyrics.getByTrackId(trackId) ?? seeded)
-    }
+    if (sidecar) return viewFromResult(trackId, sidecar, { sidecarWritten: true, embeddedInFile: false })
 
-    const last = this.repos.lyrics.lastFailure(trackId)
-    if (last?.reason === 'provider_not_found') return emptyView(trackId, 'not_found')
+    const embedded = readEmbeddedLyrics(track.path)
+    if (embedded) return viewFromResult(trackId, embedded, { sidecarWritten: false, embeddedInFile: true })
+
+    if (this.notFound.has(trackId)) return emptyView(trackId, 'not_found')
     return emptyView(trackId, 'none')
   }
 
@@ -145,14 +145,22 @@ export class LyricsService {
   async fetchOnline(trackId: number, opts?: { force?: boolean }): Promise<LyricsView> {
     const track = this.repos.tracks.getById(trackId)
     if (!track) return emptyView(trackId, 'none')
+
+    // A sidecar already on disk means the lyrics are resolved — never hit the
+    // network for it unless the user explicitly forces a re-fetch.
+    if (!opts?.force) {
+      const existing = readSidecarLrc(track.path)
+      if (existing) return viewFromResult(trackId, existing, { sidecarWritten: true, embeddedInFile: false })
+    }
+
     if (!track.title.trim() || !track.artist.trim()) {
-      this.repos.lyrics.recordFailure(trackId, 'matcher', 'missing_metadata')
+      this.notFound.set(trackId, Date.now())
       return emptyView(trackId, 'not_found')
     }
 
     if (!opts?.force) {
-      const last = this.repos.lyrics.lastFailure(trackId)
-      if (last?.reason === 'provider_not_found' && Date.now() - last.failed_at < NOT_FOUND_TTL_MS) {
+      const lastMiss = this.notFound.get(trackId)
+      if (lastMiss != null && Date.now() - lastMiss < NOT_FOUND_TTL_MS) {
         return emptyView(trackId, 'not_found')
       }
     }
@@ -183,21 +191,20 @@ export class LyricsService {
             confidence = toConfidence(best.score)
           } else if (best.score >= ACCEPT_REVIEW) {
             // Ambiguous: don't auto-import; surface for manual review.
-            this.repos.lyrics.recordFailure(trackId, 'matcher', 'low_confidence_match')
             return emptyView(trackId, 'low_confidence')
           }
         }
       }
 
       if (!chosen) {
-        this.repos.lyrics.recordFailure(trackId, 'lrclib', 'provider_not_found')
+        this.notFound.set(trackId, Date.now())
         return emptyView(trackId, 'not_found')
       }
 
       return this.persistChosen(track, chosen, confidence)
-    } catch (err) {
-      const reason = err instanceof LrclibRateLimitError ? 'provider_rate_limited' : 'provider_timeout'
-      this.repos.lyrics.recordFailure(trackId, 'lrclib', reason)
+    } catch {
+      // Provider timeout / rate-limit. Not remembered as not-found, so a later
+      // attempt can still succeed.
       return emptyView(trackId, 'failed_provider')
     }
   }
@@ -234,9 +241,7 @@ export class LyricsService {
     let raw: LrclibRaw | null
     try {
       raw = await this.lrclib.getById(lrclibId)
-    } catch (err) {
-      const reason = err instanceof LrclibRateLimitError ? 'provider_rate_limited' : 'provider_timeout'
-      this.repos.lyrics.recordFailure(trackId, 'lrclib', reason)
+    } catch {
       return emptyView(trackId, 'failed_provider')
     }
     if (!raw) return emptyView(trackId, 'not_found')
@@ -249,39 +254,44 @@ export class LyricsService {
     const track = this.repos.tracks.getById(trackId)
     if (!track) return emptyView(trackId, 'none')
     const synced = isSyncedLrc(lrcText)
-    const plain = synced ? null : lrcText
-    const syncedLrc = synced ? lrcText : null
-    this.repos.lyrics.setUserEdited(trackId, plain, syncedLrc)
-    this.maybeWriteSidecar(track, syncedLrc ?? plain)
-    return viewFromRow(this.repos.lyrics.getByTrackId(trackId)!)
+    const written = this.writeSidecar(track, lrcText)
+    this.notFound.delete(trackId)
+    return userView(trackId, synced ? null : lrcText, synced ? lrcText : null, written)
   }
 
   saveUserEdit(trackId: number, plain: string | null, synced: string | null): LyricsView {
     const track = this.repos.tracks.getById(trackId)
     if (!track) return emptyView(trackId, 'none')
-    this.repos.lyrics.setUserEdited(trackId, plain, synced)
-    this.maybeWriteSidecar(track, synced ?? plain)
-    return viewFromRow(this.repos.lyrics.getByTrackId(trackId)!)
+    const content = synced ?? plain
+    if (!content) {
+      // Empty save clears the lyrics: remove the assigned sidecar file.
+      removeSidecarLrc(track.path)
+      return emptyView(trackId, 'none')
+    }
+    const written = this.writeSidecar(track, content)
+    this.notFound.delete(trackId)
+    return userView(trackId, plain, synced, written)
   }
 
   setOffset(trackId: number, offsetMs: number): LyricsView {
     const track = this.repos.tracks.getById(trackId)
     if (!track) return emptyView(trackId, 'none')
-    const row = this.repos.lyrics.getByTrackId(trackId)
-    if (!row?.synced_lyrics_lrc || !isSyncedLrc(row.synced_lyrics_lrc)) {
+    const current = readSidecarLrc(track.path) ?? readEmbeddedLyrics(track.path)
+    const synced = current?.syncedLyricsLrc ?? null
+    if (!synced || !isSyncedLrc(synced)) {
       throw new Error('Synced lyrics are required to set an offset.')
     }
-    const synced = setLrcOffset(row.synced_lyrics_lrc, offsetMs)
-    this.repos.lyrics.setUserEdited(trackId, row.plain_lyrics, synced)
-    this.maybeWriteSidecar(track, synced)
-    return viewFromRow(this.repos.lyrics.getByTrackId(trackId)!)
+    const shifted = setLrcOffset(synced, offsetMs)
+    const written = this.writeSidecar(track, shifted)
+    return userView(trackId, current?.plainLyrics ?? null, shifted, written)
   }
 
   async exportLrc(trackId: number): Promise<{ canceled: boolean; path: string | null }> {
     const track = this.repos.tracks.getById(trackId)
-    const row = this.repos.lyrics.getByTrackId(trackId)
-    const content = row?.synced_lyrics_lrc ?? row?.plain_lyrics ?? null
-    if (!track || !content) return { canceled: true, path: null }
+    if (!track) return { canceled: true, path: null }
+    const res = readSidecarLrc(track.path) ?? readEmbeddedLyrics(track.path)
+    const content = res?.syncedLyricsLrc ?? res?.plainLyrics ?? null
+    if (!content) return { canceled: true, path: null }
 
     const safe = `${track.title} - ${track.artist}`.replace(/[\\/:*?"<>|]/g, '-')
     const result = await dialog.showSaveDialog({
@@ -296,9 +306,8 @@ export class LyricsService {
 
   remove(trackId: number): void {
     const track = this.repos.tracks.getById(trackId)
-    const row = this.repos.lyrics.getByTrackId(trackId)
-    if (track && row?.sidecar_written === 1) removeSidecarLrc(track.path)
-    this.repos.lyrics.delete(trackId)
+    if (track) removeSidecarLrc(track.path)
+    this.notFound.delete(trackId)
   }
 
   // --- bounded selection fetch -------------------------------------------
@@ -329,78 +338,36 @@ export class LyricsService {
   // --- internals ----------------------------------------------------------
 
   private persistChosen(track: DbTrack, raw: LrclibRaw, confidence: number): LyricsView {
-    const settings = getLyricsSettings().get()
     const instrumental = raw.instrumental
-    const plain = instrumental ? null : raw.plainLyrics
-    const synced = instrumental ? null : raw.syncedLyrics
+    const plain = instrumental ? null : raw.plainLyrics ?? null
+    const synced = instrumental ? null : raw.syncedLyrics ?? null
+    const content = synced ?? plain
+    const written = content ? this.writeSidecar(track, content) : false
+    this.notFound.delete(track.id)
 
-    if (settings.cacheLocal) {
-      this.repos.lyrics.upsert({
-        track_id: track.id,
-        plain_lyrics: plain,
-        synced_lyrics_lrc: synced,
-        source: 'lrclib',
-        source_id: String(raw.id),
-        source_url: `https://lrclib.net/api/get/${raw.id}`,
-        confidence,
-        instrumental: instrumental ? 1 : 0,
-      })
-    }
-    const sidecarPath = this.maybeWriteSidecar(track, synced ?? plain)
-
-    const row = this.repos.lyrics.getByTrackId(track.id)
-    if (row) return viewFromRow(row)
-    // cacheLocal disabled: build a transient view from the raw result.
     return {
       trackId: track.id,
       status: instrumental ? 'instrumental' : synced ? 'found_synced' : plain ? 'found_plain' : 'not_found',
-      source: 'lrclib',
+      source: 'lrclib' as LyricsSource,
       plainLyrics: plain,
       syncedLyricsLrc: synced,
       instrumental,
       isUserEdited: false,
       embeddedInFile: false,
-      sidecarWritten: Boolean(sidecarPath),
+      sidecarWritten: written,
       confidence,
     }
   }
 
-  private lyricsContentFromRow(row: DbTrackLyrics): string | null {
-    return row.synced_lyrics_lrc ?? row.plain_lyrics ?? null
-  }
-
-  private materializeSidecar(track: DbTrack, row: DbTrackLyrics): void {
-    this.maybeWriteSidecar(track, this.lyricsContentFromRow(row), false)
-  }
-
-  private maybeWriteSidecar(track: DbTrack, content: string | null, overwrite = true): string | null {
-    if (!content) return null
+  // Write the `.lrc` sidecar next to the audio file. The sidecar is the canonical
+  // store, so this always overwrites. Returns whether the write succeeded.
+  private writeSidecar(track: DbTrack, content: string): boolean {
     try {
-      const existingPath = sidecarPathFor(track.path)
-      if (!overwrite && existsSync(existingPath)) {
-        this.repos.lyrics.markSidecarWritten(track.id, true, existingPath)
-        return existingPath
-      }
-      const path = writeSidecarLrc(track.path, content)
-      this.repos.lyrics.markSidecarWritten(track.id, true, path)
-      return path
+      writeSidecarLrc(track.path, content)
+      return true
     } catch {
-      this.repos.lyrics.recordFailure(track.id, 'sidecar-writer', 'write_failed')
-      return null
+      return false
     }
-  }
-
-  private seedFromResult(trackId: number, res: LyricsResult): DbTrackLyrics {
-    return this.repos.lyrics.upsert({
-      track_id: trackId,
-      plain_lyrics: res.plainLyrics ?? null,
-      synced_lyrics_lrc: res.syncedLyricsLrc ?? null,
-      source: res.source,
-      source_id: res.sourceId ?? null,
-      source_url: res.sourceUrl ?? null,
-      confidence: res.confidence,
-      instrumental: res.instrumental ? 1 : 0,
-    })
   }
 }
 

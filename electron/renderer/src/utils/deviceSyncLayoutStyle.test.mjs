@@ -47,16 +47,38 @@ test('device sync direction modes and source libraries stay compact', () => {
   assert.equal(declaration(libraryRow, 'padding'), '8px 10px')
 })
 
-test('refactored sync controls (base selector, view switch, destination) are styled', () => {
+test('refactored sync controls (base selector, section tabs, destination) are styled', () => {
   const base = cssBlock('.device-plan-base-options')
-  const viewSwitch = cssBlock('.device-lib-view-switch')
+  const sectionTabs = cssBlock('.device-section-tabs')
+  const subtabs = cssBlock('.device-subtabs')
+  const sectionTab = cssBlock('.device-section-tab')
   const select = cssBlock('.device-select')
 
   assert.equal(declaration(base, 'display'), 'inline-flex')
-  assert.equal(declaration(viewSwitch, 'display'), 'inline-flex')
+  // Section tabs (top second line) and the in-view Biblioteca sub-tabs share
+  // the same underlined .device-section-tab look.
+  assert.equal(declaration(sectionTabs, 'display'), 'flex')
+  assert.equal(declaration(subtabs, 'display'), 'flex')
+  assert.equal(declaration(sectionTab, 'border-bottom'), '2px solid transparent')
   assert.equal(declaration(select, 'width'), '100%')
 
   // The removed setup chrome must not linger in the stylesheet.
   assert.ok(!/\.device-sync-animation\s*\{/.test(css), 'device-sync-animation CSS should be removed')
   assert.ok(!/\.device-sync-tabs\s*\{/.test(css), 'device-sync-tabs CSS should be removed')
+  assert.ok(!/\.device-lib-view-switch\s*\{/.test(css), 'device-lib-view-switch CSS should be removed')
+})
+
+test('sync wizard stepper, two columns and per-track side toggle are styled', () => {
+  const steps = cssBlock('.device-sync-steps')
+  const step = cssBlock('.device-sync-step')
+  const columns = cssBlock('.device-sync-columns')
+  const toggle = cssBlock('.device-side-toggle')
+
+  assert.equal(declaration(steps, 'display'), 'flex')
+  // The active step underlines like the section tabs.
+  assert.equal(declaration(step, 'border-bottom'), '2px solid transparent')
+  // Vista 1 / Vista 2 are always two side-by-side columns (PC | MP3).
+  assert.equal(declaration(columns, 'display'), 'grid')
+  assert.equal(declaration(columns, 'grid-template-columns'), 'repeat(2, minmax(0, 1fr))')
+  assert.equal(declaration(toggle, 'display'), 'inline-flex')
 })

@@ -3,6 +3,7 @@ import type {
   DeviceSyncAction,
   DeviceSyncActionKind,
   DeviceSyncApplySelection,
+  DeviceSyncBase,
   DeviceSyncConflictResolution,
   DeviceSyncPlan,
   DeviceSyncPlanSummary,
@@ -59,11 +60,16 @@ export function actionKindForSelection(
   action: DeviceSyncAction,
   selection: DeviceSyncApplySelection | null | undefined,
 ): DeviceSyncActionKind | null {
-  const resolutions = conflictResolutionMap(selection)
+  // A conflict resolution overrides the kind for ANY action, not just
+  // skip_conflict ones — when the user flips a normal change to the other side
+  // (e.g. "Usar PC" turns a pull into a device delete) the override carries the
+  // real kind. Mirrors the backend's planForSelection.
+  const override = conflictResolutionMap(selection).get(action.id)
   if (action.kind === 'skip_conflict') {
-    return resolutions.get(action.id) ?? null
+    return override ?? null
   }
-  return selectedActionIds(selection).has(action.id) ? action.kind : null
+  if (!selectedActionIds(selection).has(action.id)) return null
+  return override ?? action.kind
 }
 
 function bytesForKind(action: DeviceSyncAction, kind: DeviceSyncActionKind): number {
@@ -243,14 +249,16 @@ export function selectionPayload(
 // Which side is treated as the source of truth when bulk-resolving a plan.
 // 'review' leaves the engine's per-action defaults untouched (conflicts stay
 // unresolved); 'pc'/'device' mirror every difference toward that side.
-export type DeviceSyncBase = 'pc' | 'device' | 'review'
+// Canonical definition lives in @shared/types/device-sync; re-exported here for
+// the existing renderer imports.
+export type { DeviceSyncBase }
 
 // The action kind that makes the *other* side match `base`, given which paths
 // the action touches. Mirrors the valid kinds from conflictResolutionOptions:
 //   both paths  -> replace the loser
 //   pc only     -> copy to device (pc base) / delete the pc file (device base)
 //   device only -> delete the device file (pc base) / pull to pc (device base)
-function preferredKindForBase(
+export function preferredKindForBase(
   action: DeviceSyncAction,
   base: 'pc' | 'device',
 ): DeviceSyncActionKind | null {
@@ -291,4 +299,87 @@ export function bulkResolveSelection(
     }
   }
   return { actionIds, conflictResolutions }
+}
+
+// The per-action winning side the wizard tracks: keep PC's copy, keep the
+// device's (MP3) copy, or skip the change entirely. This is the single source of
+// truth the new sync UI mutates (global / per-artist / per-album / per-track);
+// the apply payload is derived from it via buildSelectionFromSides.
+export type DeviceSyncActionSide = 'pc' | 'device' | 'omit'
+
+// The side that "wins" under the engine's natural default kind. By construction
+// preferredKindForBase(action, naturalSideForAction(action)) === action.kind for
+// every non-conflict action, so seeding from 'review' reproduces the engine
+// defaults. Conflicts have no natural winner and start omitted.
+export function naturalSideForAction(action: DeviceSyncAction): DeviceSyncActionSide {
+  switch (action.kind) {
+    case 'copy_pc_to_device':
+    case 'replace_device':
+    case 'delete_device':
+      return 'pc'
+    case 'copy_device_to_pc':
+    case 'replace_pc':
+    case 'delete_pc':
+      return 'device'
+    case 'skip_conflict':
+      return 'omit'
+  }
+}
+
+// Initial per-action side map for a freshly loaded plan, derived from the
+// device's persisted base. 'pc'/'device' mirror everything toward that side
+// (mirrors bulkResolveSelection); 'review' uses each action's natural winner and
+// leaves conflicts omitted (mirrors defaultDeviceSyncSelection).
+export function seedActionSides(
+  plan: DeviceSyncPlan,
+  base: DeviceSyncBase,
+): Record<string, DeviceSyncActionSide> {
+  const sides: Record<string, DeviceSyncActionSide> = {}
+  for (const action of plan.actions) {
+    if (base === 'pc' || base === 'device') {
+      sides[action.id] = preferredKindForBase(action, base) ? base : 'omit'
+    } else {
+      sides[action.id] = naturalSideForAction(action)
+    }
+  }
+  return sides
+}
+
+// Derive the apply payload from the per-action side choices. Produces the exact
+// same { actionIds, conflictResolutions } shape the old toggle-based UI fed to
+// applyPlan, so the IPC contract is unchanged. Actions without an explicit side
+// fall back to their natural winner.
+export function buildSelectionFromSides(
+  plan: DeviceSyncPlan,
+  actionSides: Record<string, DeviceSyncActionSide>,
+): DeviceSyncApplySelection {
+  const actionIds = new Set<string>()
+  const conflictResolutions: Record<string, DeviceSyncActionKind> = {}
+  for (const action of plan.actions) {
+    const side = actionSides[action.id] ?? naturalSideForAction(action)
+    if (side === 'omit') continue
+    const kind = preferredKindForBase(action, side)
+    if (!kind) continue
+    actionIds.add(action.id)
+    if (action.kind === 'skip_conflict' || kind !== action.kind) {
+      conflictResolutions[action.id] = kind
+    }
+  }
+  return selectionPayload(actionIds, conflictResolutions)
+}
+
+// Split actions into the columns of the diff view by which side currently holds
+// the file. An action that touches both sides (replace/conflict) appears in
+// both columns; the side choice resolves which copy wins.
+export function partitionActionsBySide(actions: DeviceSyncAction[]): {
+  pc: DeviceSyncAction[]
+  device: DeviceSyncAction[]
+} {
+  const pc: DeviceSyncAction[] = []
+  const device: DeviceSyncAction[] = []
+  for (const action of actions) {
+    if (action.pcPath != null) pc.push(action)
+    if (action.devicePath != null) device.push(action)
+  }
+  return { pc, device }
 }

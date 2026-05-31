@@ -2,7 +2,7 @@ import { type CSSProperties, type PointerEvent as ReactPointerEvent, useEffect, 
 import type { Album, Artist, Playlist } from '@shared/types/library'
 import { Sidebar } from './components/Sidebar'
 import { Toolbar } from './components/Toolbar'
-import { Icon } from './components/Icon'
+import { Icon, type IconName } from './components/Icon'
 import { PlayerPane } from './components/PlayerPane'
 import { PlayerBottomBar } from './components/PlayerBottomBar'
 import { DeviceConnectModal, type DeviceConnectTarget } from './components/DeviceConnectModal'
@@ -21,7 +21,7 @@ import { SettingsView } from './views/SettingsView'
 import { ImportView } from './views/ImportView'
 import { GenresView } from './views/GenresView'
 import { DevicesView } from './views/DevicesView'
-import { DeviceSyncView } from './views/DeviceSyncView'
+import { DeviceSyncView, type DeviceSyncTab } from './views/DeviceSyncView'
 import { DeviceLibraryView, type DeviceLibrarySection } from './views/DeviceLibraryView'
 import { useTweaks, useListPrefsStore } from './stores/settingsStore'
 import { useAlbumByUiId, useFavoriteTracks, useLibraryStore } from './stores/libraryStore'
@@ -94,12 +94,91 @@ function loadPersistedBool(key: string, fallback: boolean): boolean {
 const DEVICE_SYNC_PHASE_LABELS: Record<string, string> = {
   discovering: 'Buscando',
   reading: 'Leyendo',
+  fetching_lyrics: 'Buscando letras',
   copying: 'Copiando',
   deleting: 'Eliminando',
   refreshing: 'Actualizando',
   optimizing_artwork: 'Optimizando artwork',
   writing_state: 'Guardando estado',
   complete: 'Completado',
+}
+
+type DeviceSectionKey = 'dashboard' | 'sync' | DeviceLibrarySection
+
+// Section tabs rendered as a second line directly under the toolbar whenever a
+// device view is open. Mirrors the device's sidebar sub-items so the active
+// section is switchable from the top chrome.
+function DeviceSectionTabs({
+  deviceId,
+  section,
+  onNavigate,
+}: {
+  deviceId: string
+  section: DeviceSectionKey
+  onNavigate: (v: View) => void
+}) {
+  const devices = useDeviceStore(s => s.devices)
+  const device = devices.find(item => item.id === deviceId) ?? null
+  const tabs: Array<{ key: DeviceSectionKey; label: string; icon: IconName; badge?: number }> = [
+    { key: 'dashboard', label: 'Resumen', icon: 'device' },
+    { key: 'sync', label: 'Sync', icon: 'sync' },
+    { key: 'library', label: 'Biblioteca', icon: 'album', badge: device?.trackCount || undefined },
+    { key: 'playlists', label: 'Playlists', icon: 'queue' },
+  ]
+  if (device?.hasRockbox) {
+    tabs.push({ key: 'rockboxThemes', label: 'Rockbox Themes', icon: 'sparkle' })
+  }
+  return (
+    <nav className="device-section-tabs" aria-label="Secciones del dispositivo">
+      {tabs.map(tab => (
+        <button
+          key={tab.key}
+          type="button"
+          className={`device-section-tab ${section === tab.key ? 'active' : ''}`}
+          aria-current={section === tab.key ? 'page' : undefined}
+          onClick={() => onNavigate({ kind: 'device', deviceId, section: tab.key })}
+        >
+          <Icon name={tab.icon} size={14} />
+          {tab.label}
+          {tab.badge != null && <span className="device-tab-badge">{tab.badge.toLocaleString()}</span>}
+        </button>
+      ))}
+    </nav>
+  )
+}
+
+const DEVICE_SYNC_SUBTABS: Array<{ key: DeviceSyncTab; label: string; icon: IconName }> = [
+  { key: 'sync', label: 'Sincronización', icon: 'sync' },
+  { key: 'optimize', label: 'Optimizar', icon: 'sparkle' },
+  { key: 'config', label: 'Configuración', icon: 'sliders' },
+]
+
+// Second navbar row shown under DeviceSectionTabs while the Sync section is open.
+// Drives the sub-view rendered inside DeviceSyncView.
+function DeviceSyncSubTabs({
+  active,
+  onChange,
+}: {
+  active: DeviceSyncTab
+  onChange: (tab: DeviceSyncTab) => void
+}) {
+  return (
+    <nav className="device-section-tabs device-section-subtabs" role="tablist" aria-label="Vista de sincronización">
+      {DEVICE_SYNC_SUBTABS.map(tab => (
+        <button
+          key={tab.key}
+          type="button"
+          role="tab"
+          aria-selected={active === tab.key}
+          className={`device-section-tab ${active === tab.key ? 'active' : ''}`}
+          onClick={() => onChange(tab.key)}
+        >
+          <Icon name={tab.icon} size={14} />
+          {tab.label}
+        </button>
+      ))}
+    </nav>
+  )
 }
 
 function DeviceSyncStatusBar({ withFloatingPlayer }: { withFloatingPlayer: boolean }) {
@@ -215,6 +294,9 @@ export default function App() {
   const [history, setHistory] = useState<View[]>([{ kind: 'library' }])
   const [idx, setIdx] = useState(0)
   const [expanded, setExpanded] = useState(false)
+  // Active sub-tab of the device Sync section, rendered as the navbar's second
+  // row. Lifted here so the top chrome owns it; reset per device below.
+  const [syncTab, setSyncTab] = useState<DeviceSyncTab>('sync')
   const [searchQuery, setSearchQuery] = useState('')
   const [searchScope, setSearchScope] = useState<'global' | 'view'>('view')
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -236,6 +318,12 @@ export default function App() {
   const frameRef = useRef<HTMLDivElement>(null)
   const scrollPositionsRef = useRef(new Map<number, number>())
   const view = history[idx]
+  // Default the Sync sub-tab back to Sincronización whenever the open device
+  // changes, so each device starts on its primary view.
+  const deviceViewId = view.kind === 'device' ? view.deviceId : null
+  useEffect(() => {
+    setSyncTab('sync')
+  }, [deviceViewId])
   const viewAlbum = view.kind === 'album' ? view.album : null
   const viewAlbumId = viewAlbum?.id
   const viewAlbumTrackCount = viewAlbum?.tracks.length ?? 0
@@ -650,7 +738,7 @@ export default function App() {
         return <DevicesView />
       case 'device':
         if (view.section === 'dashboard') return <DevicesView deviceId={view.deviceId} />
-        if (view.section === 'sync') return <DeviceSyncView deviceId={view.deviceId} />
+        if (view.section === 'sync') return <DeviceSyncView deviceId={view.deviceId} syncTab={syncTab} onSyncTabChange={setSyncTab} />
         return <DeviceLibraryView deviceId={view.deviceId} section={view.section} />
       case 'genres':
         return <GenresView onSelectAlbum={al => navigate({ kind: 'album', album: al })} />
@@ -710,6 +798,16 @@ export default function App() {
               canTogglePlayerPane={canShowPlayerPane}
               onTogglePlayerPane={() => setPlayerPaneOpen(open => !open)}
             />
+            {view.kind === 'device' && (
+              <DeviceSectionTabs
+                deviceId={view.deviceId}
+                section={view.section}
+                onNavigate={navigate}
+              />
+            )}
+            {view.kind === 'device' && view.section === 'sync' && (
+              <DeviceSyncSubTabs active={syncTab} onChange={setSyncTab} />
+            )}
             <div
               ref={contentRef}
               className="content"
