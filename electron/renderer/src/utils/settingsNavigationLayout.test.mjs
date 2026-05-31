@@ -45,12 +45,13 @@ test('updates section exposes GitHub release controls', () => {
   assert.ok(css.includes('.update-card'), 'Updates section should be styled')
 })
 
-test('sidebar and volume prompt route users to the new homes', () => {
+test('sidebar and activity center route users to the new homes', () => {
   assert.ok(sidebarSource.includes("const addDevice = () => setView({ kind: 'devices' })"), 'Sidebar add-device action should open Devices')
   assert.ok(!sidebarSource.includes("label=\"Ajustes de dispositivos\" onClick={() => setView({ kind: 'settings' })}"), 'Sidebar should not send device settings to Preferences')
-  assert.ok(appSource.includes('Clasificalo desde Preferencias &gt; Bibliotecas.'), 'Global volume prompt should defer classification')
-  assert.ok(appSource.includes('onReviewLibraries'), 'Global volume prompt should navigate to Bibliotecas')
-  assert.ok(!appSource.includes('onOpenDevice'), 'Global volume prompt should not connect MP3s directly')
+  assert.ok(appSource.includes('<ActivityCenter'), 'App should render the global activity center')
+  assert.ok(appSource.includes("case 'open-libraries'"), 'Activity center should route volume classification to Bibliotecas')
+  assert.ok(appSource.includes("case 'connect-device'"), 'Activity center should connect MP3 volumes from actions')
+  assert.ok(appSource.includes('<DeviceConnectModal'), 'App should centralize the device connect modal')
 })
 
 test('old settings tab styles were removed from the stylesheet', () => {

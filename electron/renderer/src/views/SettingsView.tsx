@@ -5,7 +5,7 @@ import { useEqStore } from '@renderer/stores/eqStore'
 import { Icon } from '@renderer/components/Icon'
 import { ModalShell } from '@renderer/components/ModalShell'
 import { FolderRemovalConfirmModal } from '@renderer/components/FolderRemovalConfirmModal'
-import { DeviceConnectModal, type DeviceConnectTarget } from '@renderer/components/DeviceConnectModal'
+import type { DeviceConnectTarget } from '@renderer/components/DeviceConnectModal'
 import { useDeviceStore } from '@renderer/stores/deviceStore'
 import { useFolders, useLibraryStore } from '@renderer/stores/libraryStore'
 import { EQ_BAND_LABELS, EQ_GAIN_MAX, EQ_GAIN_MIN, EQ_GAIN_STEP } from '@shared/constants/equalizer'
@@ -45,9 +45,14 @@ export type PlaybackSubTab = 'general' | 'eq' | 'letras'
 interface SettingsViewProps extends Props {
   activeTab: SettingsMainTab
   playbackSubTab: PlaybackSubTab
+  onConnectDevice: (target: DeviceConnectTarget) => void
 }
 
-function LibraryVolumeClassificationPanel({ tweak }: Pick<Props, 'tweak'>) {
+function LibraryVolumeClassificationPanel({
+  onConnectDevice,
+}: {
+  onConnectDevice: (target: DeviceConnectTarget) => void
+}) {
   const devices = useDeviceStore(s => s.devices)
   const candidates = useDeviceStore(s => s.candidates)
   const unknownVolumes = useDeviceStore(s => s.unknownVolumes)
@@ -57,7 +62,6 @@ function LibraryVolumeClassificationPanel({ tweak }: Pick<Props, 'tweak'>) {
   const ignoreVolume = useDeviceStore(s => s.ignoreVolume)
   const addFolder = useLibraryStore(s => s.addFolder)
   const folders = useFolders()
-  const [connectTarget, setConnectTarget] = useState<DeviceConnectTarget | null>(null)
 
   useEffect(() => {
     void refreshVolumes()
@@ -69,7 +73,7 @@ function LibraryVolumeClassificationPanel({ tweak }: Pick<Props, 'tweak'>) {
   const pickDeviceRoot = async () => {
     const picked = await window.api.devices.pickRoot()
     if (picked.canceled || !picked.path) return
-    setConnectTarget({
+    onConnectDevice({
       rootPath: picked.path,
       name: basenameForPath(picked.path),
     })
@@ -137,7 +141,7 @@ function LibraryVolumeClassificationPanel({ tweak }: Pick<Props, 'tweak'>) {
                     className="btn"
                     type="button"
                     disabled={loading || connectedRoots.has(candidate.rootPath)}
-                    onClick={() => setConnectTarget({ rootPath: candidate.rootPath, name: candidate.name })}
+                    onClick={() => onConnectDevice({ rootPath: candidate.rootPath, name: candidate.name })}
                   >
                     MP3
                   </button>
@@ -165,7 +169,7 @@ function LibraryVolumeClassificationPanel({ tweak }: Pick<Props, 'tweak'>) {
                       className="btn"
                       type="button"
                       disabled={loading}
-                      onClick={() => setConnectTarget({ rootPath: volume.rootPath, name: volume.name })}
+                      onClick={() => onConnectDevice({ rootPath: volume.rootPath, name: volume.name })}
                     >
                       MP3
                     </button>
@@ -187,15 +191,6 @@ function LibraryVolumeClassificationPanel({ tweak }: Pick<Props, 'tweak'>) {
           )}
         </div>
       </div>
-      {connectTarget && (
-        <DeviceConnectModal
-          target={connectTarget}
-          artworkMaxEdge={tweak.deviceArtworkMaxEdge}
-          onClose={() => {
-            setConnectTarget(null)
-          }}
-        />
-      )}
     </div>
   )
 }
@@ -794,17 +789,19 @@ function LibrariesSection({
   setTweak,
   libraryLogOpen,
   setLibraryLogOpen,
+  onConnectDevice,
 }: {
   tweak: Tweak
   setTweak: <K extends keyof Tweak>(key: K, value: Tweak[K]) => void
   libraryLogOpen: boolean
   setLibraryLogOpen: (value: boolean | ((value: boolean) => boolean)) => void
+  onConnectDevice: (target: DeviceConnectTarget) => void
 }) {
   return (
     <section className="set-section">
       <h2>Bibliotecas</h2>
       <LibraryFoldersPanel />
-      <LibraryVolumeClassificationPanel tweak={tweak} />
+      <LibraryVolumeClassificationPanel onConnectDevice={onConnectDevice} />
       <div className="set-card">
         <div className="set-row">
           <div>
@@ -1006,7 +1003,7 @@ function UpdatesSection() {
   )
 }
 
-export function SettingsView({ tweak, setTweak, activeTab, playbackSubTab }: SettingsViewProps) {
+export function SettingsView({ tweak, setTweak, activeTab, playbackSubTab, onConnectDevice }: SettingsViewProps) {
   const [libraryLogOpen, setLibraryLogOpen] = useState(false)
 
   return (
@@ -1031,6 +1028,7 @@ export function SettingsView({ tweak, setTweak, activeTab, playbackSubTab }: Set
             setTweak={setTweak}
             libraryLogOpen={libraryLogOpen}
             setLibraryLogOpen={setLibraryLogOpen}
+            onConnectDevice={onConnectDevice}
           />
         ) : (
           <UpdatesSection />

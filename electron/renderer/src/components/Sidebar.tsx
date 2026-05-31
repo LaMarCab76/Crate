@@ -1,7 +1,7 @@
-import { useEffect, useState, type CSSProperties } from 'react'
+import { useEffect, type CSSProperties } from 'react'
 import type { Artist, Playlist } from '@shared/types/library'
 import { Artwork } from './Artwork'
-import { DeviceConnectModal, type DeviceConnectTarget } from './DeviceConnectModal'
+import type { DeviceConnectTarget } from './DeviceConnectModal'
 import { Icon, type IconName } from './Icon'
 import type { View } from '@renderer/App'
 import { useDeviceStore } from '@renderer/stores/deviceStore'
@@ -11,7 +11,6 @@ import {
   usePlaylists,
   useTrackCount,
 } from '@renderer/stores/libraryStore'
-import { useTweakStore } from '@renderer/stores/settingsStore'
 import { visibleSidebarDevices } from '@renderer/utils/sidebarDevices'
 import crateLogo from '@renderer/assets/crate-logo.png'
 
@@ -24,6 +23,7 @@ interface SidebarProps {
   onSelectArtist: (a: Artist) => void
   onSelectFavoriteTracks: () => void
   favoriteTracksCount: number
+  onConnectDevice: (target: DeviceConnectTarget) => void
 }
 
 function SectionLabel({ label, onAdd, title }: { label: string; onAdd?: () => void; title?: string }) {
@@ -48,6 +48,7 @@ export function Sidebar({
   onSelectArtist,
   onSelectFavoriteTracks,
   favoriteTracksCount,
+  onConnectDevice,
 }: SidebarProps) {
   const artists = useFavoriteArtists()
   const playlists = usePlaylists()
@@ -58,8 +59,6 @@ export function Sidebar({
   const candidates = useDeviceStore(s => s.candidates)
   const loadDevices = useDeviceStore(s => s.load)
   const refreshVolumes = useDeviceStore(s => s.refreshVolumes)
-  const defaultArtworkMaxEdge = useTweakStore(s => s.tweak.deviceArtworkMaxEdge)
-  const [connectTarget, setConnectTarget] = useState<DeviceConnectTarget | null>(null)
 
   useEffect(() => {
     void loadDevices()
@@ -138,7 +137,7 @@ export function Sidebar({
           <div
             className="sb-item sb-candidate"
             key={candidate.rootPath}
-            onClick={() => setConnectTarget({ rootPath: candidate.rootPath, name: candidate.name })}
+            onClick={() => onConnectDevice({ rootPath: candidate.rootPath, name: candidate.name })}
             role="button"
             tabIndex={0}
             title={candidate.rootPath}
@@ -206,14 +205,6 @@ export function Sidebar({
           ))
         )}
       </div>
-      {connectTarget && (
-        <DeviceConnectModal
-          target={connectTarget}
-          artworkMaxEdge={defaultArtworkMaxEdge}
-          onConnected={device => setView({ kind: 'device', deviceId: device.id, section: 'dashboard' })}
-          onClose={() => setConnectTarget(null)}
-        />
-      )}
     </div>
   )
 }

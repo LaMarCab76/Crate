@@ -22,6 +22,10 @@ interface ToolbarProps {
   playerPaneOpen: boolean
   canTogglePlayerPane: boolean
   onTogglePlayerPane: () => void
+  activityOpen: boolean
+  activityActiveCount: number
+  activityUnreadCount: number
+  onToggleActivityCenter: () => void
 }
 
 const titleMap: Record<View['kind'], string> = {
@@ -37,6 +41,7 @@ const titleMap: Record<View['kind'], string> = {
   search: 'Search',
   settings: 'Preferences',
   import: 'Library Sources',
+  downloads: 'Downloads',
   devices: 'Devices',
   device: 'Device',
 }
@@ -74,6 +79,10 @@ export function Toolbar({
   playerPaneOpen,
   canTogglePlayerPane,
   onTogglePlayerPane,
+  activityOpen,
+  activityActiveCount,
+  activityUnreadCount,
+  onToggleActivityCenter,
 }: ToolbarProps) {
   const isSearchView = view.kind === 'search'
   const isViewMode = searchScope === 'view' && viewQueryable
@@ -88,6 +97,7 @@ export function Toolbar({
   const deviceName =
     view.kind === 'device' ? devices.find(d => d.id === view.deviceId)?.name ?? null : null
   const title = deviceName ?? titleForView(view)
+  const hasActiveActivity = activityActiveCount > 0
 
   // Auto-focus when entering the global SearchView.
   useEffect(() => {
@@ -174,6 +184,24 @@ export function Toolbar({
           <span className="mono tiny" style={{ color: 'var(--text-quaternary)' }}>⌘F</span>
         )}
       </div>
+
+      <button
+        className={`tb-icon-btn tb-activity-btn ${activityOpen ? 'active' : ''} ${hasActiveActivity ? 'in-progress' : ''}`}
+        onClick={onToggleActivityCenter}
+        title="Actividad"
+        aria-label="Actividad"
+        aria-pressed={activityOpen}
+      >
+        <Icon
+          name={hasActiveActivity ? 'loader' : 'activity'}
+          className={hasActiveActivity ? 'tb-activity-loader' : undefined}
+        />
+        {(activityActiveCount > 0 || activityUnreadCount > 0) && (
+          <span className={`tb-activity-badge ${activityActiveCount > 0 ? 'active' : ''}`}>
+            {activityActiveCount > 0 ? activityActiveCount : activityUnreadCount}
+          </span>
+        )}
+      </button>
 
       <button
         className={`tb-icon-btn tb-layout-toggle ${playerPaneOpen ? 'active' : ''}`}

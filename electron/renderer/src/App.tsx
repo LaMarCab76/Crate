@@ -9,6 +9,8 @@ import { LyricsSidePane } from './components/LyricsSidePane'
 import { UpNextToast } from './components/UpNextToast'
 import { NowPlayingFull } from './components/NowPlayingFull'
 import { LyricsCandidates } from './components/LyricsCandidates'
+import { ActivityCenter } from './components/ActivityCenter'
+import { DeviceConnectModal, type DeviceConnectTarget } from './components/DeviceConnectModal'
 import { LibraryView } from './views/LibraryView'
 import { AlbumsView } from './views/AlbumsView'
 import { AlbumView } from './views/AlbumView'
@@ -19,6 +21,7 @@ import { SearchView } from './views/SearchView'
 import { SettingsView, type PlaybackSubTab, type SettingsMainTab } from './views/SettingsView'
 import { ImportView } from './views/ImportView'
 import { GenresView } from './views/GenresView'
+import { DownloadsView } from './views/DownloadsView'
 import { DevicesView, type DeviceDashboardTab } from './views/DevicesView'
 import { DeviceSyncView, type DeviceSyncTab } from './views/DeviceSyncView'
 import { DeviceLibraryView, type DeviceLibrarySection } from './views/DeviceLibraryView'
@@ -26,6 +29,12 @@ import { useTweaks, useListPrefsStore } from './stores/settingsStore'
 import { useAlbumByUiId, useFavoriteTracks, useLibraryStore } from './stores/libraryStore'
 import { usePlaybackStore } from './stores/playbackStore'
 import { useDeviceStore } from './stores/deviceStore'
+import {
+  isActiveActivityStatus,
+  useActivityCenterStore,
+  type ActivityActionId,
+  type ActivityItem,
+} from './stores/activityCenterStore'
 import { installAutoHideScrollbars } from './utils/autoHideScrollbars'
 import { extractDominantColor } from './utils/colorExtract'
 import { vivify } from './utils/colorAdjust'
@@ -39,6 +48,7 @@ export type View =
   | { kind: 'search' }
   | { kind: 'settings' }
   | { kind: 'import' }
+  | { kind: 'downloads' }
   | { kind: 'devices' }
   | { kind: 'device'; deviceId: string; section: 'dashboard' | 'sync' | DeviceLibrarySection }
   | { kind: 'album'; album: Album }
@@ -90,18 +100,6 @@ function loadPersistedBool(key: string, fallback: boolean): boolean {
   }
 }
 
-const DEVICE_SYNC_PHASE_LABELS: Record<string, string> = {
-  discovering: 'Buscando',
-  reading: 'Leyendo',
-  fetching_lyrics: 'Buscando letras',
-  copying: 'Copiando',
-  deleting: 'Eliminando',
-  refreshing: 'Actualizando',
-  optimizing_artwork: 'Optimizando artwork',
-  writing_state: 'Guardando estado',
-  complete: 'Completado',
-}
-
 type DeviceSectionKey = 'dashboard' | 'sync' | DeviceLibrarySection
 type DeviceNavbarSubTab<Key extends string> = { key: Key; label: string; icon: IconName }
 
@@ -110,15 +108,17 @@ function DeviceNavbarSubTabs<Key extends string>({
   active,
   ariaLabel,
   onChange,
+  variant = 'secondary',
 }: {
   tabs: Array<DeviceNavbarSubTab<Key>>
   active: Key
   ariaLabel: string
   onChange: (tab: Key) => void
+  variant?: 'primary' | 'secondary'
 }) {
   return (
     <nav
-      className="device-section-tabs device-section-subtabs"
+      className={variant === 'secondary' ? 'device-section-tabs device-section-subtabs' : 'device-section-tabs'}
       role="tablist"
       aria-label={ariaLabel}
     >
@@ -231,57 +231,6 @@ function SettingsSectionTabs({
   )
 }
 
-function DeviceSyncStatusBar({ withFloatingPlayer }: { withFloatingPlayer: boolean }) {
-  const devices = useDeviceStore(s => s.devices)
-  const scanProgress = useDeviceStore(s => s.scanProgress)
-  const syncProgress = useDeviceStore(s => s.syncProgress)
-  const progress = syncProgress ?? scanProgress
-  if (!progress) return null
-
-  const device = devices.find(item => item.id === progress.deviceId)
-  const total = Math.max(progress.total, 0)
-  const completed = syncProgress ? syncProgress.completed : scanProgress?.scanned ?? 0
-  const pct = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0
-  const phase = DEVICE_SYNC_PHASE_LABELS[progress.phase] ?? progress.phase
-  const currentPath = syncProgress?.currentPath
-
-  return (
-    <div className={`device-sync-status-bar ${withFloatingPlayer ? 'with-player' : ''}`}>
-      <Icon name="sync" size={15} />
-      <div className="device-sync-status-main">
-        <strong>{device?.name ?? 'Dispositivo'}</strong>
-        <span>{phase}{currentPath ? ` · ${currentPath}` : ''}</span>
-      </div>
-      <div className="device-sync-status-track" aria-hidden="true">
-        <i style={{ width: `${pct}%` }} />
-      </div>
-      <span className="mono">{total > 0 ? `${completed}/${total}` : '...'}</span>
-    </div>
-  )
-}
-
-function DeviceVolumePrompt({ onReviewLibraries }: { onReviewLibraries: () => void }) {
-  const unknownVolumes = useDeviceStore(s => s.unknownVolumes)
-  const volume = unknownVolumes[0]
-  if (!volume) return null
-
-  return (
-    <div className="device-volume-prompt">
-      <Icon name="folder" size={18} />
-      <div className="device-volume-prompt-main">
-        <strong>Nuevo volumen detectado</strong>
-        <span title={volume.rootPath}>{volume.name} · {volume.rootPath}</span>
-        <em>Clasificalo desde Preferencias &gt; Bibliotecas.</em>
-      </div>
-      <div className="device-volume-prompt-actions">
-        <button className="btn primary" type="button" onClick={onReviewLibraries}>
-          <Icon name="folder" size={13} /> Ver Bibliotecas
-        </button>
-      </div>
-    </div>
-  )
-}
-
 export default function App() {
   const [tweak, setTweak] = useTweaks()
   const [history, setHistory] = useState<View[]>([{ kind: 'library' }])
@@ -332,10 +281,23 @@ export default function App() {
 
   const refresh = useLibraryStore(s => s.refresh)
   const loaded = useLibraryStore(s => s.loaded)
+  const addFolder = useLibraryStore(s => s.addFolder)
   const loadPendingDeviceJournals = useDeviceStore(s => s.loadPendingJournals)
   const refreshDeviceVolumes = useDeviceStore(s => s.refreshVolumes)
-  const scanProgress = useDeviceStore(s => s.scanProgress)
-  const syncProgress = useDeviceStore(s => s.syncProgress)
+  const ignoreVolume = useDeviceStore(s => s.ignoreVolume)
+  const selectedDeviceId = useDeviceStore(s => s.selectedDeviceId)
+  const activityItems = useActivityCenterStore(s => s.items)
+  const activityOpen = useActivityCenterStore(s => s.open)
+  const activityPinned = useActivityCenterStore(s => s.pinned)
+  const activityFullscreen = useActivityCenterStore(s => s.fullscreen)
+  const toggleActivityPanel = useActivityCenterStore(s => s.togglePanel)
+  const closeActivityPanel = useActivityCenterStore(s => s.closePanel)
+  const setActivityPinned = useActivityCenterStore(s => s.setPinned)
+  const setActivityFullscreen = useActivityCenterStore(s => s.setFullscreen)
+  const markActivityRead = useActivityCenterStore(s => s.markAllRead)
+  const clearResolvedActivity = useActivityCenterStore(s => s.clearResolved)
+  const completeActivity = useActivityCenterStore(s => s.completeActivity)
+  const upsertActivity = useActivityCenterStore(s => s.upsert)
   const nowTrack = usePlaybackStore(s => s.currentTrack)
   const playbackStatus = usePlaybackStore(s => s.status)
   const nowAlbum = useAlbumByUiId(nowTrack?.albumId)
@@ -353,9 +315,11 @@ export default function App() {
   const isBottomPlayerClosing = bottomPlayerVisible && !showBottomPlayer
   const [playingTint, setPlayingTint] = useState<string | null>(null)
   const [albumTint, setAlbumTint] = useState<string | null>(null)
+  const [connectTarget, setConnectTarget] = useState<DeviceConnectTarget | null>(null)
   const playingArtworkPath = nowAlbum?.artworkPath ?? nowTrack?.artworkPath ?? null
   const isPlaying = playbackStatus === 'playing'
-  const deviceProgressVisible = scanProgress != null || syncProgress != null
+  const activityActiveCount = activityItems.filter(item => isActiveActivityStatus(item.status)).length
+  const activityUnreadCount = activityItems.filter(item => !item.read).length
 
   // Which listPrefs key corresponds to the current view for contextual search.
   // Views that don't support text filtering (album detail, artist detail, recent,
@@ -494,6 +458,93 @@ export default function App() {
     if (idx >= history.length - 1) return
     saveCurrentScroll()
     setIdx(idx + 1)
+  }
+
+  const finishActivityNavigation = () => {
+    if (activityFullscreen) setActivityFullscreen(false)
+    if (!activityPinned) closeActivityPanel()
+  }
+
+  const openSettingsFromActivity = (tab: SettingsMainTab, playbackTab?: PlaybackSubTab) => {
+    setSettingsTab(tab)
+    if (playbackTab) setSettingsPlaybackTab(playbackTab)
+    navigate({ kind: 'settings' }, { replace: view.kind === 'settings' })
+    finishActivityNavigation()
+  }
+
+  const activityError = (item: ActivityItem, err: unknown) => {
+    upsertActivity({
+      id: item.id,
+      category: item.category,
+      status: 'error',
+      title: item.title,
+      detail: err instanceof Error ? err.message : String(err),
+      metadata: item.metadata,
+      actionIds: item.actionIds,
+    })
+  }
+
+  const handleActivityAction = async (actionId: ActivityActionId, item: ActivityItem) => {
+    const deviceId = typeof item.metadata.deviceId === 'string' ? item.metadata.deviceId : null
+    const rootPath = typeof item.metadata.rootPath === 'string' ? item.metadata.rootPath : null
+    const volumeName = typeof item.metadata.volumeName === 'string' ? item.metadata.volumeName : undefined
+
+    switch (actionId) {
+      case 'open-device':
+        if (deviceId) {
+          navigate({ kind: 'device', deviceId, section: 'dashboard' })
+          finishActivityNavigation()
+        }
+        break
+      case 'open-device-sync':
+        if (deviceId) {
+          navigate({ kind: 'device', deviceId, section: 'sync' })
+          finishActivityNavigation()
+        }
+        break
+      case 'open-libraries':
+        openSettingsFromActivity('bibliotecas')
+        break
+      case 'open-lyrics-settings':
+        openSettingsFromActivity('reproduccion', 'letras')
+        break
+      case 'open-downloads':
+        navigate({ kind: 'downloads' })
+        finishActivityNavigation()
+        break
+      case 'open-import':
+        navigate({ kind: 'import' })
+        finishActivityNavigation()
+        break
+      case 'open-updates':
+        openSettingsFromActivity('actualizaciones')
+        break
+      case 'connect-device':
+        if (rootPath) {
+          setActivityFullscreen(false)
+          setConnectTarget({ rootPath, name: volumeName })
+        }
+        break
+      case 'add-library':
+        if (!rootPath) break
+        try {
+          await addFolder(rootPath)
+          await ignoreVolume(rootPath)
+          completeActivity(item.id, 'Volumen agregado como biblioteca.')
+        } catch (err) {
+          activityError(item, err)
+        }
+        break
+      case 'ignore-volume':
+        if (!rootPath) break
+        try {
+          await ignoreVolume(rootPath)
+          completeActivity(item.id, 'Volumen ignorado.')
+        } catch (err) {
+          activityError(item, err)
+        }
+        break
+    }
   }
 
   useEffect(() => {
@@ -734,10 +785,13 @@ export default function App() {
             setTweak={setTweak}
             activeTab={settingsTab}
             playbackSubTab={settingsPlaybackTab}
+            onConnectDevice={setConnectTarget}
           />
         )
       case 'import':
         return <ImportView />
+      case 'downloads':
+        return <DownloadsView />
       case 'devices':
         return (
           <DevicesView
@@ -781,6 +835,7 @@ export default function App() {
             onSelectArtist={ar => navigate({ kind: 'artist', artist: ar })}
             onSelectFavoriteTracks={() => navigate({ kind: 'favoriteTracks' })}
             favoriteTracksCount={favoriteTracks.length}
+            onConnectDevice={setConnectTarget}
           />
 
           {sidebarOpen && (
@@ -792,7 +847,7 @@ export default function App() {
             />
           )}
 
-          <div className={`main-area ${sidebarOpen ? 'with-sidebar' : 'without-sidebar'} ${bottomPlayerVisible ? 'with-floating-player' : ''} ${deviceProgressVisible ? 'with-device-sync' : ''}`}>
+          <div className={`main-area ${sidebarOpen ? 'with-sidebar' : 'without-sidebar'} ${bottomPlayerVisible ? 'with-floating-player' : ''}`}>
             <Toolbar
               view={view}
               history={history}
@@ -812,8 +867,31 @@ export default function App() {
               playerPaneOpen={isPlayerPaneOpen}
               canTogglePlayerPane={canShowPlayerPane}
               onTogglePlayerPane={() => setPlayerPaneOpen(open => !open)}
+              activityOpen={activityOpen}
+              activityActiveCount={activityActiveCount}
+              activityUnreadCount={activityUnreadCount}
+              onToggleActivityCenter={toggleActivityPanel}
             />
-            {view.kind === 'device' && (
+            <ActivityCenter
+              open={activityOpen}
+              pinned={activityPinned}
+              fullscreen={activityFullscreen}
+              items={activityItems}
+              onClose={closeActivityPanel}
+              onTogglePinned={() => setActivityPinned(!activityPinned)}
+              onToggleFullscreen={() => setActivityFullscreen(!activityFullscreen)}
+              onMarkAllRead={markActivityRead}
+              onClearResolved={clearResolvedActivity}
+              onAction={(actionId, item) => { void handleActivityAction(actionId, item) }}
+            />
+            {view.kind === 'devices' && selectedDeviceId && (
+              <DeviceSectionTabs
+                deviceId={selectedDeviceId}
+                section="dashboard"
+                onNavigate={navigate}
+              />
+            )}
+            {view.kind === 'device' && view.section !== 'sync' && (
               <DeviceSectionTabs
                 deviceId={view.deviceId}
                 section={view.section}
@@ -834,6 +912,7 @@ export default function App() {
                 active={syncTab}
                 ariaLabel="Vista de sincronización"
                 onChange={setSyncTab}
+                variant="primary"
               />
             )}
             {view.kind === 'settings' && (
@@ -853,13 +932,6 @@ export default function App() {
             >
               {renderContent()}
             </div>
-            <DeviceSyncStatusBar withFloatingPlayer={bottomPlayerVisible} />
-            <DeviceVolumePrompt
-              onReviewLibraries={() => {
-                setSettingsTab('bibliotecas')
-                navigate({ kind: 'settings' }, { replace: view.kind === 'settings' })
-              }}
-            />
           </div>
 
           {playerPaneVisible && (
@@ -919,6 +991,17 @@ export default function App() {
         )}
 
         <LyricsCandidates />
+        {connectTarget && (
+          <DeviceConnectModal
+            target={connectTarget}
+            artworkMaxEdge={tweak.deviceArtworkMaxEdge}
+            onConnected={device => {
+              setConnectTarget(null)
+              navigate({ kind: 'device', deviceId: device.id, section: 'dashboard' })
+            }}
+            onClose={() => setConnectTarget(null)}
+          />
+        )}
       </div>
     </div>
   )
