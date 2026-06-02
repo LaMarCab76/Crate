@@ -3,6 +3,11 @@ export const PLAYBACK_MEMORY_RESERVE_BYTES = 512 * 1024 * 1024
 export const PLAYBACK_MEMORY_SMALL_TRACK_BYTES = 128 * 1024 * 1024
 export const PLAYBACK_MEMORY_MIN_FREE_AFTER_SMALL_TRACK_BYTES = 256 * 1024 * 1024
 export const PLAYBACK_MEMORY_MAX_TRACK_BYTES = 2 * 1024 * 1024 * 1024
+// When a track is already in memory, we allow preloading a *second* track into
+// memory (gapless dual-stream) as long as the system still has more than this
+// much free RAM. This keeps two tracks resident on high-RAM machines where the
+// proportional reserve would otherwise reject the second one.
+export const TWO_TRACK_MEMORY_FREE_THRESHOLD_BYTES = 1024 * 1024 * 1024 // 1 GiB
 
 export interface ProgressiveBufferTelemetry {
   bufferedBytes: number | null
@@ -57,6 +62,10 @@ export function decidePlaybackMemoryUse(args: {
   totalMemBytes: number
   reserveBytes?: number
   maxTrackBytes?: number
+  // True when this is the second track (gapless preload) and the first one is
+  // already resident in memory. Relaxes the proportional reserve in favor of a
+  // fixed safety floor so two tracks can coexist when free RAM > 1 GB.
+  allowSecondTrack?: boolean
 }): PlaybackMemoryDecision {
   const sizeBytes = Math.max(0, Math.floor(args.fileSizeBytes))
   if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0) {
@@ -73,6 +82,18 @@ export function decidePlaybackMemoryUse(args: {
     reserveBytes: args.reserveBytes,
   })
   const freeAfterReadBytes = freeMemBytes - sizeBytes
+
+  // Second track (gapless preload) with the first already in memory: if the
+  // system still has more than 1 GB free, keep it in memory using a fixed
+  // safety floor instead of the proportional reserve, which on high-RAM
+  // machines would otherwise block the in-memory dual-stream.
+  if (
+    args.allowSecondTrack &&
+    freeMemBytes > TWO_TRACK_MEMORY_FREE_THRESHOLD_BYTES &&
+    freeAfterReadBytes >= PLAYBACK_MEMORY_MIN_FREE_AFTER_SMALL_TRACK_BYTES
+  ) {
+    return { canUse: true, reason: null, sizeBytes }
+  }
 
   if (freeAfterReadBytes <= reserveBytes) {
     const canUseSmallTrackGrace =

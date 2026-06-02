@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import {
   canRunSyncWithArtworkOnly,
   resolveOptimizeArtworkSelection,
+  shouldOptimizeArtworkBeforeDeviceCopy,
 } from './artworkSyncPreference.ts'
 
 test('explicit optimizeArtwork selection wins over the persisted device default', () => {
@@ -29,4 +30,16 @@ test('sync can run with zero copy actions when artwork optimization is selected'
   assert.equal(canRunSyncWithArtworkOnly(0, true), true)
   assert.equal(canRunSyncWithArtworkOnly(0, false), false)
   assert.equal(canRunSyncWithArtworkOnly(2, false), true)
+})
+
+test('PC to device copies stage artwork before writing to the device when enabled', () => {
+  assert.equal(shouldOptimizeArtworkBeforeDeviceCopy('copy_pc_to_device', true), true)
+  assert.equal(shouldOptimizeArtworkBeforeDeviceCopy('replace_device', true), true)
+})
+
+test('device and disabled artwork paths skip pre-copy optimization', () => {
+  assert.equal(shouldOptimizeArtworkBeforeDeviceCopy('copy_pc_to_device', false), false)
+  assert.equal(shouldOptimizeArtworkBeforeDeviceCopy('replace_device', false), false)
+  assert.equal(shouldOptimizeArtworkBeforeDeviceCopy('copy_device_to_pc', true), false)
+  assert.equal(shouldOptimizeArtworkBeforeDeviceCopy('replace_pc', true), false)
 })

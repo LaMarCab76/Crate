@@ -8,7 +8,10 @@ import {
   activityFromUnknownVolume,
   activityProgress,
   hydrateActivityItems,
+  isActiveActivityStatus,
   primaryActivityActionIdFor,
+  resolveDeviceArtworkOptimizationActivity,
+  resolveDeviceSyncActivityDiscarded,
   syncUnknownVolumeActivities,
   upsertActivityItem,
 } from './activityCenterStore.ts'
@@ -123,6 +126,106 @@ test('hydrates active persisted activities as interrupted warnings', () => {
   assert.equal(hydrated.find(item => item.id === 'running')?.read, false)
   assert.equal(hydrated.find(item => item.id === 'running')?.updatedAt, 999)
   assert.equal(hydrated.find(item => item.id === 'done')?.status, 'success')
+})
+
+test('drops interrupted persisted artwork optimization activities during hydration', () => {
+  const hydrated = hydrateActivityItems([
+    {
+      ...baseActivity('device-sync:artwork-1', 'warning', 10),
+      title: 'Optimizando artwork',
+      progress: activityProgress(44, 93),
+      metadata: { activityKind: 'device-artwork-optimization', deviceId: 'dev-1', planId: 'artwork-1' },
+    },
+    {
+      ...baseActivity('device-sync:artwork-2', 'warning', 20),
+      title: 'Artwork optimizado',
+      progress: activityProgress(93, 93),
+      metadata: { activityKind: 'device-artwork-optimization', deviceId: 'dev-1', planId: 'artwork-2' },
+    },
+  ], 999)
+
+  assert.equal(hydrated.some(item => item.id === 'device-sync:artwork-1'), false)
+  assert.equal(hydrated.some(item => item.id === 'device-sync:artwork-2'), true)
+})
+
+test('discarded device sync activities stop counting as active work', () => {
+  const runningSync = {
+    ...baseActivity('device-sync:plan-1', 'running', 100),
+    title: 'Sincronizando dispositivo',
+    detail: 'Copiando',
+    progress: activityProgress(2, 10),
+    metadata: { activityKind: 'device-sync', deviceId: 'dev-1', planId: 'plan-1' },
+    actionIds: ['open-device-sync'],
+  }
+
+  const resolved = resolveDeviceSyncActivityDiscarded([runningSync], 'plan-1', 200)
+  const item = resolved[0]
+
+  assert.equal(item.status, 'info')
+  assert.equal(isActiveActivityStatus(item.status), false)
+  assert.equal(item.title, 'Sync descartada')
+  assert.equal(item.detail, 'Sync incompleta descartada.')
+  assert.equal(item.progress, null)
+  assert.equal(item.updatedAt, 200)
+  assert.deepEqual(item.actionIds, ['open-device-sync'])
+})
+
+test('completed device artwork optimization activities stop showing as active work', () => {
+  const runningArtwork = {
+    ...baseActivity('device-sync:plan-artwork', 'running', 100),
+    title: 'Optimizando artwork',
+    detail: 'Track.flac',
+    progress: activityProgress(44, 93),
+    metadata: { activityKind: 'device-artwork-optimization', deviceId: 'dev-1', planId: 'plan-artwork' },
+    actionIds: ['open-device-sync'],
+  }
+
+  const resolved = resolveDeviceArtworkOptimizationActivity(
+    [runningArtwork],
+    'dev-1',
+    'plan-artwork',
+    'success',
+    'Se optimizaron 49 carátulas.',
+    200,
+  )
+  const item = resolved[0]
+
+  assert.equal(item.status, 'success')
+  assert.equal(isActiveActivityStatus(item.status), false)
+  assert.equal(item.title, 'Artwork optimizado')
+  assert.equal(item.detail, 'Se optimizaron 49 carátulas.')
+  assert.deepEqual(item.progress, activityProgress(93, 93))
+  assert.equal(item.updatedAt, 200)
+  assert.equal(item.metadata.activityKind, 'device-artwork-optimization')
+  assert.equal(item.metadata.planId, 'plan-artwork')
+})
+
+test('failed device artwork optimization activities stop running and keep progress context', () => {
+  const runningArtwork = {
+    ...baseActivity('device-sync:plan-artwork', 'running', 100),
+    title: 'Optimizando artwork',
+    detail: 'Track.flac',
+    progress: activityProgress(44, 93),
+    metadata: { activityKind: 'device-artwork-optimization', deviceId: 'dev-1', planId: 'plan-artwork' },
+    actionIds: ['open-device-sync'],
+  }
+
+  const resolved = resolveDeviceArtworkOptimizationActivity(
+    [runningArtwork],
+    'dev-1',
+    'plan-artwork',
+    'error',
+    'No se pudo escribir el archivo.',
+    200,
+  )
+  const item = resolved[0]
+
+  assert.equal(item.status, 'error')
+  assert.equal(isActiveActivityStatus(item.status), false)
+  assert.equal(item.title, 'Artwork no optimizado')
+  assert.equal(item.detail, 'No se pudo escribir el archivo.')
+  assert.deepEqual(item.progress, activityProgress(44, 93))
+  assert.equal(item.updatedAt, 200)
 })
 
 test('drops persisted non-actionable update activities during hydration', () => {

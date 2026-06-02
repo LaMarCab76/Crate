@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
 const css = readFileSync(new URL('../styles/globals.css', import.meta.url), 'utf8')
+const syncSource = readFileSync(new URL('../views/DeviceSyncView.tsx', import.meta.url), 'utf8')
 
 function cssBlock(selector) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -77,14 +78,122 @@ test('refactored sync controls (base selector, section tabs, destination) are st
 test('sync wizard stepper, two columns and per-track side toggle are styled', () => {
   const steps = cssBlock('.device-sync-steps')
   const step = cssBlock('.device-sync-step')
+  const stage = cssBlock('.device-sync-stage.device-sync-activity-tab')
+  const wizard = cssBlock('.device-sync-wizard')
+  const diff = cssBlock('.device-sync-diff,\n.device-sync-result')
   const columns = cssBlock('.device-sync-columns')
+  const side = cssBlock('.device-sync-side')
+  const groups = cssBlock('.device-sync-side-groups')
+  const global = cssBlock('.device-side-global')
   const toggle = cssBlock('.device-side-toggle')
 
   assert.equal(declaration(steps, 'display'), 'flex')
   // The active step underlines like the section tabs.
   assert.equal(declaration(step, 'border-bottom'), '2px solid transparent')
-  // Vista 1 / Vista 2 are always two side-by-side columns (PC | MP3).
+  assert.equal(declaration(stage, 'width'), '100%')
+  assert.equal(declaration(stage, 'max-width'), 'none')
+  assert.equal(declaration(wizard, 'grid-template-rows'), 'auto minmax(0, 1fr) auto')
+  assert.equal(declaration(wizard, 'min-height'), '460px')
+  assert.equal(declaration(diff, 'min-height'), '0')
+  // Vista 1 / Vista 2 fill the available width as two side-by-side columns (PC | MP3).
   assert.equal(declaration(columns, 'display'), 'grid')
   assert.equal(declaration(columns, 'grid-template-columns'), 'repeat(2, minmax(0, 1fr))')
+  assert.equal(declaration(columns, 'align-items'), 'stretch')
+  assert.equal(declaration(side, 'min-height'), '0')
+  assert.equal(declaration(groups, 'max-height'), 'none')
+  assert.equal(declaration(global, 'display'), 'inline-flex')
   assert.equal(declaration(toggle, 'display'), 'inline-flex')
+})
+
+test('sync diff exposes visible global side controls without artwork optimization locking them', () => {
+  assert.ok(syncSource.includes('Tomar todo de PC'), 'Diff should expose a global PC winner control')
+  assert.ok(syncSource.includes('Tomar todo de MP3'), 'Diff should expose a global MP3 winner control')
+  assert.ok(syncSource.includes("const planEditingLocked = applying || (syncRunning && activeProgress?.phase !== 'optimizing_artwork')"), 'Artwork-only optimization should not lock diff controls')
+  assert.ok(syncSource.includes('loading={planEditingLocked}'), 'Diff controls should use the plan editing lock')
+})
+
+test('discarding a pending sync resolves the activity center item for its plan', () => {
+  const start = syncSource.indexOf('const discardPendingJournal = useCallback')
+  const end = syncSource.indexOf('const isSyncRun', start)
+  const discardBlock = syncSource.slice(start, end)
+
+  assert.ok(start >= 0 && end > start, 'discardPendingJournal block should be discoverable')
+  assert.ok(
+    syncSource.includes('const resolveDeviceSyncDiscarded = useActivityCenterStore(s => s.resolveDeviceSyncDiscarded)'),
+    'DeviceSyncView should subscribe to the activity resolution action',
+  )
+  assert.ok(
+    discardBlock.includes('const journal = pendingJournals.find(item => item.id === journalId) ?? null'),
+    'Discard should capture the journal before the store removes it',
+  )
+  assert.ok(
+    discardBlock.includes('await discardJournal(journalId)'),
+    'Discard should wait until the journal is actually discarded',
+  )
+  assert.ok(
+    discardBlock.includes('if (journal) resolveDeviceSyncDiscarded(journal.planId)'),
+    'Discard should close the activity center item for the discarded plan',
+  )
+  assert.ok(
+    syncSource.includes('onDiscard={journalId => void discardPendingJournal(journalId)}'),
+    'PendingJournalList should use the discard wrapper',
+  )
+})
+
+test('artwork optimization verifies refreshed oversized results and returns to the optimize menu', () => {
+  const start = syncSource.indexOf('const runOptimization = useCallback')
+  const end = syncSource.indexOf('const artworkProgressActive', start)
+  const runOptimizationBlock = syncSource.slice(start, end)
+
+  assert.ok(start >= 0 && end > start, 'runOptimization block should be discoverable')
+  assert.ok(
+    runOptimizationBlock.includes('const optimizedRelativePaths = selectedArtworkItems.map(item => item.relativePath)'),
+    'Optimization should capture the selected paths before the async run',
+  )
+  assert.ok(
+    runOptimizationBlock.includes('const refreshedAnalysis = await analyzeArtwork(deviceId)'),
+    'Optimization should await a fresh artwork analysis after writing files',
+  )
+  assert.ok(
+    !runOptimizationBlock.includes('analyzeArtwork(deviceId).catch(() => undefined)'),
+    'Fresh analysis errors must not be hidden after optimization',
+  )
+  assert.ok(
+    runOptimizationBlock.includes('const optimizedPathSet = new Set(optimizedRelativePaths)'),
+    'Verification should compare refreshed oversized items against optimized paths',
+  )
+  assert.ok(
+    runOptimizationBlock.includes('refreshedAnalysis.items.filter(item => optimizedPathSet.has(item.relativePath)).length'),
+    'Verification should count optimized tracks that still exceed the artwork limit',
+  )
+  assert.ok(runOptimizationBlock.includes("setArtworkQuery('')"), 'Optimization should clear active search')
+  assert.ok(runOptimizationBlock.includes('setFocusedArtworkGroupKey(null)'), 'Optimization should leave the artist/album detail view')
+  assert.ok(runOptimizationBlock.includes('setExcludedArtworkKeys(new Set())'), 'Optimization should clear stale manual exclusions')
+  assert.ok(
+    syncSource.includes('formatArtworkVerificationMessage(optimizeResult, optimizedStillOversized)'),
+    'The post-optimize message should report the verification result',
+  )
+})
+
+test('artwork optimization progress is owned by the optimize panel to avoid a duplicate header bar', () => {
+  assert.ok(
+    syncSource.includes("import { artworkOptimizationOwnsSyncProgress } from '@renderer/utils/artworkProgressOwnership'"),
+    'DeviceSyncView should use the artwork progress ownership helper',
+  )
+  assert.ok(
+    syncSource.includes('const [artworkProgressOwnedByPanel, setArtworkProgressOwnedByPanel] = useState(false)'),
+    'DeviceSyncView should track when the optimize panel owns the artwork progress',
+  )
+  assert.ok(
+    syncSource.includes('const ownsHeaderProgress = artworkOptimizationOwnsSyncProgress({'),
+    'ArtworkOptimizePanel should derive progress ownership from the active sync progress',
+  )
+  assert.ok(
+    syncSource.includes('onProgressOwnedChange(ownsHeaderProgress)'),
+    'ArtworkOptimizePanel should notify the parent while it renders the same progress',
+  )
+  assert.ok(
+    syncSource.includes('const headerProgress = artworkProgressOwnedByPanel ? null : activeProgress'),
+    'The page header should hide progress already rendered by the optimize panel',
+  )
 })

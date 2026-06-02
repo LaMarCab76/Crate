@@ -1,4 +1,4 @@
-import { type CSSProperties, type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
+import { type CSSProperties, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from 'react'
 import type { Album, Artist, Playlist } from '@shared/types/library'
 import { Sidebar } from './components/Sidebar'
 import { Toolbar } from './components/Toolbar'
@@ -318,6 +318,15 @@ export default function App() {
   const [connectTarget, setConnectTarget] = useState<DeviceConnectTarget | null>(null)
   const playingArtworkPath = nowAlbum?.artworkPath ?? nowTrack?.artworkPath ?? null
   const isPlaying = playbackStatus === 'playing'
+  // The color the player chrome (--np-tint) is currently showing: dominant
+  // artwork color in 'artwork' mode, the assigned preset/custom color otherwise.
+  // Surfaces that lack their own artwork can borrow this so the app accent stays
+  // coherent with what's playing instead of jumping to a synthetic hue.
+  const playerCurrentTint = useMemo(() => (
+    tweak.playerTintSource === 'artwork' ? playingTint
+    : (tweak.playerTintSource === 'preset' || tweak.playerTintSource === 'custom') ? tweak.playerTintColor
+    : null
+  ), [tweak.playerTintSource, tweak.playerTintColor, playingTint])
   const activityActiveCount = activityItems.filter(item => isActiveActivityStatus(item.status)).length
   const activityUnreadCount = activityItems.filter(item => !item.read).length
 
@@ -592,13 +601,17 @@ export default function App() {
   useEffect(() => {
     const root = document.documentElement
     const viewedTint = viewAlbum ? (albumTint ?? vivify(viewAlbumFallbackTint)) : null
-    const next = viewedTint ?? (isPlaying ? playingTint : null)
+    // Outside album views (library, Preferences, etc.) the window tint follows
+    // the player: whenever a track is loaded it borrows the player's current
+    // color (artwork or the assigned preset/custom). Falls back to the playing
+    // artwork color for the colorless 'default' mode, then to neutral.
+    const next = viewedTint ?? (nowTrack ? playerCurrentTint : null) ?? (isPlaying ? playingTint : null)
     if (next) {
       root.style.setProperty('--bg-tint', next)
     } else {
       root.style.removeProperty('--bg-tint')
     }
-  }, [viewAlbum, albumTint, viewAlbumFallbackTint, playingTint, isPlaying])
+  }, [viewAlbum, albumTint, viewAlbumFallbackTint, playerCurrentTint, nowTrack, playingTint, isPlaying])
 
   // Propagate --np-tint to :root so both the player pane and the lyrics side
   // pane share the same artwork-based tint. PlayerPane's own inline style
@@ -606,16 +619,12 @@ export default function App() {
   // picks up this global value since it's a DOM sibling, not a descendant.
   useEffect(() => {
     const root = document.documentElement
-    const tint =
-      tweak.playerTintSource === 'artwork' ? playingTint
-      : (tweak.playerTintSource === 'preset' || tweak.playerTintSource === 'custom') ? tweak.playerTintColor
-      : null
-    if (tint) {
-      root.style.setProperty('--np-tint', tint)
+    if (playerCurrentTint) {
+      root.style.setProperty('--np-tint', playerCurrentTint)
     } else {
       root.style.removeProperty('--np-tint')
     }
-  }, [tweak.playerTintSource, tweak.playerTintColor, playingTint])
+  }, [playerCurrentTint])
 
   // If the open album becomes empty after deletion, return to previous view.
   useEffect(() => {
@@ -641,7 +650,15 @@ export default function App() {
       return
     }
 
-    setAlbumTint(vivify(viewAlbumFallbackTint))
+    // No artwork to sample: borrow the color the player is currently showing
+    // (so an album without a cover inherits the now-playing tint) instead of the
+    // synthetic per-album hue. Only when a track is loaded; otherwise fall back
+    // to the synthetic palette as before. With artwork, keep the synthetic value
+    // as a brief placeholder until extraction resolves.
+    const fallback = viewAlbumArtworkPath
+      ? vivify(viewAlbumFallbackTint)
+      : ((nowTrack ? playerCurrentTint : null) ?? vivify(viewAlbumFallbackTint))
+    setAlbumTint(fallback)
 
     if (!viewAlbumArtworkPath) return
 
@@ -655,7 +672,7 @@ export default function App() {
     return () => {
       cancelled = true
     }
-  }, [viewAlbum, viewAlbumArtworkPath, viewAlbumFallbackTint])
+  }, [viewAlbum, viewAlbumArtworkPath, viewAlbumFallbackTint, playerCurrentTint, nowTrack])
 
   const sidebarKey = (() => {
     switch (view.kind) {
@@ -891,7 +908,7 @@ export default function App() {
                 onNavigate={navigate}
               />
             )}
-            {view.kind === 'device' && view.section !== 'sync' && (
+            {view.kind === 'device' && (
               <DeviceSectionTabs
                 deviceId={view.deviceId}
                 section={view.section}
@@ -912,7 +929,6 @@ export default function App() {
                 active={syncTab}
                 ariaLabel="Vista de sincronización"
                 onChange={setSyncTab}
-                variant="primary"
               />
             )}
             {view.kind === 'settings' && (

@@ -86,6 +86,8 @@ interface ActivityCenterState {
   fullscreen: boolean
   upsert(input: ActivityUpsert): void
   completeActivity(id: string, detail?: string | null): void
+  resolveDeviceSyncDiscarded(planId: string): void
+  resolveDeviceArtworkOptimization(deviceId: string, planId: string | null | undefined, status: ActivityStatus, detail?: string | null): void
   markAllRead(): void
   clearResolved(): void
   remove(id: string): void
@@ -273,8 +275,18 @@ export function hydrateActivityItems(items: ActivityItem[], now = Date.now()): A
 }
 
 function shouldHydrateActivityItem(item: ActivityItem): boolean {
+  if (isInterruptedArtworkOptimizationActivity(item)) return false
   if (item.metadata.activityKind !== 'app-update') return true
   return !isNonActionableUpdateStatus(item.metadata.updateStatus)
+}
+
+function isInterruptedArtworkOptimizationActivity(item: ActivityItem): boolean {
+  if (item.metadata.activityKind !== 'device-artwork-optimization') return false
+  if (isActiveActivityStatus(item.status)) return true
+  return item.status === 'warning' &&
+    item.progress != null &&
+    item.progress.total > 0 &&
+    item.progress.completed < item.progress.total
 }
 
 function isNonActionableUpdateStatus(status: unknown): boolean {
@@ -311,6 +323,67 @@ export function syncUnknownVolumeActivities(
     }
   })
   return pruneActivityItems(next)
+}
+
+export function resolveDeviceSyncActivityDiscarded(
+  items: ActivityItem[],
+  planId: string,
+  now = Date.now(),
+  read = false,
+): ActivityItem[] {
+  const activityId = `device-sync:${planId}`
+  return pruneActivityItems(items.map(item => item.id === activityId
+    ? {
+        ...item,
+        status: 'info' as ActivityStatus,
+        title: 'Sync descartada',
+        detail: 'Sync incompleta descartada.',
+        progress: null,
+        read,
+        updatedAt: now,
+      }
+    : item))
+}
+
+function matchesDeviceArtworkOptimization(item: ActivityItem, deviceId: string, planId?: string | null): boolean {
+  if (planId && item.id === `device-sync:${planId}`) {
+    return item.metadata.deviceId === undefined || item.metadata.deviceId === deviceId
+  }
+  return item.metadata.activityKind === 'device-artwork-optimization' &&
+    item.metadata.deviceId === deviceId &&
+    (!planId || item.metadata.planId === planId)
+}
+
+export function resolveDeviceArtworkOptimizationActivity(
+  items: ActivityItem[],
+  deviceId: string,
+  planId: string | null | undefined,
+  status: ActivityStatus,
+  detail: string | null = null,
+  now = Date.now(),
+  read = false,
+): ActivityItem[] {
+  return pruneActivityItems(items.map(item => {
+    if (!matchesDeviceArtworkOptimization(item, deviceId, planId)) return item
+    const progress = item.progress && (status === 'success' || status === 'warning')
+      ? activityProgress(item.progress.total, item.progress.total)
+      : item.progress
+    return {
+      ...item,
+      status,
+      title: status === 'error' ? 'Artwork no optimizado' : 'Artwork optimizado',
+      detail: detail ?? item.detail,
+      progress,
+      read,
+      updatedAt: now,
+      metadata: {
+        ...item.metadata,
+        activityKind: 'device-artwork-optimization',
+        deviceId,
+        planId: planId ?? item.metadata.planId,
+      },
+    }
+  }))
 }
 
 export function activityFromImportProgress(event: ImportProgressEvent): ActivityUpsert {
@@ -520,6 +593,22 @@ export const useActivityCenterStore = create<ActivityCenterState>((set, get) => 
         : item)
       persistActivityCenterState({ items, pinned: state.pinned })
       return { items: pruneActivityItems(items) }
+    })
+  },
+
+  resolveDeviceSyncDiscarded(planId) {
+    set(state => {
+      const items = resolveDeviceSyncActivityDiscarded(state.items, planId, Date.now(), state.open)
+      persistActivityCenterState({ items, pinned: state.pinned })
+      return { items }
+    })
+  },
+
+  resolveDeviceArtworkOptimization(deviceId, planId, status, detail) {
+    set(state => {
+      const items = resolveDeviceArtworkOptimizationActivity(state.items, deviceId, planId, status, detail ?? null, Date.now(), state.open)
+      persistActivityCenterState({ items, pinned: state.pinned })
+      return { items }
     })
   },
 

@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { ActivityStatus } from './activityCenterStore'
 import type {
   DeviceArtworkAnalysisProgressEvent,
   DeviceArtworkAnalysisResult,
@@ -111,6 +112,30 @@ function overviewFromStorage(
 
 function overviewFromScan(scanResult: DeviceScanResult): DeviceOverviewResult {
   return overviewFromStorage(scanResult.device, scanResult.storage)
+}
+
+function activeArtworkOptimizationPlan(progress: DeviceSyncProgressEvent | null, deviceId: string): string | null {
+  return progress?.deviceId === deviceId && progress.phase === 'optimizing_artwork'
+    ? progress.planId
+    : null
+}
+
+function artworkOptimizationActivityDetail(summary: DeviceArtworkOptimizationSummary): string {
+  if (summary.failed > 0) {
+    return `${summary.failed} carátulas fallaron. Se optimizaron ${summary.optimized}.`
+  }
+  if (summary.optimized === 0) return 'No se optimizaron carátulas.'
+  return `Se optimizaron ${summary.optimized} carátulas.`
+}
+
+async function resolveArtworkOptimizationActivity(
+  deviceId: string,
+  planId: string | null,
+  status: ActivityStatus,
+  detail: string,
+): Promise<void> {
+  const { useActivityCenterStore } = await import('./activityCenterStore')
+  useActivityCenterStore.getState().resolveDeviceArtworkOptimization(deviceId, planId, status, detail)
 }
 
 export function mergeDeviceRecord(devices: DeviceRecord[], next: DeviceRecord): DeviceRecord[] {
@@ -551,10 +576,17 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     set({ loading: true, error: null })
     try {
       const result = await window.api.devices.optimizeArtwork(id, selection)
+      const artworkPlanId = activeArtworkOptimizationPlan(get().syncProgress, id)
       const [devices, library] = await Promise.all([
         window.api.devices.list(),
         window.api.devices.library(id).catch(() => null),
       ])
+      await resolveArtworkOptimizationActivity(
+        id,
+        artworkPlanId,
+        result.failed > 0 ? 'warning' : 'success',
+        artworkOptimizationActivityDetail(result),
+      )
       set(state => ({
         devices: library ? mergeDeviceRecord(devices, library.device) : devices,
         deviceLibraries: library
@@ -572,6 +604,8 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
       }))
       return result
     } catch (err) {
+      const artworkPlanId = activeArtworkOptimizationPlan(get().syncProgress, id)
+      await resolveArtworkOptimizationActivity(id, artworkPlanId, 'error', (err as Error).message)
       set({ loading: false, error: (err as Error).message, syncProgress: null })
       throw err
     }
@@ -611,9 +645,16 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
   async discardJournal(journalId) {
     set({ loading: true, error: null })
     try {
+      const discardedJournal = get().pendingJournals.find(journal => journal.id === journalId) ?? null
       await window.api.devices.discardJournal(journalId)
       const pendingJournals = await window.api.devices.listPendingJournals()
-      set({ pendingJournals, loading: false })
+      set(state => ({
+        pendingJournals,
+        loading: false,
+        syncProgress: discardedJournal && state.syncProgress?.planId === discardedJournal.planId
+          ? null
+          : state.syncProgress,
+      }))
     } catch (err) {
       set({ loading: false, error: (err as Error).message })
       throw err

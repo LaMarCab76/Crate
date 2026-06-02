@@ -85,113 +85,118 @@ function LibraryVolumeClassificationPanel({
   }
 
   return (
-    <div className="set-card library-volumes-panel">
-      <div className="library-volumes-head">
-        <div>
-          <div className="lbl">Rutas de MP3 y volúmenes</div>
-          <div className="sub">Clasificá los volúmenes detectados como biblioteca local, MP3 o ignorados.</div>
-        </div>
-        <div className="device-settings-actions">
-          <button className="btn" type="button" disabled={loading} onClick={() => void refreshVolumes()}>
-            <Icon name="rotate" size={13} /> Detectar ahora
+    <section className="set-section library-volumes-section">
+      <div className="set-section-head">
+        <h2>Rutas de MP3 y volúmenes</h2>
+        <div className="actions">
+          <button className="btn sm" type="button" disabled={loading} onClick={() => void refreshVolumes()}>
+            <Icon name="rotate" size={12} /> Detectar ahora
           </button>
-          <button className="btn primary" type="button" disabled={loading} onClick={() => void pickDeviceRoot()}>
-            <Icon name="device" size={13} /> Elegir MP3
+          <button className="btn primary sm" type="button" disabled={loading} onClick={() => void pickDeviceRoot()}>
+            <Icon name="device" size={12} /> Elegir MP3
           </button>
         </div>
       </div>
+      <p className="set-section-sub">Clasificá los volúmenes detectados como biblioteca local, MP3 o ignorados.</p>
 
       {error && <div className="device-error inline">{error}</div>}
 
-      <div className="device-settings-lists">
-        <div>
-          <h3>Conectados</h3>
-          {devices.length === 0 ? (
-            <div className="device-empty compact">No hay MP3 vinculados.</div>
-          ) : (
-            <div className="device-settings-list">
-              {devices.map(device => (
-                <div className="device-settings-row" key={device.id}>
-                  <Icon name="device" size={15} />
-                  <span>
-                    <strong>{device.name}</strong>
-                    <em>{device.rootPath}</em>
-                  </span>
-                  <b className={device.isAvailable ? 'online' : ''}>{device.isAvailable ? 'Mounted' : 'Offline'}</b>
-                </div>
-              ))}
-            </div>
-          )}
+      <div className="set-card">
+        <div className="library-group-label">
+          Conectados <span className="volume-count">{devices.length}</span>
         </div>
-
-        <div>
-          <h3>Detectados</h3>
-          {candidates.length === 0 ? (
-            <div className="device-empty compact">No hay MP3 candidatos.</div>
-          ) : (
-            <div className="device-settings-list">
-              {candidates.map(candidate => (
-                <div className="device-settings-row" key={candidate.rootPath}>
-                  <Icon name="device" size={14} />
-                  <span>
-                    <strong>{candidate.name}</strong>
-                    <em>{candidate.rootPath}</em>
-                  </span>
-                  <button
-                    className="btn"
-                    type="button"
-                    disabled={loading || connectedRoots.has(candidate.rootPath)}
-                    onClick={() => onConnectDevice({ rootPath: candidate.rootPath, name: candidate.name })}
-                  >
-                    MP3
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div>
-          <h3>Volúmenes sin clasificar</h3>
-          {unknownVolumes.length === 0 ? (
-            <div className="device-empty compact">No hay volúmenes nuevos pendientes.</div>
-          ) : (
-            <div className="device-settings-list">
-              {unknownVolumes.map(volume => (
-                <div className="device-settings-row unknown" key={volume.rootPath}>
-                  <Icon name="folder" size={14} />
-                  <span>
-                    <strong>{volume.name}</strong>
-                    <em>{volume.rootPath}</em>
-                  </span>
-                  <div className="device-settings-inline-actions">
-                    <button
-                      className="btn"
-                      type="button"
-                      disabled={loading}
-                      onClick={() => onConnectDevice({ rootPath: volume.rootPath, name: volume.name })}
-                    >
-                      MP3
-                    </button>
-                    <button
-                      className="btn"
-                      type="button"
-                      disabled={libraryRoots.has(volume.rootPath)}
-                      onClick={() => void addAsLibrary(volume.rootPath)}
-                    >
-                      Biblioteca
-                    </button>
-                    <button className="btn ghost" type="button" onClick={() => void ignoreVolume(volume.rootPath)}>
-                      Ignorar
-                    </button>
+        {devices.length === 0 ? (
+          <div className="library-empty">No hay MP3 vinculados.</div>
+        ) : (
+          devices.map(device => (
+            <div className="set-row library-row" key={device.id}>
+              <div className="library-row-main">
+                <Icon name="device" size={16} />
+                <div className="library-row-text">
+                  <div className="lbl">{device.name}</div>
+                  <div className="sub">
+                    {device.rootPath} · {device.trackCount} temas{device.hasRockbox ? ' · Rockbox' : ''}
                   </div>
                 </div>
-              ))}
+              </div>
+              <span className={`volume-status ${device.isAvailable ? 'online' : ''}`}>
+                <span className="volume-status-dot" aria-hidden="true" />
+                {device.isAvailable ? 'Mounted' : 'Offline'}
+              </span>
             </div>
-          )}
+          ))
+        )}
+
+        <div className="library-group-label">
+          Detectados <span className="volume-count">{candidates.length}</span>
         </div>
+        {candidates.length === 0 ? (
+          <div className="library-empty">No hay MP3 candidatos.</div>
+        ) : (
+          candidates.map(candidate => (
+            <div className="set-row library-row" key={candidate.rootPath}>
+              <div className="library-row-main">
+                <Icon name="device" size={16} />
+                <div className="library-row-text">
+                  <div className="lbl">{candidate.name}</div>
+                  <div className="sub">{candidate.rootPath}</div>
+                </div>
+              </div>
+              <div className="library-row-side">
+                <button
+                  className="btn sm"
+                  type="button"
+                  disabled={loading || connectedRoots.has(candidate.rootPath)}
+                  onClick={() => onConnectDevice({ rootPath: candidate.rootPath, name: candidate.name })}
+                >
+                  MP3
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+
+        <div className="library-group-label">
+          Volúmenes sin clasificar <span className="volume-count">{unknownVolumes.length}</span>
+        </div>
+        {unknownVolumes.length === 0 ? (
+          <div className="library-empty">No hay volúmenes nuevos pendientes.</div>
+        ) : (
+          unknownVolumes.map(volume => (
+            <div className="set-row library-row" key={volume.rootPath}>
+              <div className="library-row-main">
+                <Icon name="folder" size={16} />
+                <div className="library-row-text">
+                  <div className="lbl">{volume.name}</div>
+                  <div className="sub">{volume.rootPath}</div>
+                </div>
+              </div>
+              <div className="library-row-side">
+                <button
+                  className="btn sm"
+                  type="button"
+                  disabled={loading}
+                  onClick={() => onConnectDevice({ rootPath: volume.rootPath, name: volume.name })}
+                >
+                  MP3
+                </button>
+                <button
+                  className="btn sm"
+                  type="button"
+                  disabled={libraryRoots.has(volume.rootPath)}
+                  onClick={() => void addAsLibrary(volume.rootPath)}
+                >
+                  Biblioteca
+                </button>
+                <button className="btn ghost sm" type="button" onClick={() => void ignoreVolume(volume.rootPath)}>
+                  Ignorar
+                </button>
+              </div>
+            </div>
+          ))
+        )}
       </div>
-    </div>
+    </section>
   )
 }
 
@@ -288,46 +293,43 @@ function LibraryFoldersPanel() {
   }
 
   return (
-    <>
-      <div className="set-card library-folders-card">
-        <div className="library-folders-head">
-          <div>
-            <div className="lbl">Carpetas de música</div>
-            <div className="sub">Rutas que Crate analiza y mantiene conectadas.</div>
-          </div>
-          <button className="btn" type="button" disabled={adding} onClick={() => { void pickAndAdd() }}>
-            <Icon name="plus" size={13} /> {adding ? 'Agregando...' : 'Agregar carpeta'}
-          </button>
-        </div>
-        {error && <pre className="modal-error library-folders-error">{error}</pre>}
+    <section className="set-section">
+      <div className="set-section-head">
+        <h2>Carpetas de música</h2>
+        <button className="btn sm" type="button" disabled={adding} onClick={() => { void pickAndAdd() }}>
+          <Icon name="plus" size={12} /> {adding ? 'Agregando…' : 'Agregar carpeta'}
+        </button>
+      </div>
+      <p className="set-section-sub">Rutas que Crate analiza y mantiene conectadas.</p>
+      {error && <pre className="modal-error library-folders-error">{error}</pre>}
+      <div className="set-card">
         {folders.length === 0 ? (
-          <div className="library-folders-empty">No hay carpetas configuradas.</div>
+          <div className="library-empty">No hay carpetas configuradas.</div>
         ) : (
-          <div className="library-folders-list">
-            {folders.map(folder => (
-              <div className="library-folder-row" key={folder.id}>
-                <Icon name="folder" size={15} />
-                <div className="library-folder-main">
-                  <strong>{folder.name}</strong>
-                  <span>{folder.path}</span>
-                </div>
-                <span className="library-folder-count">{folder.track_count} temas</span>
-                <div className="library-folder-actions">
-                  <button
-                    className="btn ghost sm"
-                    type="button"
-                    disabled={scanningId === folder.id}
-                    onClick={() => { void scanFolder(folder.id) }}
-                  >
-                    {scanningId === folder.id ? 'Analizando' : 'Analizar'}
-                  </button>
-                  <button className="btn ghost sm" type="button" onClick={() => setRemoveTarget(folder)}>
-                    Eliminar
-                  </button>
+          folders.map(folder => (
+            <div className="set-row library-row" key={folder.id}>
+              <div className="library-row-main">
+                <Icon name="folder" size={16} />
+                <div className="library-row-text">
+                  <div className="lbl">{folder.name}</div>
+                  <div className="sub">{folder.path} · {folder.track_count} temas</div>
                 </div>
               </div>
-            ))}
-          </div>
+              <div className="library-row-side">
+                <button
+                  className="btn ghost sm"
+                  type="button"
+                  disabled={scanningId === folder.id}
+                  onClick={() => { void scanFolder(folder.id) }}
+                >
+                  {scanningId === folder.id ? 'Analizando' : 'Analizar'}
+                </button>
+                <button className="btn ghost sm" type="button" onClick={() => setRemoveTarget(folder)}>
+                  Eliminar
+                </button>
+              </div>
+            </div>
+          ))
         )}
       </div>
       {removeTarget && (
@@ -339,7 +341,7 @@ function LibraryFoldersPanel() {
           }}
         />
       )}
-    </>
+    </section>
   )
 }
 
@@ -798,39 +800,41 @@ function LibrariesSection({
   onConnectDevice: (target: DeviceConnectTarget) => void
 }) {
   return (
-    <section className="set-section">
-      <h2>Bibliotecas</h2>
+    <>
       <LibraryFoldersPanel />
       <LibraryVolumeClassificationPanel onConnectDevice={onConnectDevice} />
-      <div className="set-card">
-        <div className="set-row">
-          <div>
-            <div className="lbl">Keep portable backup in folder</div>
-            <div className="sub">
-              Saves your plays, favorites, ratings and EQ settings into a hidden{' '}
-              <code style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>.crate/library.yaml</code>
-              {' '}inside each library folder. When you reconnect the folder elsewhere those
-              are merged back automatically.
+      <section className="set-section">
+        <h2>Respaldo y registro</h2>
+        <div className="set-card">
+          <div className="set-row">
+            <div>
+              <div className="lbl">Keep portable backup in folder</div>
+              <div className="sub">
+                Saves your plays, favorites, ratings and EQ settings into a hidden{' '}
+                <code style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>.crate/library.yaml</code>
+                {' '}inside each library folder. When you reconnect the folder elsewhere those
+                are merged back automatically.
+              </div>
             </div>
+            <div
+              className={`toggle ${tweak.libraryBackup ? 'on' : ''}`}
+              onClick={() => setTweak('libraryBackup', !tweak.libraryBackup)}
+              role="switch"
+              aria-checked={tweak.libraryBackup}
+              tabIndex={0}
+            />
           </div>
-          <div
-            className={`toggle ${tweak.libraryBackup ? 'on' : ''}`}
-            onClick={() => setTweak('libraryBackup', !tweak.libraryBackup)}
-            role="switch"
-            aria-checked={tweak.libraryBackup}
-            tabIndex={0}
-          />
-        </div>
-        <div className="set-row">
-          <div>
-            <div className="lbl">Registro de análisis</div>
-            <div className="sub">Historial de análisis, cambios y archivos omitidos por biblioteca.</div>
+          <div className="set-row">
+            <div>
+              <div className="lbl">Registro de análisis</div>
+              <div className="sub">Historial de análisis, cambios y archivos omitidos por biblioteca.</div>
+            </div>
+            <button className="btn" type="button" onClick={() => setLibraryLogOpen(true)}>
+              <Icon name="list" size={13} /> Ver registros
+            </button>
           </div>
-          <button className="btn" type="button" onClick={() => setLibraryLogOpen(true)}>
-            <Icon name="list" size={13} /> Ver registros
-          </button>
         </div>
-      </div>
+      </section>
       {libraryLogOpen && (
         <ModalShell title="Registro de biblioteca" onClose={() => setLibraryLogOpen(false)}>
           <div className="library-log-modal">
@@ -838,7 +842,7 @@ function LibrariesSection({
           </div>
         </ModalShell>
       )}
-    </section>
+    </>
   )
 }
 

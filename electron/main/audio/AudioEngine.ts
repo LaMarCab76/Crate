@@ -750,6 +750,10 @@ export class AudioEngine {
     if (!fileStats.ok) return fileStats.result
 
     const fileSizeBytes = fileStats.sizeBytes
+    // A gapless preload while the current track is already in memory is the
+    // "second track": relax the memory budget so both can stay resident when
+    // free RAM > 1 GB.
+    const allowSecondTrack = !!options.isPreload && this.currentStreamSource === 'memory'
     const memoryResult = options.skipMemory
       ? {
         stream: null,
@@ -760,7 +764,7 @@ export class AudioEngine {
         attemptedMemory: false,
         buffer: noBufferTelemetry(),
       } as StreamCreateResult
-      : await this.createMemoryStream(path, fileSizeBytes, options.memoryReadTimeoutMs)
+      : await this.createMemoryStream(path, fileSizeBytes, options.memoryReadTimeoutMs, allowSecondTrack)
 
     if (memoryResult.stream) {
       return memoryResult
@@ -840,10 +844,10 @@ export class AudioEngine {
     }
   }
 
-  private async createMemoryStream(path: string, sizeBytes: number, timeoutMs = PRELOAD_MEMORY_TIMEOUT_MS): Promise<StreamCreateResult> {
+  private async createMemoryStream(path: string, sizeBytes: number, timeoutMs = PRELOAD_MEMORY_TIMEOUT_MS, allowSecondTrack = false): Promise<StreamCreateResult> {
     const start = Date.now()
 
-    const memoryDecision = this.canUseMemoryForPlayback(sizeBytes)
+    const memoryDecision = this.canUseMemoryForPlayback(sizeBytes, allowSecondTrack)
     if (!memoryDecision.canUse) {
       console.info('[audio] playback memory rejected', {
         path,
@@ -963,12 +967,13 @@ export class AudioEngine {
     return { handle, info: this.computeStreamInfo(handle), memoryBuffer: null }
   }
 
-  private canUseMemoryForPlayback(size: number): { canUse: boolean; reason: StreamCreateFailureReason | null; sizeBytes: number } {
+  private canUseMemoryForPlayback(size: number, allowSecondTrack = false): { canUse: boolean; reason: StreamCreateFailureReason | null; sizeBytes: number } {
     return decidePlaybackMemoryUse({
       fileSizeBytes: size,
       freeMemBytes: freemem(),
       totalMemBytes: totalmem(),
       reserveBytes: PLAYBACK_MEMORY_RESERVE_BYTES,
+      allowSecondTrack,
     })
   }
 

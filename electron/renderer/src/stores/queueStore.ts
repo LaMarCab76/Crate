@@ -16,6 +16,7 @@ import type {
 } from '@shared/types/ipc-contract'
 import { fadeTrackVolume } from '@renderer/utils/trackTransitionVolume'
 import { shouldPreloadUpcomingTrack } from '@renderer/utils/progressivePreload'
+import { shouldApplyTransitionFade } from '@renderer/utils/transitionFade'
 
 export type RepeatMode = 'off' | 'one' | 'all'
 
@@ -48,7 +49,11 @@ const TRACK_TRANSITION_FADE_STEP_MS = 16
 
 function shouldApplyCrossfadeTransition(): boolean {
   const playback = usePlaybackStore.getState()
-  return playback.status === 'playing' && getCrossfadeTimingsMs().fadeOutMs > 0
+  return shouldApplyTransitionFade({
+    status: playback.status,
+    fadeOutMs: getCrossfadeTimingsMs().fadeOutMs,
+    isAutomatic: false,
+  })
 }
 
 function parseCrossfadeSeconds(value: unknown): number {
@@ -127,17 +132,23 @@ async function crossfadeToTrack(
   track: Track,
   token: number,
   commitNowPlaying: (result: StreamLoadResult | null) => void,
+  applyFade = true,
 ): Promise<void> {
   if (!track.path) return
-  const fade = shouldApplyCrossfadeTransition()
+  // Automatic advances (the current track ended on its own) pass applyFade=false
+  // so the handoff stays seamless — the fade is reserved for user-initiated changes.
+  const fade = applyFade && shouldApplyCrossfadeTransition()
 
   // 1. Prepare the next stream without interrupting the current track.
   const preloaded: PreloadNextResult = await window.api.audio.preloadNext(track.path, track.dbId ?? null)
   if (token !== trackTransitionToken) return
 
-  // 2. Next track is ready — only now perform the fade-out dip (fadeOutCurrentTrack
-  //    self-guards, so this is a no-op when crossfade is off).
-  const previousVolume = await fadeOutCurrentTrack(token)
+  // 2. Next track is ready — only now perform the fade-out dip. We gate this on
+  //    `fade` rather than relying on fadeOutCurrentTrack's self-guard: at the natural
+  //    end of a track the renderer's status is still 'playing', so an ungated call
+  //    would dip on automatic advances too. When not fading, the pre-transition
+  //    volume is just the current playback volume (what fadeOutCurrentTrack returns).
+  const previousVolume = fade ? await fadeOutCurrentTrack(token) : usePlaybackStore.getState().volume
   if (token !== trackTransitionToken) return
 
   // 3. Hand off to the preloaded stream, or fall back to a direct load.
@@ -320,7 +331,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
         })
         applyStreamLoadResultForTrack(next, result)
         gaplessPreloadFiredFor = null
-      })
+      }, !opts?.auto)
     } finally {
       finishTrackPreparation(token)
     }
@@ -457,7 +468,10 @@ if (typeof window !== 'undefined' && window.api?.audio) {
       })
       setStreamSourceFromGapless(streamInfo, source)
       setCurrentTrackWithPromotionReset(next)
-      void fadeInTrack(trackTransitionToken, usePlaybackStore.getState().volume)
+      // Automatic advance: stay seamless (no fade). The adopted stream already
+      // plays at the engine volume; re-assert the store's authoritative volume
+      // instantly to guard against any drift from an interrupted manual fade.
+      void setEngineVolume(usePlaybackStore.getState().volume)
       gaplessPreloadFiredFor = null
     }
   })

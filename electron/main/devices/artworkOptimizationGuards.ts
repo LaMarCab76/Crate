@@ -64,3 +64,12 @@ export function assertOptimizedArtworkWithinLimit(probe: OptimizedArtworkProbe, 
     )
   }
 }
+
+export function hasArtworkOverLimit(probe: OptimizedArtworkProbe, maxEdge: number): boolean {
+  return probe.pictures.some(picture =>
+    picture.format !== null &&
+    picture.width !== null &&
+    picture.height !== null &&
+    (picture.width > maxEdge || picture.height > maxEdge)
+  )
+}

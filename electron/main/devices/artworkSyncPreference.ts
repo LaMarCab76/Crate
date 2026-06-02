@@ -8,3 +8,7 @@ export function resolveOptimizeArtworkSelection(
 export function canRunSyncWithArtworkOnly(actionCount: number, optimizeArtwork: boolean): boolean {
   return actionCount > 0 || optimizeArtwork
 }
+
+export function shouldOptimizeArtworkBeforeDeviceCopy(actionKind: string, optimizeArtwork: boolean): boolean {
+  return optimizeArtwork && (actionKind === 'copy_pc_to_device' || actionKind === 'replace_device')
+}

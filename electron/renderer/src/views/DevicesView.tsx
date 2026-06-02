@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo } from 'react'
 import { Icon } from '@renderer/components/Icon'
+import { useActivityCenterStore } from '@renderer/stores/activityCenterStore'
 import {
   useDeviceOverview,
   useDeviceStore,
@@ -153,6 +154,7 @@ export function DevicesView({ deviceId, dashboardTab }: DevicesViewProps = {}) {
   const scan = useDeviceStore(s => s.scan)
   const resumeJournal = useDeviceStore(s => s.resumeJournal)
   const discardJournal = useDeviceStore(s => s.discardJournal)
+  const resolveDeviceSyncDiscarded = useActivityCenterStore(s => s.resolveDeviceSyncDiscarded)
   const selectDevice = useDeviceStore(s => s.selectDevice)
   const selectedDevice = useSelectedDevice()
   const overview = useDeviceOverview(selectedDevice?.id ?? null)
@@ -209,6 +211,12 @@ export function DevicesView({ deviceId, dashboardTab }: DevicesViewProps = {}) {
     await scan(result.deviceId)
     await loadDeviceOverview(result.deviceId, true).catch(() => undefined)
   }, [devices, loadDeviceOverview, resumeJournal, scan])
+
+  const discardPendingJournal = useCallback(async (journalId: string) => {
+    const journal = pendingJournals.find(item => item.id === journalId) ?? null
+    await discardJournal(journalId)
+    if (journal) resolveDeviceSyncDiscarded(journal.planId)
+  }, [discardJournal, pendingJournals, resolveDeviceSyncDiscarded])
 
   if (!selectedDevice) {
     return (
@@ -325,7 +333,7 @@ export function DevicesView({ deviceId, dashboardTab }: DevicesViewProps = {}) {
             journals={devicePendingJournals}
             loading={loading}
             onResume={journalId => void resumePendingJournal(journalId)}
-            onDiscard={journalId => void discardJournal(journalId)}
+            onDiscard={journalId => void discardPendingJournal(journalId)}
           />
         </section>
       )}

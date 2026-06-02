@@ -1,6 +1,9 @@
 import { strict as assert } from 'node:assert'
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { mergeDeviceRecord } from './deviceStore.ts'
+
+const deviceStoreSource = readFileSync(new URL('./deviceStore.ts', import.meta.url), 'utf8')
 
 function device(id, trackCount) {
   return {
@@ -47,4 +50,38 @@ test('mergeDeviceRecord prepends a newly seen device', () => {
   const merged = mergeDeviceRecord([device('old', 1)], device('new', 9))
 
   assert.deepEqual(merged.map(item => item.id), ['new', 'old'])
+})
+
+test('discardJournal resolves the matching activity center sync entry', () => {
+  assert.ok(
+    deviceStoreSource.includes('const discardedJournal = get().pendingJournals.find(journal => journal.id === journalId) ?? null'),
+    'discardJournal should capture the pending journal before it is removed',
+  )
+  assert.ok(
+    deviceStoreSource.includes('state.syncProgress?.planId === discardedJournal.planId'),
+    'discardJournal should clear stale sync progress for the discarded plan',
+  )
+})
+
+test('optimizeArtwork resolves the matching activity center artwork entry', () => {
+  assert.ok(
+    deviceStoreSource.includes("import type { ActivityStatus } from './activityCenterStore'"),
+    'deviceStore should be able to resolve activity center artwork entries',
+  )
+  assert.ok(
+    deviceStoreSource.includes("const { useActivityCenterStore } = await import('./activityCenterStore')"),
+    'deviceStore should load the activity store lazily so Node tests can import the store',
+  )
+  assert.ok(
+    deviceStoreSource.includes('const artworkPlanId = activeArtworkOptimizationPlan(get().syncProgress, id)'),
+    'optimizeArtwork should capture the active artwork progress plan before clearing syncProgress',
+  )
+  assert.ok(
+    deviceStoreSource.includes("result.failed > 0 ? 'warning' : 'success'"),
+    'optimizeArtwork should resolve completed artwork work as success or warning',
+  )
+  assert.ok(
+    deviceStoreSource.includes("resolveArtworkOptimizationActivity(id, artworkPlanId, 'error', (err as Error).message)"),
+    'optimizeArtwork failures should stop the running artwork activity',
+  )
 })

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Icon } from '@renderer/components/Icon'
+import { useActivityCenterStore } from '@renderer/stores/activityCenterStore'
 import {
   useDeviceArtworkAnalysis,
   useDeviceLibrary,
@@ -9,6 +10,7 @@ import {
 import { useFolders } from '@renderer/stores/libraryStore'
 import { DEVICE_ARTWORK_EDGE_MAX, DEVICE_ARTWORK_EDGE_MIN } from '@shared/constants/device-sync'
 import { fmtFileSize } from '@renderer/utils/format'
+import { artworkOptimizationOwnsSyncProgress } from '@renderer/utils/artworkProgressOwnership'
 import { artworkOptimizeActionState } from '@renderer/utils/artworkOptimizeAction'
 import {
   filterArtworkItemsForSearch,
@@ -78,6 +80,15 @@ function formatArtworkOptimizationSummary(summary: DeviceArtworkOptimizationSumm
     return `Se optimizaron ${summary.optimized} carátulas sin ahorro adicional.`
   }
   return `Se optimizaron ${summary.optimized} carátulas y se ahorraron ${fmtFileSize(summary.bytesSaved)}.`
+}
+
+function formatArtworkVerificationMessage(summary: DeviceArtworkOptimizationSummary, stillOversized: number | null): string {
+  const base = formatArtworkOptimizationSummary(summary)
+  if (stillOversized == null) return base
+  if (stillOversized > 0) {
+    return `${base} ${stillOversized} temas optimizados siguen superando el límite y vuelven a aparecer en el listado.`
+  }
+  return `${base} Verificado: los temas optimizados ya no superan el límite.`
 }
 
 // Persisted conflict base selector. Lives in the Configuración tab (only for
@@ -412,8 +423,8 @@ function SyncDiffStep({
       <div className="device-sync-diff-toolbar">
         <div className="device-side-global" role="group" aria-label="Elegir lado para todo">
           <span>Para todo:</span>
-          <button className="btn ghost" type="button" disabled={loading} onClick={() => onGlobalBase('pc')}>Usar PC</button>
-          <button className="btn ghost" type="button" disabled={loading} onClick={() => onGlobalBase('device')}>Usar MP3</button>
+          <button className="btn ghost" type="button" disabled={loading} onClick={() => onGlobalBase('pc')}>Tomar todo de PC</button>
+          <button className="btn ghost" type="button" disabled={loading} onClick={() => onGlobalBase('device')}>Tomar todo de MP3</button>
           <button className="btn ghost" type="button" disabled={loading} onClick={() => onGlobalBase('review')}>Revisar</button>
         </div>
         <div className="device-subtabs" role="tablist" aria-label="Agrupar por">
@@ -767,9 +778,11 @@ function ArtworkGroupedList({
 function ArtworkOptimizePanel({
   deviceId,
   artworkMaxEdge,
+  onProgressOwnedChange,
 }: {
   deviceId: string
   artworkMaxEdge: number
+  onProgressOwnedChange: (owned: boolean) => void
 }) {
   const analyzeArtwork = useDeviceStore(s => s.analyzeArtwork)
   const optimizeArtwork = useDeviceStore(s => s.optimizeArtwork)
@@ -780,6 +793,7 @@ function ArtworkOptimizePanel({
   const [optimizing, setOptimizing] = useState(false)
   const [refreshingAfterOptimize, setRefreshingAfterOptimize] = useState(false)
   const [optimizeResult, setOptimizeResult] = useState<DeviceArtworkOptimizationSummary | null>(null)
+  const [optimizedStillOversized, setOptimizedStillOversized] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [artworkQuery, setArtworkQuery] = useState('')
   const [artworkViewMode, setArtworkViewMode] = useState<ArtworkOptimizeViewMode>('artist')
@@ -859,6 +873,7 @@ function ArtworkOptimizePanel({
     try {
       await analyzeArtwork(deviceId)
       setOptimizeResult(null)
+      setOptimizedStillOversized(null)
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -868,18 +883,26 @@ function ArtworkOptimizePanel({
 
   const runOptimization = useCallback(async () => {
     if (selectedArtworkItems.length === 0) return
+    const optimizedRelativePaths = selectedArtworkItems.map(item => item.relativePath)
     setOptimizing(true)
     setRefreshingAfterOptimize(false)
     setError(null)
     setOptimizeResult(null)
+    setOptimizedStillOversized(null)
     try {
       const result = await optimizeArtwork(deviceId, {
-        relativePaths: selectedArtworkItems.map(item => item.relativePath),
+        relativePaths: optimizedRelativePaths,
       })
       setOptimizeResult(result)
       setOptimizing(false)
       setRefreshingAfterOptimize(true)
-      await analyzeArtwork(deviceId).catch(() => undefined)
+      const refreshedAnalysis = await analyzeArtwork(deviceId)
+      const optimizedPathSet = new Set(optimizedRelativePaths)
+      const stillOversizedCount = refreshedAnalysis.items.filter(item => optimizedPathSet.has(item.relativePath)).length
+      setOptimizedStillOversized(stillOversizedCount)
+      setArtworkQuery('')
+      setFocusedArtworkGroupKey(null)
+      setExcludedArtworkKeys(new Set())
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -890,6 +913,12 @@ function ArtworkOptimizePanel({
 
   const artworkProgressActive = analyzing || refreshingAfterOptimize
   const artworkBusy = analyzing || optimizing || refreshingAfterOptimize
+  const ownsHeaderProgress = artworkOptimizationOwnsSyncProgress({
+    optimizing,
+    deviceId,
+    syncProgressDeviceId: syncProgress?.deviceId,
+    syncProgressPhase: syncProgress?.phase,
+  })
   const activeProgress = artworkProgressActive ? progress : optimizing && syncProgress?.deviceId === deviceId ? syncProgress : null
   const activeCompleted = activeProgress
     ? 'scanned' in activeProgress
@@ -915,6 +944,11 @@ function ArtworkOptimizePanel({
       ? ARTWORK_PHASE_LABELS[progress?.phase ?? 'scanning'] ?? 'Analizando artwork'
       : SYNC_PHASE_LABELS[syncProgress?.phase ?? 'optimizing_artwork'] ?? 'Optimizando artwork'
   const runPrimaryAction = action.mode === 'apply' ? runOptimization : runAnalysis
+
+  useEffect(() => {
+    onProgressOwnedChange(ownsHeaderProgress)
+    return () => onProgressOwnedChange(false)
+  }, [onProgressOwnedChange, ownsHeaderProgress])
 
   return (
     <section className="device-sync-stage device-sync-activity-tab device-artwork-optimize">
@@ -953,10 +987,10 @@ function ArtworkOptimizePanel({
       )}
 
       {!artworkBusy && optimizeResult && (
-        <div className={optimizeResult.failed > 0 ? 'device-error inline' : 'sync-result-ok inline'}>
+        <div className={optimizeResult.failed > 0 || optimizedStillOversized == null || optimizedStillOversized > 0 ? 'device-warning inline' : 'sync-result-ok inline'}>
           {optimizeResult.failed > 0
             ? `${optimizeResult.failed} carátulas fallaron. Se optimizaron ${optimizeResult.optimized}.`
-            : formatArtworkOptimizationSummary(optimizeResult)}
+            : formatArtworkVerificationMessage(optimizeResult, optimizedStillOversized)}
         </div>
       )}
 
@@ -1103,6 +1137,7 @@ export function DeviceSyncView({
   const applyPlan = useDeviceStore(s => s.applyPlan)
   const resumeJournal = useDeviceStore(s => s.resumeJournal)
   const discardJournal = useDeviceStore(s => s.discardJournal)
+  const resolveDeviceSyncDiscarded = useActivityCenterStore(s => s.resolveDeviceSyncDiscarded)
   const updateSettings = useDeviceStore(s => s.updateSettings)
   const clearPlan = useDeviceStore(s => s.clearPlan)
   const selectedDevice = useSelectedDevice()
@@ -1125,6 +1160,7 @@ export function DeviceSyncView({
   const [wizardStep, setWizardStep] = useState<WizardStep>('diff')
   const [planGroupBy, setPlanGroupBy] = useState<DeviceSyncPlanGroupBy>('artist')
   const [applying, setApplying] = useState(false)
+  const [artworkProgressOwnedByPanel, setArtworkProgressOwnedByPanel] = useState(false)
   // Conflict base is a persisted per-device setting (Configuración tab), not
   // ephemeral UI state — it's remembered across sessions.
   const syncBase: DeviceSyncBase = selectedDevice?.syncBase ?? 'review'
@@ -1208,6 +1244,7 @@ export function DeviceSyncView({
     : 0
   const progressTotal = activeProgress?.total ?? 0
   const progressPct = progressTotal > 0 ? Math.min(100, Math.round((progressCompleted / progressTotal) * 100)) : 0
+  const headerProgress = artworkProgressOwnedByPanel ? null : activeProgress
 
   const artworkMaxEdgeValue = Number(artworkMaxEdge)
   const artworkMaxEdgeValid =
@@ -1410,6 +1447,12 @@ export function DeviceSyncView({
     await scan(result.deviceId)
   }, [devices, resumeJournal, scan])
 
+  const discardPendingJournal = useCallback(async (journalId: string) => {
+    const journal = pendingJournals.find(item => item.id === journalId) ?? null
+    await discardJournal(journalId)
+    if (journal) resolveDeviceSyncDiscarded(journal.planId)
+  }, [discardJournal, pendingJournals, resolveDeviceSyncDiscarded])
+
   const isSyncRun = activeProgress === syncProgress
   const activeProgressPath = isSyncRun ? syncProgress?.currentPath ?? null : null
   const activeProgressTitle = isSyncRun ? syncProgress?.currentTitle : undefined
@@ -1421,6 +1464,9 @@ export function DeviceSyncView({
   // Editing the plan / recalculating stays locked for the whole run, even after a
   // remount where `applying` would have been lost.
   const busy = applying || syncRunning
+  // Artwork-only optimization reports through the sync progress channel, but it
+  // should not lock diff review controls.
+  const planEditingLocked = applying || (syncRunning && activeProgress?.phase !== 'optimizing_artwork')
 
   // Coming back to the sync screen while a sync is still running lands on the live
   // progress step instead of the editable diff (which looked like a cancelled sync).
@@ -1453,9 +1499,9 @@ export function DeviceSyncView({
           {selectedDevice.isAvailable ? 'Connected' : 'Offline'}
         </span>
         <p title={selectedDevice.rootPath}>{selectedDevice.rootPath} · {stats.trackCount.toLocaleString()} temas indexados</p>
-        {activeProgress && (
+        {headerProgress && (
           <div className="device-sync-inline-progress">
-            <span>{SYNC_PHASE_LABELS[activeProgress.phase] ?? activeProgress.phase} · {progressText(progressCompleted, progressTotal)}</span>
+            <span>{SYNC_PHASE_LABELS[headerProgress.phase] ?? headerProgress.phase} · {progressText(progressCompleted, progressTotal)}</span>
             <div className="device-progress-track" aria-hidden="true">
               <b style={{ width: `${progressPct}%` }} />
             </div>
@@ -1467,6 +1513,7 @@ export function DeviceSyncView({
         <ArtworkOptimizePanel
           deviceId={selectedDevice.id}
           artworkMaxEdge={selectedDevice.artworkMaxEdge}
+          onProgressOwnedChange={setArtworkProgressOwnedByPanel}
         />
       )}
 
@@ -1698,7 +1745,7 @@ export function DeviceSyncView({
                 plan={visiblePlan}
                 actionSides={actionSides}
                 groupBy={planGroupBy}
-                loading={busy}
+                loading={planEditingLocked}
                 deviceName={selectedDevice.name}
                 onSetSide={setSideForActions}
                 onSetGroupBy={setPlanGroupBy}
@@ -1786,7 +1833,7 @@ export function DeviceSyncView({
             journals={devicePendingJournals}
             loading={loading}
             onResume={journalId => void resumePendingJournal(journalId)}
-            onDiscard={journalId => void discardJournal(journalId)}
+            onDiscard={journalId => void discardPendingJournal(journalId)}
           />
         )}
       </section>

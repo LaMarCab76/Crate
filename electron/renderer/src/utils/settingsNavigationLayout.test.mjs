@@ -21,7 +21,7 @@ test('settings view no longer owns internal nav or device settings', () => {
   assert.ok(settingsSource.includes("export type SettingsMainTab = 'apariencia' | 'reproduccion' | 'bibliotecas' | 'actualizaciones'"))
   assert.ok(!settingsSource.includes("'dispositivos'"), 'Preferencias should not include a Dispositivos tab')
   assert.ok(!settingsSource.includes('Almacenamiento local'), 'Almacenamiento local should be renamed')
-  assert.ok(settingsSource.includes('<h2>Bibliotecas</h2>'), 'Bibliotecas section should replace local storage')
+  assert.ok(settingsSource.includes('<h2>Carpetas de música</h2>'), 'Bibliotecas section should replace local storage')
   assert.ok(!settingsSource.includes('settings-nav'), 'SettingsView should not render the old internal tab nav')
   assert.ok(!settingsSource.includes('Default device artwork limit'), 'Device-specific defaults should not live in Preferences')
 })
@@ -56,6 +56,7 @@ test('sidebar and activity center route users to the new homes', () => {
 
 test('old settings tab styles were removed from the stylesheet', () => {
   assert.ok(!/\.settings-nav\b/.test(css), 'Old settings nav CSS should not linger')
-  assert.ok(/\.library-volumes-panel\s*\{/.test(css), 'Bibliotecas volume panel should be styled')
-  assert.ok(/\.library-volumes-panel \.device-settings-row\s*\{/.test(css), 'Bibliotecas volume rows should use fixed grid styling')
+  assert.ok(/\.set-section-head\s*\{/.test(css), 'Bibliotecas sections should use the flat section header')
+  assert.ok(/\.library-group-label\s*\{/.test(css), 'Bibliotecas volume groups should be labelled')
+  assert.ok(/\.volume-status\b/.test(css), 'Volume rows should style the mounted/offline status badge')
 })

@@ -163,8 +163,9 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
   can be **resumed or discarded** after a crash or unplug, with pending
   journals surfaced in the Devices view.
 - `ArtworkOptimizer` re-encodes embedded covers to the device's configured
-  maximum edge size (default tunable in Settings) so the on-device library
-  doesn't blow past flash storage limits.
+  maximum edge size (default tunable in Settings). PC-to-device copies are
+  staged with the limited artwork before the final device write, while existing
+  on-device tracks can still be optimized during sync.
 - `RockboxThemeScanner` lists installed themes and accepts **drag-and-drop
   `.zip` theme installs** straight into the device's `/.rockbox/themes/`.
 - Device sync copies only lyrics already present locally (`.lrc` sidecars or

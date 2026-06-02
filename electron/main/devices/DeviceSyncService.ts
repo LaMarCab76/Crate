@@ -38,12 +38,16 @@ import {
   assertOptimizedArtworkWithinLimit,
   artworkOptimizationTempPath,
   countProcessedArtworkSteps,
+  hasArtworkOverLimit,
   shouldYieldArtworkAnalysis,
 } from './artworkOptimizationGuards'
 import { resolveArtworkOptimizationFiles } from './artworkOptimizeSelection'
 import { decideLyricsSync } from './lyricsSyncDecision'
 import { classifyArtwork } from './artworkOptimizeDecision'
-import { resolveOptimizeArtworkSelection } from './artworkSyncPreference'
+import {
+  resolveOptimizeArtworkSelection,
+  shouldOptimizeArtworkBeforeDeviceCopy,
+} from './artworkSyncPreference'
 import { scanRockboxThemes } from './RockboxThemeScanner'
 import {
   isRockboxIgnoredEntryName,
@@ -270,6 +274,21 @@ interface SyncJournalYaml {
   optimizeArtwork?: boolean
   pcTargetImported?: boolean
   result?: DeviceSyncApplyResult
+}
+
+interface DeviceCopyArtworkOutcome {
+  optimized: boolean
+  bytesSaved: number
+}
+
+interface StagedDeviceCopy {
+  path: string
+  outcome: DeviceCopyArtworkOutcome
+  cleanup: () => Promise<void>
+}
+
+interface ApplyActionResult {
+  deviceArtwork?: DeviceCopyArtworkOutcome
 }
 
 interface RockboxInstallFile {
@@ -1624,6 +1643,31 @@ export class DeviceSyncService {
     return summary
   }
 
+  private recordInlineArtworkOptimization(
+    journal: SyncJournalYaml,
+    relativePath: string,
+    filePath: string,
+    outcome: DeviceCopyArtworkOutcome,
+  ): void {
+    const stepId = `artwork:${keyForRelativePath(relativePath)}`
+    let step = journal.artwork.find(item => item.id === stepId)
+    if (!step) {
+      step = {
+        id: stepId,
+        kind: 'optimize_artwork',
+        relativePath,
+        sourcePath: filePath,
+        destinationPath: filePath,
+        status: 'pending',
+      }
+      journal.artwork.push(step)
+    } else {
+      step.sourcePath = filePath
+      step.destinationPath = filePath
+    }
+    this.setJournalStepCompleted(journal, step, outcome.optimized ? 'optimized' : 'skipped', outcome.bytesSaved)
+  }
+
   private toPendingJournal(journal: SyncJournalYaml): DevicePendingJournal {
     const allSteps = [...journal.actions, ...(journal.lyrics ?? []), ...journal.artwork]
     const current = allSteps.find(step => step.status === 'running') ?? allSteps.find(step => step.status === 'failed')
@@ -1730,6 +1774,8 @@ export class DeviceSyncService {
           pcTargetPath: plan.pcTargetPath,
           runId: journal.runId,
           affectedPcFolderIds,
+          optimizeArtwork: journal.optimizeArtwork ?? true,
+          artworkMaxEdge: row.artwork_max_edge,
         },
       )
 
@@ -1826,6 +1872,8 @@ export class DeviceSyncService {
       pcTargetPath: string
       runId: string
       affectedPcFolderIds: Set<number>
+      optimizeArtwork: boolean
+      artworkMaxEdge: number
     },
   ): Promise<boolean> {
     const actionById = new Map(plan.actions.map(action => [action.id, action]))
@@ -1857,7 +1905,10 @@ export class DeviceSyncService {
       await writeYamlFile(journalPath, journal)
 
       try {
-        await this.applyAction(action, ctx)
+        const result = await this.applyAction(action, ctx)
+        if (result.deviceArtwork && action.destinationPath) {
+          this.recordInlineArtworkOptimization(journal, action.relativePath, action.destinationPath, result.deviceArtwork)
+        }
         if (action.kind === 'copy_device_to_pc' || action.kind === 'replace_pc') {
           copiedIntoPcTarget = true
         }
@@ -2026,20 +2077,26 @@ export class DeviceSyncService {
     const activeRelativePaths = new Set<string>()
     const artworkByPath = new Map(journal.artwork.map(step => [keyForRelativePath(step.relativePath), step]))
 
+    let prepared = 0
     for (const file of files) {
       const relativePath = toPosixRelative(deviceMusicRoot, file)
       activeRelativePaths.add(keyForRelativePath(relativePath))
-      if (artworkByPath.has(keyForRelativePath(relativePath))) continue
-      const step: SyncJournalStep = {
-        id: `artwork:${keyForRelativePath(relativePath)}`,
-        kind: 'optimize_artwork',
-        relativePath,
-        sourcePath: file,
-        destinationPath: file,
-        status: 'pending',
+      if (!artworkByPath.has(keyForRelativePath(relativePath))) {
+        const step: SyncJournalStep = {
+          id: `artwork:${keyForRelativePath(relativePath)}`,
+          kind: 'optimize_artwork',
+          relativePath,
+          sourcePath: file,
+          destinationPath: file,
+          status: 'pending',
+        }
+        journal.artwork.push(step)
+        artworkByPath.set(keyForRelativePath(relativePath), step)
       }
-      journal.artwork.push(step)
-      artworkByPath.set(keyForRelativePath(relativePath), step)
+      prepared += 1
+      if (shouldYieldArtworkAnalysis(prepared, files.length)) {
+        await yieldToEventLoop()
+      }
     }
 
     for (const step of journal.artwork) {
@@ -2053,24 +2110,30 @@ export class DeviceSyncService {
 
     const total = journal.artwork.length
 
+    let processed = 0
+    let pendingJournalFlush = false
     for (const step of journal.artwork) {
       if (step.status === 'completed') continue
-      this.setJournalStepRunning(journal, step, 'optimizing_artwork')
-      await writeYamlFile(journalPath, journal)
-      this.broadcastSyncProgress(
-        plan,
-        'optimizing_artwork',
-        countProcessedArtworkSteps(journal.artwork),
-        total,
-        step.relativePath,
-      )
 
+      const filePath = fromPosix(deviceMusicRoot, step.relativePath)
       try {
-        const filePath = fromPosix(deviceMusicRoot, step.relativePath)
         assertInside(deviceMusicRoot, resolve(filePath))
-        if (!existsSync(filePath)) {
+        if (!existsSync(filePath) || !this.sourceArtworkNeedsLimit(filePath, artworkMaxEdge)) {
+          // Read-only probe: the file is gone or its artwork is already within the
+          // limit. Mark it skipped without copying the whole audio file to a temp,
+          // which is what made the on-sync pass far slower than the direct optimize.
           this.setJournalStepCompleted(journal, step, 'skipped')
+          pendingJournalFlush = true
         } else {
+          this.setJournalStepRunning(journal, step, 'optimizing_artwork')
+          await writeYamlFile(journalPath, journal)
+          this.broadcastSyncProgress(
+            plan,
+            'optimizing_artwork',
+            countProcessedArtworkSteps(journal.artwork),
+            total,
+            step.relativePath,
+          )
           const outcome = await this.optimizeArtworkAtomically(filePath, artworkMaxEdge)
           this.setJournalStepCompleted(
             journal,
@@ -2078,20 +2141,32 @@ export class DeviceSyncService {
             outcome.optimized ? 'optimized' : 'skipped',
             outcome.bytesSaved,
           )
+          await writeYamlFile(journalPath, journal)
+          pendingJournalFlush = false
         }
       } catch (err) {
         this.setJournalStepFailed(journal, step, err)
+        pendingJournalFlush = true
       }
-      await writeYamlFile(journalPath, journal)
+
+      processed += 1
       this.broadcastSyncProgress(
         plan,
         'optimizing_artwork',
         countProcessedArtworkSteps(journal.artwork),
         total,
         step.relativePath,
-        undefined,
-        true,
       )
+      if (shouldYieldArtworkAnalysis(processed, total)) {
+        if (pendingJournalFlush) {
+          await writeYamlFile(journalPath, journal)
+          pendingJournalFlush = false
+        }
+        await yieldToEventLoop()
+      }
+    }
+    if (pendingJournalFlush) {
+      await writeYamlFile(journalPath, journal)
     }
     this.broadcastSyncProgress(
       plan,
@@ -2107,24 +2182,17 @@ export class DeviceSyncService {
   private async optimizeArtworkAtomically(
     filePath: string,
     artworkMaxEdge: number,
-  ): Promise<{ optimized: boolean; bytesSaved: number }> {
+  ): Promise<DeviceCopyArtworkOutcome> {
     const tmpPath = artworkOptimizationTempPath(filePath)
-    const effectiveMaxEdge = clampDeviceArtworkEdge(artworkMaxEdge)
     await copyFile(filePath, tmpPath)
     try {
-      const result = optimizeEmbeddedArtwork(tmpPath, effectiveMaxEdge)
-      if (result.optimizedPictures === 0) {
+      const outcome = await this.optimizeArtworkFile(tmpPath, artworkMaxEdge)
+      if (!outcome.optimized) {
         await unlink(tmpPath).catch(() => undefined)
-        return { optimized: false, bytesSaved: 0 }
+        return outcome
       }
-      const tmpStat = await stat(tmpPath)
-      if (tmpStat.size === 0) {
-        await unlink(tmpPath).catch(() => undefined)
-        throw new Error('Artwork optimization produced an empty file')
-      }
-      assertOptimizedArtworkWithinLimit(probeEmbeddedArtwork(tmpPath), effectiveMaxEdge)
       await rename(tmpPath, filePath)
-      return { optimized: true, bytesSaved: result.bytesSaved }
+      return outcome
     } catch (err) {
       await unlink(tmpPath).catch(() => undefined)
       throw err
@@ -3257,18 +3325,22 @@ export class DeviceSyncService {
       pcTargetPath: string
       runId: string
       affectedPcFolderIds: Set<number>
+      optimizeArtwork: boolean
+      artworkMaxEdge: number
     },
-  ): Promise<void> {
+  ): Promise<ApplyActionResult> {
     switch (action.kind) {
       case 'copy_pc_to_device':
       case 'replace_device':
         if (!action.sourcePath || !action.destinationPath) throw new Error('Invalid copy action')
         assertInside(ctx.deviceMusicRoot, resolve(action.destinationPath))
-        await this.copyPreservingMtime(action.sourcePath, action.destinationPath)
-        await this.ensureLyricsSidecarForCopy(action.sourcePath, action.destinationPath, path => {
-          assertInside(ctx.deviceMusicRoot, resolve(path))
-        })
-        return
+        {
+          const copyResult = await this.copyPcTrackToDevice(action, ctx.artworkMaxEdge, ctx.optimizeArtwork)
+          await this.ensureLyricsSidecarForCopy(action.sourcePath, action.destinationPath, path => {
+            assertInside(ctx.deviceMusicRoot, resolve(path))
+          })
+          return copyResult
+        }
       case 'copy_device_to_pc':
         if (!action.sourcePath || !action.destinationPath) throw new Error('Invalid copy action')
         assertInside(resolve(ctx.pcTargetPath), resolve(action.destinationPath))
@@ -3276,7 +3348,7 @@ export class DeviceSyncService {
         await this.ensureLyricsSidecarForCopy(action.sourcePath, action.destinationPath, path => {
           assertInside(resolve(ctx.pcTargetPath), resolve(path))
         })
-        return
+        return {}
       case 'replace_pc':
         if (!action.sourcePath || !action.destinationPath) throw new Error('Invalid copy action')
         this.assertPcWriteAllowed(action.destinationPath, ctx.pcTargetPath)
@@ -3284,24 +3356,86 @@ export class DeviceSyncService {
         await this.ensureLyricsSidecarForCopy(action.sourcePath, action.destinationPath, path => {
           this.assertPcWriteAllowed(path, ctx.pcTargetPath)
         })
-        return
+        return {}
       case 'delete_device':
         await this.moveDeviceFileToTrash(ctx.deviceRoot, ctx.deviceMusicRoot, action.relativePath, ctx.runId)
-        return
+        return {}
       case 'delete_pc':
         if (!action.sourcePath) throw new Error('Invalid delete action')
         await this.trashPcFile(action.sourcePath, ctx.affectedPcFolderIds)
-        return
+        return {}
       case 'skip_conflict':
-        return
+        return {}
     }
   }
 
-  private async copyPreservingMtime(source: string, destination: string): Promise<void> {
+  private async copyPcTrackToDevice(
+    action: DeviceSyncAction,
+    artworkMaxEdge: number,
+    optimizeArtwork: boolean,
+  ): Promise<ApplyActionResult> {
+    if (!action.sourcePath || !action.destinationPath) throw new Error('Invalid copy action')
+
+    const shouldOptimizeBeforeCopy = shouldOptimizeArtworkBeforeDeviceCopy(action.kind, optimizeArtwork)
+    const staged = shouldOptimizeBeforeCopy && this.sourceArtworkNeedsLimit(action.sourcePath, artworkMaxEdge)
+      ? await this.stageDeviceCopyWithArtworkLimit(action.sourcePath, artworkMaxEdge)
+      : null
+    try {
+      await this.copyPreservingMtime(staged?.path ?? action.sourcePath, action.destinationPath, action.sourcePath)
+      if (!shouldOptimizeBeforeCopy) return {}
+      return { deviceArtwork: staged?.outcome ?? { optimized: false, bytesSaved: 0 } }
+    } finally {
+      await staged?.cleanup()
+    }
+  }
+
+  private sourceArtworkNeedsLimit(sourcePath: string, artworkMaxEdge: number): boolean {
+    try {
+      return hasArtworkOverLimit(probeEmbeddedArtwork(sourcePath), clampDeviceArtworkEdge(artworkMaxEdge))
+    } catch {
+      return true
+    }
+  }
+
+  private async stageDeviceCopyWithArtworkLimit(sourcePath: string, artworkMaxEdge: number): Promise<StagedDeviceCopy> {
+    const tempDir = await mkdtemp(join(tmpdir(), 'crate-device-artwork-'))
+    const tempPath = join(tempDir, basename(sourcePath))
+    try {
+      await copyFile(sourcePath, tempPath)
+      const outcome = await this.optimizeArtworkFile(tempPath, artworkMaxEdge)
+      return {
+        path: tempPath,
+        outcome,
+        cleanup: () => rm(tempDir, { recursive: true, force: true }),
+      }
+    } catch (err) {
+      await rm(tempDir, { recursive: true, force: true }).catch(() => undefined)
+      throw err
+    }
+  }
+
+  private async optimizeArtworkFile(
+    filePath: string,
+    artworkMaxEdge: number,
+  ): Promise<DeviceCopyArtworkOutcome> {
+    const effectiveMaxEdge = clampDeviceArtworkEdge(artworkMaxEdge)
+    const result = optimizeEmbeddedArtwork(filePath, effectiveMaxEdge)
+    if (result.optimizedPictures === 0) {
+      return { optimized: false, bytesSaved: 0 }
+    }
+    const optimizedStat = await stat(filePath)
+    if (optimizedStat.size === 0) {
+      throw new Error('Artwork optimization produced an empty file')
+    }
+    assertOptimizedArtworkWithinLimit(probeEmbeddedArtwork(filePath), effectiveMaxEdge)
+    return { optimized: true, bytesSaved: result.bytesSaved }
+  }
+
+  private async copyPreservingMtime(source: string, destination: string, mtimeSource = source): Promise<void> {
     await mkdir(dirname(destination), { recursive: true })
     await copyFile(source, destination)
     try {
-      const sourceStat = await stat(source)
+      const sourceStat = await stat(mtimeSource)
       await utimes(destination, sourceStat.atime, sourceStat.mtime)
     } catch (err) {
       console.warn(`[devices] utimes failed for ${destination}:`, (err as Error).message)

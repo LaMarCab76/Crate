@@ -13,9 +13,44 @@ test('standalone Devices route uses the shared top chrome dashboard tabs', () =>
   assert.ok(appSource.includes('tabs={DEVICE_DASHBOARD_SUBTABS}'), 'Devices should reuse the dashboard subtab definition')
 })
 
+test('device Sync keeps the primary device navbar above its subtabs', () => {
+  const primaryDeviceTabsIndex = appSource.indexOf("{view.kind === 'device' && (\n              <DeviceSectionTabs")
+  const syncSubtabsIndex = appSource.indexOf("{view.kind === 'device' && view.section === 'sync' && (")
+  const syncSubtabsBlock = appSource.slice(syncSubtabsIndex, appSource.indexOf('            )}', syncSubtabsIndex) + 15)
+
+  assert.ok(primaryDeviceTabsIndex >= 0, 'DeviceSectionTabs should render for every device section, including Sync')
+  assert.ok(!appSource.includes("view.kind === 'device' && view.section !== 'sync'"), 'Sync must not be excluded from primary device tabs')
+  assert.ok(syncSubtabsIndex > primaryDeviceTabsIndex, 'Sync subtabs should render after the primary device navbar')
+  assert.ok(syncSubtabsBlock.includes('tabs={DEVICE_SYNC_SUBTABS}'), 'Sync should keep its own subtab definition')
+  assert.ok(!syncSubtabsBlock.includes('variant="primary"'), 'Sync subtabs should use the secondary navbar row styling')
+})
+
 test('DevicesView no longer renders old inline segmented tabs', () => {
   assert.ok(!devicesSource.includes('device-dashboard-tabs'), 'DevicesView should not render the old segmented tab row')
   assert.ok(!devicesSource.includes('onDashboardTabChange'), 'DevicesView should not own tab changes locally')
   assert.ok(!devicesSource.includes('setLocalTab'), 'DevicesView should not keep local tab fallback state')
   assert.ok(!/\.device-dashboard-tabs\b/.test(css), 'Old device dashboard tab CSS should be removed')
+})
+
+test('Devices activity tab discard resolves the activity center sync entry', () => {
+  assert.ok(
+    devicesSource.includes('const resolveDeviceSyncDiscarded = useActivityCenterStore(s => s.resolveDeviceSyncDiscarded)'),
+    'DevicesView should subscribe to the activity resolution action',
+  )
+  assert.ok(
+    devicesSource.includes('const journal = pendingJournals.find(item => item.id === journalId) ?? null'),
+    'DevicesView should capture the journal before discarding it',
+  )
+  assert.ok(
+    devicesSource.includes('if (journal) resolveDeviceSyncDiscarded(journal.planId)'),
+    'DevicesView should close the activity center item for the discarded plan',
+  )
+  assert.ok(
+    devicesSource.includes('onDiscard={journalId => void discardPendingJournal(journalId)}'),
+    'DevicesView should route pending journal discards through the wrapper',
+  )
+  assert.ok(
+    !devicesSource.includes('onDiscard={journalId => void discardJournal(journalId)}'),
+    'DevicesView should not call discardJournal directly from the pending journal list',
+  )
 })

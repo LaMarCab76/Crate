@@ -133,6 +133,76 @@ function rockboxThemeScanText(scan: RockboxThemeScanDiagnostic, themeCount: numb
   return `${themeCount} theme${themeCount === 1 ? '' : 's'} válido${themeCount === 1 ? '' : 's'}`
 }
 
+function rockboxThemeScanState(scan: RockboxThemeScanDiagnostic, themeCount: number): 'ok' | 'neutral' | 'warning' | 'error' {
+  if (scan.status === 'unreadable') return 'error'
+  if (scan.status === 'ok' && scan.misplacedConfigPaths.length === 0 && themeCount > 0) return 'ok'
+  if (scan.status === 'ok' && themeCount > 0) return 'warning'
+  if (scan.status === 'ok') return 'neutral'
+  return 'warning'
+}
+
+function ThemeOverviewStat({
+  label,
+  value,
+  tone = 'neutral',
+}: {
+  label: string
+  value: string | number
+  tone?: 'neutral' | 'ok' | 'warning'
+}) {
+  return (
+    <span className={`device-theme-overview-stat ${tone}`}>
+      <strong>{value}</strong>
+      <em>{label}</em>
+    </span>
+  )
+}
+
+function RockboxThemeOverview({
+  scan,
+  themes,
+  loading,
+  onImport,
+  onRefresh,
+}: {
+  scan: RockboxThemeScanDiagnostic
+  themes: RockboxThemeSummary[]
+  loading: boolean
+  onImport: () => void
+  onRefresh: () => void
+}) {
+  const missingThemeCount = themes.filter(theme => theme.missingFiles.length > 0).length
+  const previewWarningCount = themes.filter(theme => theme.preview.warnings.length > 0).length
+  const completeThemeCount = Math.max(0, themes.length - missingThemeCount)
+  const state = rockboxThemeScanState(scan, themes.length)
+
+  return (
+    <section className={`device-theme-overview ${state}`}>
+      <div className="device-theme-overview-main">
+        <span className="device-theme-overview-label">
+          <Icon name="sparkle" size={13} /> Rockbox Themes
+        </span>
+        <h2>{rockboxThemeScanText(scan, themes.length)}</h2>
+        <p title={scan.themesPath}>{scan.themesPath}</p>
+      </div>
+      <div className="device-theme-overview-stats" aria-label="Resumen de Rockbox themes">
+        <ThemeOverviewStat label="Total" value={themes.length} />
+        <ThemeOverviewStat label="Completos" value={completeThemeCount} tone={themes.length > 0 ? 'ok' : 'neutral'} />
+        <ThemeOverviewStat label="Faltantes" value={missingThemeCount} tone={missingThemeCount > 0 ? 'warning' : 'neutral'} />
+        <ThemeOverviewStat label="Warnings" value={previewWarningCount} tone={previewWarningCount > 0 ? 'warning' : 'neutral'} />
+      </div>
+      <div className="device-theme-overview-actions">
+        <button className="btn ghost" type="button" disabled={loading} onClick={onRefresh}>
+          <Icon name="rotate" size={13} /> Actualizar
+        </button>
+        <button className="btn" type="button" disabled={loading} onClick={onImport}>
+          <Icon name="folder" size={13} /> Importar
+        </button>
+      </div>
+    </section>
+  )
+}
+
 function ThemeScanNotice({
   scan,
   themeCount,
@@ -144,13 +214,7 @@ function ThemeScanNotice({
   const showDetails = Boolean(scan.message) || hasMisplaced || scan.status !== 'ok' || themeCount === 0
   if (!showDetails) return null
 
-  const state = scan.status === 'unreadable'
-    ? 'error'
-    : scan.status === 'ok' && hasMisplaced
-      ? 'warning'
-      : scan.status === 'ok'
-        ? 'neutral'
-        : 'warning'
+  const state = rockboxThemeScanState(scan, themeCount)
   const visibleMisplaced = scan.misplacedConfigPaths.slice(0, 5)
 
   return (
@@ -175,7 +239,10 @@ function ThemeScanNotice({
 
 function ThemeFilePill({ label, value, missing = false }: { label: string; value: string | null; missing?: boolean }) {
   return (
-    <span className={`device-theme-file-pill ${value ? 'present' : ''} ${missing ? 'missing' : ''}`}>
+    <span
+      className={`device-theme-file-pill ${value ? 'present' : ''} ${missing ? 'missing' : ''}`}
+      title={value ?? `${label} no configurado`}
+    >
       <em>{label}</em>
       <strong>{value || '-'}</strong>
     </span>
@@ -351,45 +418,93 @@ function RockboxThemeCard({
         volume={volume}
         artworkPath={artworkPath}
       />
-      <div className="device-theme-card-head">
-        <div>
-          <h2>{theme.name}</h2>
-          <span>{theme.configPath} · {theme.fileCount} archivos detectados</span>
+      <div className="device-theme-card-main">
+        <div className="device-theme-card-head">
+          <div className="device-theme-card-title">
+            <h2 title={theme.name}>{theme.name}</h2>
+            <span title={theme.configPath}>{theme.configPath}</span>
+          </div>
+          <div className="device-theme-card-controls">
+            <b className={hasMissingFiles ? 'warning' : 'ok'}>{hasMissingFiles ? `${theme.missingFiles.length} faltantes` : 'Completo'}</b>
+            <button
+              className="btn icon"
+              type="button"
+              disabled={loading}
+              title="Eliminar theme"
+              onClick={() => onDelete(theme)}
+            >
+              <Icon name="trash" size={12} />
+            </button>
+          </div>
         </div>
-        <b className={hasMissingFiles ? 'warning' : 'ok'}>{hasMissingFiles ? `${theme.missingFiles.length} faltantes` : 'Completo'}</b>
-      </div>
-      <div className="device-theme-file-grid">
-        <ThemeFilePill label="WPS" value={theme.wpsPath} />
-        <ThemeFilePill label="SBS" value={theme.sbsPath} />
-        <ThemeFilePill label="FMS" value={theme.fmsPath} />
-        <ThemeFilePill label="Font" value={theme.font} missing={theme.font != null && theme.missingFiles.includes(theme.font)} />
-        <ThemeFilePill label="Backdrop" value={theme.backdropPath} />
-        <ThemeFilePill label="Icons" value={theme.iconsetPath ?? theme.viewerIconsetPath} />
-      </div>
-      {hasMissingFiles && (
-        <div className="device-theme-missing-list">
-          <span>Archivos referenciados que no existen</span>
-          {theme.missingFiles.slice(0, 4).map(path => <code key={path}>{path}</code>)}
-          {theme.missingFiles.length > 4 && <em>{theme.missingFiles.length - 4} más</em>}
+        <div className="device-theme-card-metrics">
+          <span>
+            <strong>{theme.fileCount}</strong>
+            <em>archivos</em>
+          </span>
+          <span>
+            <strong>{theme.preview.width}x{theme.preview.height}</strong>
+            <em>preview</em>
+          </span>
+          <span>
+            <strong>{theme.preview.layers.length}</strong>
+            <em>capas</em>
+          </span>
         </div>
-      )}
-      {theme.preview.warnings.length > 0 && (
-        <div className="device-theme-missing-list muted">
-          {theme.preview.warnings.slice(0, 2).map(warning => <code key={warning}>{warning}</code>)}
+        <div className="device-theme-file-grid">
+          <ThemeFilePill label="WPS" value={theme.wpsPath} />
+          <ThemeFilePill label="SBS" value={theme.sbsPath} />
+          <ThemeFilePill label="FMS" value={theme.fmsPath} />
+          <ThemeFilePill label="Font" value={theme.font} missing={theme.font != null && theme.missingFiles.includes(theme.font)} />
+          <ThemeFilePill label="Backdrop" value={theme.backdropPath} />
+          <ThemeFilePill label="Icons" value={theme.iconsetPath ?? theme.viewerIconsetPath} />
         </div>
-      )}
-      <div className="device-theme-card-actions">
-        <button
-          className="btn icon"
-          type="button"
-          disabled={loading}
-          title="Eliminar theme"
-          onClick={() => onDelete(theme)}
-        >
-          <Icon name="trash" size={12} />
-        </button>
+        {hasMissingFiles && (
+          <div className="device-theme-missing-list">
+            <span>Archivos referenciados que no existen</span>
+            {theme.missingFiles.slice(0, 4).map(path => <code key={path}>{path}</code>)}
+            {theme.missingFiles.length > 4 && <em>{theme.missingFiles.length - 4} más</em>}
+          </div>
+        )}
+        {theme.preview.warnings.length > 0 && (
+          <div className="device-theme-missing-list muted">
+            {theme.preview.warnings.slice(0, 2).map(warning => <code key={warning}>{warning}</code>)}
+          </div>
+        )}
       </div>
     </article>
+  )
+}
+
+function RockboxThemeDropzone({
+  dragOver,
+}: {
+  dragOver: boolean
+}) {
+  return (
+    <div className={`device-theme-drop ${dragOver ? 'active' : ''}`}>
+      <Icon name="drop" size={20} stroke={1.3} />
+      <div className="device-theme-drop-copy">
+        <strong>Soltá ZIP o carpeta</strong>
+        <span>.cfg, wps, fonts, icons y backdrops quedan en la estructura Rockbox.</span>
+      </div>
+    </div>
+  )
+}
+
+function RockboxThemeEmptyState({
+  scan,
+}: {
+  scan: RockboxThemeScanDiagnostic
+}) {
+  return (
+    <div className="device-theme-empty device-empty large">
+      <Icon name="sparkle" size={24} />
+      <div>
+        <strong>{rockboxThemeScanText(scan, 0)}</strong>
+        <span>{scan.message ?? 'No hay themes Rockbox instalados.'}</span>
+      </div>
+    </div>
   )
 }
 
@@ -536,31 +651,29 @@ export function DeviceLibraryView({
           onDragLeave={() => setDragOver(false)}
           onDrop={event => { void onDrop(event) }}
         >
-          <div className="device-theme-drop">
-            <Icon name="drop" size={26} stroke={1.3} />
-            <div>
-              <strong>Soltá carpetas o ZIP de Rockbox</strong>
-              <span>Se instalan dentro de .rockbox/themes, .rockbox/wps, fonts, icons y backdrops.</span>
-            </div>
-            <button className="btn" type="button" disabled={loading} onClick={() => fileInputRef.current?.click()}>
-              <Icon name="folder" size={13} /> Importar
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              className="hidden-file-input"
-              onChange={event => { void onPickThemeFiles(event.target.files) }}
-            />
-          </div>
+          <RockboxThemeOverview
+            scan={rockboxThemeLibrary.scan}
+            themes={rockboxThemeLibrary.themes}
+            loading={loading}
+            onImport={() => fileInputRef.current?.click()}
+            onRefresh={refresh}
+          />
+          <RockboxThemeDropzone dragOver={dragOver} />
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden-file-input"
+            onChange={event => { void onPickThemeFiles(event.target.files) }}
+          />
           {themeInstallResult && (
-            <div className={themeInstallResult.failed > 0 ? 'device-error inline' : 'sync-result-ok'}>
+            <div className={themeInstallResult.failed > 0 ? 'device-error inline' : 'sync-result-ok inline'}>
               {themeInstallResult.installed} instalados, {themeInstallResult.skipped} omitidos, {themeInstallResult.failed} fallidos.
             </div>
           )}
           <ThemeScanNotice scan={rockboxThemeLibrary.scan} themeCount={rockboxThemeLibrary.themes.length} />
           {rockboxThemeLibrary.themes.length === 0 ? (
-            <div className="device-empty large">{rockboxThemeLibrary.scan.message ?? 'No hay temas Rockbox instalados.'}</div>
+            <RockboxThemeEmptyState scan={rockboxThemeLibrary.scan} />
           ) : (
             <div className="device-theme-grid">
               {rockboxThemeLibrary.themes.map(theme => (
@@ -596,41 +709,34 @@ export function DeviceLibraryView({
 
   return (
     <div className="device-browser-page">
-      <div className={`device-browser-controls ${section !== 'library' ? 'only-actions' : ''}`}>
-        {section === 'library' && (
-          <nav className="device-subtabs" role="tablist" aria-label="Vista de biblioteca">
-            {DEVICE_LIB_VIEWS.map(item => (
-              <button
-                key={item.value}
-                className={`device-section-tab ${libView === item.value ? 'active' : ''}`}
-                type="button"
-                role="tab"
-                aria-selected={libView === item.value}
-                title={item.label}
-                onClick={() => changeLibView(item.value)}
-              >
-                <Icon name={item.icon} size={13} /> {item.label}
-              </button>
-            ))}
-          </nav>
-        )}
-        <div className="device-browser-actions">
-          <button className="btn" type="button" disabled={loading} onClick={refresh}>
-            <Icon name="rotate" size={13} /> Actualizar
-          </button>
-        </div>
-      </div>
-
-      {error && <div className="device-error">{error}</div>}
-
-      {isRockboxSection && rockboxThemeLibrary && (
-        <div className="device-browser-summary">
-          <span>{rockboxThemeLibrary.themes.length} themes</span>
-          <span title={rockboxThemeLibrary.scan.themesPath}>
-            {rockboxThemeScanText(rockboxThemeLibrary.scan, rockboxThemeLibrary.themes.length)}
-          </span>
+      {!isRockboxSection && (
+        <div className={`device-browser-controls ${section !== 'library' ? 'only-actions' : ''}`}>
+          {section === 'library' && (
+            <nav className="device-subtabs" role="tablist" aria-label="Vista de biblioteca">
+              {DEVICE_LIB_VIEWS.map(item => (
+                <button
+                  key={item.value}
+                  className={`device-section-tab ${libView === item.value ? 'active' : ''}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={libView === item.value}
+                  title={item.label}
+                  onClick={() => changeLibView(item.value)}
+                >
+                  <Icon name={item.icon} size={13} /> {item.label}
+                </button>
+              ))}
+            </nav>
+          )}
+          <div className="device-browser-actions">
+            <button className="btn" type="button" disabled={loading} onClick={refresh}>
+              <Icon name="rotate" size={13} /> Actualizar
+            </button>
+          </div>
         </div>
       )}
+
+      {error && <div className="device-error">{error}</div>}
 
       {!isRockboxSection && library && (
         <div className="device-browser-summary">

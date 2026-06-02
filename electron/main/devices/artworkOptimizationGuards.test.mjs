@@ -5,6 +5,7 @@ import {
   artworkOptimizationTempPath,
   assertOptimizedArtworkWithinLimit,
   countProcessedArtworkSteps,
+  hasArtworkOverLimit,
   resizedArtworkOutcome,
   shouldYieldArtworkAnalysis,
 } from './artworkOptimizationGuards.ts'
@@ -91,4 +92,20 @@ test('optimized artwork verification ignores unsupported pictures', () => {
     { format: 'jpeg', width: null, height: 800 },
     { format: 'png', width: 800, height: null },
   ]), 600))
+})
+
+test('artwork over-limit detection only flags supported oversized pictures', () => {
+  assert.equal(hasArtworkOverLimit(probe([
+    { format: 'jpeg', width: 600, height: 600 },
+    { format: 'png', width: 320, height: 480 },
+  ]), 600), false)
+
+  assert.equal(hasArtworkOverLimit(probe([
+    { format: 'jpeg', width: 601, height: 600 },
+  ]), 600), true)
+
+  assert.equal(hasArtworkOverLimit(probe([
+    { format: null, width: null, height: null },
+    { format: 'png', width: null, height: 900 },
+  ]), 600), false)
 })
