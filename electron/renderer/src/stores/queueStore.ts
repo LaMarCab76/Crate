@@ -42,10 +42,12 @@ interface QueueState {
 }
 
 let gaplessPreloadFiredFor: string | null = null
+const gaplessPreloadRetryAtByPath = new Map<string, number>()
 let trackTransitionToken = 0
 let trackLoadingOverlayTimer: number | null = null
 const TRACK_LOADING_OVERLAY_DELAY_MS = 250
 const TRACK_TRANSITION_FADE_STEP_MS = 16
+const GAPLESS_PRELOAD_RETRY_DELAY_MS = 8_000
 
 function shouldApplyCrossfadeTransition(): boolean {
   const playback = usePlaybackStore.getState()
@@ -234,6 +236,7 @@ async function loadAndPlay(track: Track): Promise<void> {
   playback.setStreamInfo(result.streamInfo)
   playback.setStreamSource(result.source)
   playback.setStreamSourceState('idle')
+  applyBufferProgressFromLoadResult(result)
   playback.setCurrentTrack(track)
   await window.api.audio.play()
 }
@@ -244,11 +247,22 @@ function setCurrentTrackWithPromotionReset(track: Track): void {
   playback.setCurrentTrack(track)
 }
 
+function applyBufferProgressFromLoadResult(result: StreamLoadResult | null): void {
+  const playback = usePlaybackStore.getState()
+  playback.setBufferProgress({
+    bufferedBytes: result?.bufferedBytes ?? null,
+    totalBytes: result?.totalBytes ?? null,
+    bufferedSec: result?.bufferedSec ?? null,
+    bufferComplete: result?.bufferComplete ?? false,
+  })
+}
+
 function applyStreamLoadResultForTrack(track: Track, result: StreamLoadResult | null): void {
   setCurrentTrackWithPromotionReset(track)
   const playback = usePlaybackStore.getState()
   playback.setStreamInfo(result?.streamInfo ?? null)
   playback.setStreamSource(result?.source ?? 'none')
+  applyBufferProgressFromLoadResult(result)
 }
 
 function setStreamSourceFromGapless(streamInfo: StreamInfoPayload | null, source?: StreamLoadSource): void {
@@ -256,15 +270,28 @@ function setStreamSourceFromGapless(streamInfo: StreamInfoPayload | null, source
   playback.setStreamInfo(streamInfo)
   playback.setStreamSource(source ?? 'none')
   playback.setStreamSourceState('idle')
+  playback.setBufferProgress({
+    bufferedBytes: null,
+    totalBytes: null,
+    bufferedSec: null,
+    bufferComplete: source === 'memory',
+  })
 }
 
 async function preloadUpcomingTrack(track: Track): Promise<void> {
   if (!track.path) return
   const token = beginTrackPreparation(track, false, false)
   try {
-    await window.api.audio.preloadNext(track.path, track.dbId ?? null)
+    const result = await window.api.audio.preloadNext(track.path, track.dbId ?? null)
+    if (!result.streamInfo && gaplessPreloadFiredFor === track.path) {
+      gaplessPreloadFiredFor = null
+      gaplessPreloadRetryAtByPath.set(track.path, Date.now() + GAPLESS_PRELOAD_RETRY_DELAY_MS)
+    } else if (result.streamInfo) {
+      gaplessPreloadRetryAtByPath.delete(track.path)
+    }
   } catch (err) {
     if (gaplessPreloadFiredFor === track.path) gaplessPreloadFiredFor = null
+    gaplessPreloadRetryAtByPath.set(track.path, Date.now() + GAPLESS_PRELOAD_RETRY_DELAY_MS)
     console.warn('[queue] failed to preload next track:', err)
   } finally {
     finishTrackPreparation(token)
@@ -288,6 +315,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     const token = beginTrackPreparation(track, true, true)
     set({ tracks, currentIndex: Math.max(0, currentIndex), history: [] })
     gaplessPreloadFiredFor = null
+    gaplessPreloadRetryAtByPath.clear()
     try {
       if (fadeTransition) {
         await crossfadeToTrack(track, token, result => {
@@ -321,6 +349,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     const next = tracks[nextIndex]
     if (!next) return
     if (!next.path) return
+    const nextPath = next.path
 
     const token = beginTrackPreparation(next, true, !opts?.auto)
     try {
@@ -331,6 +360,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
         })
         applyStreamLoadResultForTrack(next, result)
         gaplessPreloadFiredFor = null
+        gaplessPreloadRetryAtByPath.delete(nextPath)
       }, !opts?.auto)
     } finally {
       finishTrackPreparation(token)
@@ -358,6 +388,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       history: history.slice(0, -1),
     })
     gaplessPreloadFiredFor = null
+    gaplessPreloadRetryAtByPath.clear()
     try {
       if (fadeTransition) {
         await crossfadeToTrack(prev, token, result => {
@@ -392,6 +423,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       history: tracks.slice(0, index).slice(-50),
     })
     gaplessPreloadFiredFor = null
+    gaplessPreloadRetryAtByPath.clear()
     try {
       if (fadeTransition) {
         await crossfadeToTrack(target, token, result => {
@@ -425,6 +457,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   clear() {
     cancelTrackPreparation()
     set({ tracks: [], currentIndex: -1, history: [] })
+    gaplessPreloadRetryAtByPath.clear()
     void window.api.audio.clearNext()
   },
 
@@ -450,6 +483,9 @@ if (typeof window !== 'undefined' && window.api?.audio) {
       nextPath,
       alreadyPreloadedPath: gaplessPreloadFiredFor,
     }) && next?.path) {
+      const retryAt = gaplessPreloadRetryAtByPath.get(next.path)
+      if (retryAt != null && retryAt > Date.now()) return
+      if (retryAt != null) gaplessPreloadRetryAtByPath.delete(next.path)
       gaplessPreloadFiredFor = next.path
       void preloadUpcomingTrack(next)
     }
@@ -473,6 +509,7 @@ if (typeof window !== 'undefined' && window.api?.audio) {
       // instantly to guard against any drift from an interrupted manual fade.
       void setEngineVolume(usePlaybackStore.getState().volume)
       gaplessPreloadFiredFor = null
+      gaplessPreloadRetryAtByPath.delete(path)
     }
   })
 

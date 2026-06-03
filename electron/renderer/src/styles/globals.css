@@ -32,6 +32,9 @@
 
   --bg-tint: transparent;
   --np-tint: transparent;
+  --np-pal-0: transparent;
+  --np-pal-1: transparent;
+  --np-pal-2: transparent;
   --scrollbar-thumb: color-mix(in srgb, var(--text-primary) 28%, transparent);
   --scrollbar-thumb-hover: color-mix(in srgb, var(--text-primary) 42%, transparent);
   --up-next-toast-bg: rgba(18, 18, 22, 0.24);
@@ -41,6 +44,12 @@
   --search-field-bg-active: color-mix(in oklab, var(--bg-tint) 16%, var(--bg-hover));
   --search-field-border: color-mix(in oklab, var(--bg-tint) 18%, var(--border-subtle));
   --search-field-border-active: color-mix(in oklab, var(--bg-tint) 24%, var(--border-default));
+  --control-bg: color-mix(in oklab, var(--bg-control-tint, var(--bg-elev)) 30%, var(--bg-elev));
+  --control-bg-hover: color-mix(in oklab, var(--bg-control-tint, var(--bg-hover)) 42%, var(--bg-hover));
+  --control-bg-active: color-mix(in oklab, var(--bg-control-tint, var(--bg-selected)) 36%, var(--bg-selected));
+  --control-bg-disabled: color-mix(in oklab, var(--bg-control-tint, var(--bg-elev)) 16%, var(--bg-elev));
+  --control-primary-bg: color-mix(in oklab, var(--bg-control-tint, var(--text-primary)) 12%, var(--text-primary));
+  --control-primary-fg: var(--bg-window);
 
   --shadow-window: 0 30px 80px rgba(0,0,0,0.55), 0 0 0 0.5px rgba(255,255,255,0.08), 0 0 0 1px rgba(0,0,0,0.6);
   --shadow-pop: 0 12px 32px rgba(0,0,0,0.4), 0 0 0 0.5px rgba(255,255,255,0.08);
@@ -158,8 +167,11 @@ html, body {
 .window {
   width: 100%; height: 100%;
   background:
-    linear-gradient(color-mix(in oklab, var(--bg-tint) 30%, transparent),
-                    color-mix(in oklab, var(--bg-tint) 30%, transparent)),
+    linear-gradient(180deg,
+      color-mix(in oklab, var(--bg-pal-2, var(--bg-tint)) 30%, transparent) 0%,
+      color-mix(in oklab, var(--bg-pal-2, var(--bg-tint)) 30%, transparent) 10%,
+      color-mix(in oklab, var(--bg-pal-1, var(--bg-tint)) 26%, transparent) 48%,
+      color-mix(in oklab, var(--bg-pal-0, var(--bg-tint)) 32%, transparent) 100%),
     var(--bg-window);
   display: flex; flex-direction: column;
   overflow: hidden;
@@ -431,10 +443,7 @@ html, body {
   height: var(--tb-h); flex-shrink: 0;
   display: flex; align-items: center; gap: 8px;
   padding: 0 14px;
-  background:
-    linear-gradient(color-mix(in oklab, var(--bg-tint) 30%, transparent),
-                    color-mix(in oklab, var(--bg-tint) 30%, transparent)),
-    var(--bg-window);
+  background: transparent;
   border-bottom: 0.5px solid var(--divider);
   -webkit-app-region: drag;
   transition: padding-left 260ms cubic-bezier(0.22, 1, 0.36, 1), background 200ms ease;
@@ -455,11 +464,26 @@ html, body {
 .tb-nav-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 .tb-nav-btn:disabled { color: var(--text-quaternary); }
 
+.tb-title-slot {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0 4px;
+  container-type: inline-size;
+}
 .tb-title {
   font-size: 14px; font-weight: 600;
   color: var(--text-primary);
-  margin: 0 4px;
   letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Toolbar view/album title: keep it to a single line with an ellipsis, and drop
+   it entirely once the leftover space can't fit ~5 characters, so we never show
+   a lone "B…". The slot uses inline-size containment, so its width is driven by
+   the flex layout (not the text) — the container query stays stable. */
+@container (max-width: 48px) {
+  .tb-title { display: none; }
 }
 .tb-tabs { display: flex; gap: 2px; margin-left: 12px; }
 .tb-tab {
@@ -601,14 +625,9 @@ html, body {
 /* Content area */
 .content {
   flex: 1; overflow-y: auto;
-  background:
-    linear-gradient(color-mix(in oklab, var(--bg-tint) 30%, transparent),
-                    color-mix(in oklab, var(--bg-tint) 30%, transparent)),
-    var(--bg-content);
+  background: transparent;
   scrollbar-width: none;
-  transition:
-    background 200ms ease,
-    padding-bottom 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: background 200ms ease;
 }
 .content::-webkit-scrollbar {
   display: none;
@@ -616,10 +635,6 @@ html, body {
 
 /* Main area */
 .main-area { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
-
-.main-area.with-floating-player .content {
-  padding-bottom: 132px;
-}
 
 .activity-center {
   position: fixed;
@@ -898,11 +913,7 @@ html, body {
   position: relative;
   width: 340px;
   min-width: 340px;
-  background:
-    linear-gradient(180deg,
-                    color-mix(in oklab, var(--np-tint) 42%, transparent),
-                    transparent 78%),
-    var(--bg-panel);
+  background: transparent;
   display: flex; flex-direction: column;
   min-height: 0;
   opacity: 1;
@@ -930,7 +941,8 @@ html, body {
   pointer-events: auto;
   border-left-color: var(--divider);
   transition-delay: 0ms, 0ms, 0ms, 0ms, 0ms, 0ms, 0ms;
-  animation: pp-player-enter 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  /* El ancho lo anima sólo la `transition` de `.player-pane` (desde el estado
+     `collapsed`); sin keyframe duplicado para no reflowear la grilla dos veces. */
 }
 .player-pane-collapsed {
   width: 0;
@@ -956,23 +968,6 @@ html, body {
   transform: translateX(12px) scale(0.985);
 }
 
-@keyframes pp-player-enter {
-  from {
-    width: 0;
-    min-width: 0;
-    opacity: 0;
-    transform: translateX(14px);
-    border-left-color: transparent;
-  }
-  to {
-    width: 340px;
-    min-width: 340px;
-    opacity: 1;
-    transform: translateX(0);
-    border-left-color: var(--divider);
-  }
-}
-
 .lyrics-side-pane {
   --lyrics-side-w: 380px;
   --lyrics-side-duration: 340ms;
@@ -986,11 +981,7 @@ html, body {
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-  background:
-    linear-gradient(180deg,
-                    color-mix(in oklab, var(--np-tint) 28%, transparent),
-                    transparent 78%),
-    var(--bg-panel);
+  background: transparent;
   opacity: 1;
   transform: translateX(0);
   clip-path: inset(0 0 0 0 round 0);
@@ -1115,6 +1106,8 @@ html, body {
   .lyrics-side-pane .lyrics-side-head,
   .lyrics-side-pane .lyr-panel,
   .player-bottom-shell,
+  .player-dock,
+  .player-dock-inner,
   .up-next-toast,
   .up-next-inline,
   .pp-player-viz,
@@ -1501,6 +1494,76 @@ html, body {
   line-height: 1.3;
 }
 
+/* Volume leveler (Sound Check) block at the bottom of the Audio Output popover. */
+.leveler-menu-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 0.5px solid var(--border-strong);
+}
+
+.leveler-menu-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  padding: 0 7px 2px;
+}
+
+.leveler-menu-target {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 7px;
+}
+
+.leveler-menu-target-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.leveler-menu-target input[type='range'] {
+  width: 100%;
+  accent-color: #ffd97a;
+}
+
+.leveler-menu-target-value {
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  min-width: 52px;
+  text-align: right;
+}
+
+.leveler-menu-clip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 7px 2px;
+  padding: 5px 7px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.leveler-menu-clip:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.leveler-menu-clip.on {
+  color: #ffd97a;
+}
+
 /* Subtle yellow ring on the closed speaker button when exclusive is on. */
 .tb-icon-btn.exclusive-on {
   position: relative;
@@ -1617,6 +1680,13 @@ html, body {
   display: flex; flex-direction: column; gap: 4px;
   text-align: left;
   min-width: 0;
+  /* Re-keyed by track id, so the title/artist reveal replays on each change —
+     timed just after the artwork dissolve begins. */
+  animation: pp-meta-in 380ms cubic-bezier(0.22, 1, 0.36, 1) 110ms both;
+}
+@keyframes pp-meta-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
 }
 
 .pp-player-top .info .title-row {
@@ -2215,33 +2285,62 @@ html, body {
 /* Collapsed player bottom bar */
 .player-bottom-shell {
   flex-shrink: 0;
-  position: absolute;
-  left: 14px;
-  right: 14px;
-  bottom: 12px;
+  position: relative;
   z-index: 30;
   background:
-    radial-gradient(circle at 18% 0%,
-                    color-mix(in oklab, var(--np-tint) 42%, transparent),
-                    transparent 50%),
-    linear-gradient(180deg,
-                    color-mix(in oklab, var(--np-tint) 24%, transparent),
-                    transparent 86%),
+    linear-gradient(
+      color-mix(in oklab, var(--np-tint) 55%, transparent),
+      color-mix(in oklab, var(--np-tint) 55%, transparent)),
     var(--bg-panel);
-  border: 0.5px solid color-mix(in srgb, var(--divider) 92%, transparent);
-  border-radius: 14px;
+  border-top: 0.5px solid color-mix(in srgb, var(--divider) 92%, transparent);
+  border-radius: 0;
   overflow: visible;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.34), 0 0 0 0.5px rgba(255, 255, 255, 0.05);
-  will-change: transform, opacity;
-  animation: pb-player-enter 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  box-shadow: none;
   --pb-content-inset: 14px;
   --pb-art-size: 64px;
   --pb-inline: var(--pb-content-inset);
 }
 
-.player-bottom-shell.closing {
+/* Docked bottom player: anchored full-bleed below .frame, inside .window.
+   Collapses its height when switching to the side player (PlayerPane) so the
+   horizontal strip is released with motion. */
+.player-dock {
+  flex-shrink: 0;
+  position: relative;
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+/* 0fr = altura cero: estado de salida (collapsed) y de arranque del crecimiento (priming). */
+.player-dock.collapsed,
+.player-dock.priming {
+  grid-template-rows: 0fr;
+}
+.player-dock-inner {
+  min-height: 0;
+  /* El grid-template-rows (layout) corre siempre en el main thread y puede
+     perder frames cuando el panel lateral monta/reflowea al mismo tiempo; el
+     fade+slide compuesto en GPU es lo que el ojo sigue y enmascara el tirón. */
+  transition:
+    transform 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+/* Barra desvanecida + desplazada en los extremos de la animación. */
+.player-dock.collapsed .player-dock-inner,
+.player-dock.priming .player-dock-inner {
+  transform: translateY(22px);
+  opacity: 0;
+}
+/* Clip + promoción a capa SOLO mientras anima; en reposo abierto queda overflow
+   visible para no cortar los tiempos del hover de progreso que asoman arriba. */
+.player-dock.collapsed .player-dock-inner,
+.player-dock.priming .player-dock-inner,
+.player-dock.entering .player-dock-inner {
+  overflow: hidden;
+  will-change: transform, opacity;
+}
+.player-dock.collapsed .player-bottom-shell {
   pointer-events: none;
-  animation: pb-player-exit 190ms cubic-bezier(0.55, 0, 1, 0.45) both;
 }
 
 .pb-top-progress {
@@ -2259,8 +2358,6 @@ html, body {
   height: 4px;
   background: color-mix(in srgb, var(--bg-active) 86%, transparent);
   cursor: ew-resize;
-  border-top-left-radius: 14px;
-  border-top-right-radius: 14px;
   overflow: hidden;
 }
 
@@ -2300,28 +2397,6 @@ html, body {
   transform: translateY(0);
 }
 
-@keyframes pb-player-enter {
-  from {
-    opacity: 0;
-    transform: translateY(18px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes pb-player-exit {
-  from {
-    opacity: 1;
-    transform: translateY(0);
-  }
-  to {
-    opacity: 0;
-    transform: translateY(18px);
-  }
-}
-
 .track-loading-overlay {
   position: absolute;
   inset: 0;
@@ -2345,6 +2420,27 @@ html, body {
 
 @keyframes track-loading-spin {
   to { transform: rotate(360deg); }
+}
+
+/* Reusable loading state: animated spinner + label inside a .device-empty.large
+   box (grid/place-items:center). Reuses .track-loading-spinner's border+animation,
+   only overriding the artwork-tuned clamp() size for this full-width context. */
+.loading-state {
+  gap: 12px;
+  text-align: center;
+}
+.loading-state-spinner {
+  width: 32px;
+  height: 32px;
+}
+.loading-state-spinner.inline {
+  width: 15px;
+  height: 15px;
+  border-width: 2px;
+}
+.loading-state-label {
+  color: var(--text-secondary);
+  font-size: 12.5px;
 }
 
 .pp-controls button:disabled,
@@ -2381,7 +2477,7 @@ html, body {
 
 .up-next-toast-bottom {
   left: 50%;
-  bottom: 126px;
+  bottom: calc(100% + 8px);
   transform: translate(-50%, 12px);
   animation: up-next-toast-bottom-in 260ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
@@ -2805,9 +2901,9 @@ html, body {
 .tbl thead th {
   position: sticky; top: 0; z-index: 2;
   background:
-    linear-gradient(color-mix(in oklab, var(--bg-tint) 35%, transparent),
-                    color-mix(in oklab, var(--bg-tint) 35%, transparent)),
-    color-mix(in oklab, var(--bg-content), black 18%);
+    linear-gradient(color-mix(in oklab, var(--bg-pal-1, var(--bg-tint)) 22%, transparent),
+                    color-mix(in oklab, var(--bg-pal-1, var(--bg-tint)) 22%, transparent)),
+    color-mix(in oklab, var(--bg-content), black 14%);
   text-align: left;
   font-size: 11px; font-weight: 600;
   color: var(--text-tertiary);
@@ -2832,8 +2928,8 @@ html, body {
   height: var(--row-h);
   color: var(--text-primary);
   background:
-    linear-gradient(color-mix(in oklab, var(--bg-tint) 8%, transparent),
-                    color-mix(in oklab, var(--bg-tint) 8%, transparent)),
+    linear-gradient(color-mix(in oklab, var(--bg-pal-1, var(--bg-tint)) 8%, transparent),
+                    color-mix(in oklab, var(--bg-pal-1, var(--bg-tint)) 8%, transparent)),
     var(--bg-content);
 }
 .tbl tbody tr:hover {
@@ -3125,33 +3221,33 @@ html, body {
   display: inline-flex; align-items: center; gap: 6px;
   height: 28px; padding: 0 12px;
   border: 0.5px solid var(--border-default);
-  background: var(--bg-elev);
+  background: var(--control-bg);
   color: var(--text-primary);
   font-size: 12.5px; font-weight: 500;
   border-radius: var(--r-input);
   cursor: pointer;
 }
 button:disabled { cursor: not-allowed; }
-.btn:hover { background: var(--bg-hover); }
-.btn.primary { background: var(--text-primary); color: var(--bg-window); border-color: transparent; }
+.btn:hover { background: var(--control-bg-hover); }
+.btn.primary { background: var(--control-primary-bg); color: var(--control-primary-fg); border-color: transparent; }
 .btn.primary:hover { opacity: 0.92; }
 .btn:disabled,
 .btn:disabled:hover {
   opacity: 0.45;
-  background: var(--bg-elev);
+  background: var(--control-bg-disabled);
   color: var(--text-tertiary);
   border-color: var(--border-subtle);
 }
 .btn.primary:disabled,
 .btn.primary:disabled:hover {
   opacity: 0.45;
-  background: var(--text-secondary);
-  color: var(--bg-window);
+  background: var(--control-primary-bg);
+  color: var(--control-primary-fg);
 }
 .btn.danger { background: #d64a3a; color: #fff; border-color: transparent; }
 .btn.danger:hover { background: #e05a4a; }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--text-secondary); }
-.btn.ghost:hover { color: var(--text-primary); background: var(--bg-hover); }
+.btn.ghost:hover { color: var(--text-primary); background: var(--control-bg-hover); }
 .btn.sm { height: 24px; padding: 0 10px; font-size: 11.5px; }
 .btn.icon { width: 28px; padding: 0; justify-content: center; }
 
@@ -3222,11 +3318,23 @@ button:disabled { cursor: not-allowed; }
   box-shadow: var(--shadow-pop);
   overflow: hidden;
 }
-.modal-panel:has(.meta-complete-modal) {
-  width: min(860px, calc(100vw - 56px));
-}
 .modal-panel:has(.library-log-modal) {
   width: min(980px, calc(100vw - 56px));
+}
+/* Glass treatment for the lyrics library modal — translucent like the player's
+   up-next ("a continuación") toast, reusing the same tokens, instead of the
+   opaque panel fill. Lighten the backdrop so the blur shows the app behind. */
+.modal-backdrop:has(.lyrics-library-panel) {
+  background: rgba(0, 0, 0, 0.18);
+}
+.modal-panel:has(.lyrics-library-panel) {
+  width: min(860px, calc(100vw - 56px));
+  background: var(--up-next-toast-bg);
+  border-color: var(--up-next-toast-border);
+  /* Stronger blur than the toast token so the long list stays legible over the
+     translucent surface. */
+  backdrop-filter: blur(20px) saturate(1.15);
+  -webkit-backdrop-filter: blur(20px) saturate(1.15);
 }
 .modal-head {
   height: 46px;
@@ -3275,66 +3383,91 @@ button:disabled { cursor: not-allowed; }
   line-height: 1.4;
   white-space: pre-wrap;
 }
-.meta-complete-modal {
-  display: grid;
-  gap: 12px;
+/* Dedicated "complete missing metadata" view: two side-by-side columns
+   (current vs proposed) listed per track. Replaces the old .meta-complete modal. */
+.metadata-fix {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
-.meta-complete-empty {
-  min-height: 140px;
+.metadata-fix-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 4px 20px 8px;
+}
+.metadata-fix-col-label {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-tertiary);
+}
+.metadata-fix-note {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 10px;
+  gap: 8px;
+  margin: 0 20px 10px;
+  padding: 8px 12px;
+  border: 0.5px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-elev);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 11.5px;
+  line-height: 1.35;
 }
-.meta-complete-list {
+.metadata-fix-list {
   display: grid;
   gap: 12px;
+  padding: 0 20px 24px;
 }
-.meta-complete-card {
+.metadata-fix-track {
   overflow: hidden;
   border: 0.5px solid var(--divider);
   border-radius: 8px;
   background: var(--bg-elev);
 }
-.meta-complete-card-head {
+.metadata-fix-track-head {
   min-height: 54px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
   padding: 10px 12px;
   border-bottom: 0.5px solid var(--divider);
 }
-.meta-complete-track {
+.metadata-fix-track-head input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+.metadata-fix-track-id {
   min-width: 0;
   display: grid;
   gap: 2px;
 }
-.meta-complete-track strong,
-.meta-complete-track span,
-.meta-complete-track em {
+.metadata-fix-track-id strong,
+.metadata-fix-track-id span,
+.metadata-fix-track-id em {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.meta-complete-track strong {
+.metadata-fix-track-id strong {
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 650;
 }
-.meta-complete-track span {
+.metadata-fix-track-id span {
   color: var(--text-secondary);
   font-size: 11.5px;
 }
-.meta-complete-track em {
+.metadata-fix-track-id em {
   color: var(--text-tertiary);
   font-size: 10.5px;
   font-style: normal;
 }
-.meta-complete-score {
+.metadata-fix-score {
   min-width: 46px;
   padding: 4px 7px;
   border: 0.5px solid var(--border-subtle);
@@ -3344,7 +3477,7 @@ button:disabled { cursor: not-allowed; }
   font-size: 11px;
   text-align: center;
 }
-.meta-complete-warning {
+.metadata-fix-warning {
   display: grid;
   gap: 3px;
   padding: 8px 12px;
@@ -3354,97 +3487,99 @@ button:disabled { cursor: not-allowed; }
   font-size: 11.5px;
   line-height: 1.35;
 }
-.meta-complete-fields {
+.metadata-fix-track-body {
   display: grid;
+  grid-template-columns: 1fr 1fr;
 }
-.meta-complete-row {
-  min-height: 38px;
+.metadata-fix-proposed {
+  border-left: 0.5px solid var(--divider);
+}
+.metadata-fix-field-row {
+  min-height: 34px;
   display: grid;
-  grid-template-columns: 18px minmax(78px, 0.7fr) minmax(0, 2.2fr) minmax(74px, auto) 46px;
-  gap: 9px;
   align-items: center;
-  padding: 8px 12px;
+  gap: 8px;
+  padding: 7px 12px;
   border-bottom: 0.5px solid var(--divider);
   font-size: 12px;
 }
-.meta-complete-row:last-child { border-bottom: none; }
-.meta-complete-row input,
-.meta-complete-artwork input {
+.metadata-fix-field-row:last-child {
+  border-bottom: none;
+}
+.metadata-fix-actual .metadata-fix-field-row {
+  grid-template-columns: minmax(74px, 0.55fr) minmax(0, 1fr);
+}
+.metadata-fix-proposed .metadata-fix-field-row {
+  grid-template-columns: 16px minmax(0, 1fr) minmax(56px, auto) 40px;
+}
+.metadata-fix-proposed input {
   margin: 0;
   accent-color: var(--accent);
 }
-.meta-complete-field {
+.metadata-fix-field {
   min-width: 0;
   overflow: hidden;
   color: var(--text-secondary);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.meta-complete-values {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 12px minmax(0, 1fr);
-  gap: 6px;
-  align-items: center;
-}
-.meta-complete-values span,
-.meta-complete-values strong {
+.metadata-fix-current,
+.metadata-fix-proposed-value {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.meta-complete-values span {
+.metadata-fix-current {
   color: var(--text-tertiary);
 }
-.meta-complete-values strong {
-  color: var(--text-primary);
-  font-weight: 600;
+.metadata-fix-proposed-value {
+  color: var(--text-secondary);
+  font-weight: 500;
 }
-.meta-complete-source,
-.meta-complete-confidence {
+.metadata-fix-field-row.changed .metadata-fix-proposed-value {
+  color: var(--accent);
+  font-weight: 650;
+}
+.metadata-fix-source,
+.metadata-fix-confidence {
   color: var(--text-tertiary);
   font-size: 10.5px;
   white-space: nowrap;
 }
-.meta-complete-confidence {
+.metadata-fix-confidence {
   font-family: var(--font-mono);
   text-align: right;
 }
-.meta-complete-artwork {
-  min-height: 64px;
+.metadata-fix-art-row {
+  min-height: 60px;
   display: grid;
-  grid-template-columns: 18px 48px minmax(0, 1fr);
-  gap: 10px;
   align-items: center;
-  padding: 10px 12px;
+  gap: 10px;
+  padding: 8px 12px;
   border-top: 0.5px solid var(--divider);
 }
-.meta-complete-artwork img {
-  width: 48px;
-  height: 48px;
+.metadata-fix-actual .metadata-fix-art-row {
+  grid-template-columns: minmax(74px, 0.55fr) minmax(0, 1fr);
+}
+.metadata-fix-proposed .metadata-fix-art-row {
+  grid-template-columns: 16px 44px minmax(0, 1fr);
+}
+.metadata-fix-art-row img {
+  width: 44px;
+  height: 44px;
   border-radius: 6px;
   object-fit: cover;
   background: var(--bg-active);
 }
-.meta-complete-artwork div {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-.meta-complete-artwork strong,
-.meta-complete-artwork span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.meta-complete-artwork strong {
-  color: var(--text-primary);
-  font-size: 12.5px;
-}
-.meta-complete-artwork span {
+.metadata-fix-empty {
+  min-height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   color: var(--text-secondary);
-  font-size: 11.5px;
+  font-size: 13px;
 }
 .detail-grid {
   display: grid;
@@ -3902,12 +4037,14 @@ button:disabled { cursor: not-allowed; }
   --np-stage-pad-x: clamp(26px, 4.5vw, 74px);
   --np-stage-pad-y: clamp(10px, 2.8vh, 34px);
   --np-art-size: clamp(260px, min(52vh, 38vw), 440px);
+  --np-spectrum-height: clamp(86px, 17vh, 156px);
 }
 /* Animated album-color background blobs */
 .np-bg-canvas {
   position: absolute; inset: 0; z-index: 1; overflow: hidden;
 }
-.np-bg-canvas::before {
+.np-bg-canvas::before,
+.pane-bg-canvas::before {
   content: '';
   position: absolute; inset: 0; z-index: 10;
   background-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.68' numOctaves='4' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='220' height='220' filter='url(%23g)'/></svg>");
@@ -3965,6 +4102,82 @@ button:disabled { cursor: not-allowed; }
   0%, 100% { transform: translate(0, 0) scale(1); }
   25% { transform: translate(-18%, 12%) scale(1.15); }
   60% { transform: translate(14%, -10%) scale(0.85); }
+}
+
+/* Immersive player surfaces — the vertical player pane and the lyrics side
+   pane reuse the fullscreen player's animated color background (dark base +
+   floating blobs + grain + scrim). Light-on-dark chrome is forced here
+   (independent of the active theme) so text stays legible over the backdrop. */
+.player-pane,
+.lyrics-side-pane {
+  color: #fff;
+  --text-primary: rgba(255, 255, 255, 0.95);
+  --text-secondary: rgba(255, 255, 255, 0.64);
+  --text-tertiary: rgba(255, 255, 255, 0.46);
+  --text-quaternary: rgba(255, 255, 255, 0.3);
+  --bg-panel: #242427;
+  --bg-elev: #2c2c2f;
+  --bg-hover: rgba(255, 255, 255, 0.08);
+  --bg-active: rgba(255, 255, 255, 0.13);
+  --bg-selected: rgba(255, 255, 255, 0.16);
+  --bg-row-alt: rgba(255, 255, 255, 0.03);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-default: rgba(255, 255, 255, 0.12);
+  --border-strong: rgba(255, 255, 255, 0.2);
+  --divider: rgba(255, 255, 255, 0.12);
+  --accent: rgba(255, 255, 255, 0.95);
+  --accent-soft: rgba(255, 255, 255, 0.14);
+  --up-next-toast-bg: rgba(18, 18, 22, 0.32);
+  --up-next-toast-border: rgba(255, 255, 255, 0.18);
+}
+
+/* Animated background canvas + scrim shared by the immersive player surfaces.
+   The blob elements reuse the fullscreen .np-bg-blob-* classes, driven by the
+   --np-pal-* palette propagated to :root from the playing artwork. */
+.pane-bg-canvas {
+  position: absolute; inset: 0; z-index: 0; overflow: hidden;
+  pointer-events: none;
+  border-radius: inherit;
+}
+.pane-bg-scrim {
+  position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  border-radius: inherit;
+  background:
+    linear-gradient(to bottom,
+      rgba(0, 0, 0, 0.10) 0%,
+      rgba(0, 0, 0, 0.04) 38%,
+      rgba(0, 0, 0, 0.34) 100%);
+}
+/* Lift the real content above the background layers. */
+.player-pane > .pp-header,
+.player-pane > .pp-tab-content,
+.lyrics-side-pane > .lyrics-side-head,
+.lyrics-side-pane > .lyr-panel {
+  position: relative;
+  z-index: 1;
+}
+
+/* Shared immersive dock: the vertical player pane and the lyrics side pane live
+   inside one container that paints a SINGLE continuous backdrop (base + animated
+   blobs + scrim) spanning both, so there is no seam between them. The panes
+   themselves are transparent and just sit on top. */
+.np-dock-lateral {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  min-height: 0;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse at 30% 14%,
+      color-mix(in oklab, var(--np-pal-0, var(--np-tint, #b45b4f)) 60%, #16110f) 0%,
+      color-mix(in oklab, var(--np-pal-0, var(--np-tint, #b45b4f)) 26%, #0d0a09) 82%),
+    #0d0a09;
+  transition: background 400ms ease;
+}
+.np-dock-lateral > .player-pane,
+.np-dock-lateral > .lyrics-side-pane {
+  position: relative;
+  z-index: 1;
 }
 
 .np-full-head {
@@ -4131,6 +4344,9 @@ button:disabled { cursor: not-allowed; }
   justify-items: center;
   gap: 6px;
   text-align: center;
+  /* Keyed by track id: the name + data fade in once the new track lands,
+     slightly after the artwork has begun cross-dissolving. */
+  animation: np-fade-in 460ms cubic-bezier(0.22, 1, 0.36, 1) 140ms both;
 }
 .np-track-meta h2 {
   width: 100%;
@@ -4163,6 +4379,57 @@ button:disabled { cursor: not-allowed; }
 @keyframes np-fade-in {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: none; }
+}
+
+/* Cross-dissolving artwork: the incoming cover fades in over the previous one,
+   which is held underneath until the dissolve completes. */
+.xfade-art {
+  position: relative;
+  width: 100%; height: 100%;
+}
+.xfade-art-layer {
+  position: absolute; inset: 0;
+}
+.xfade-art-layer.entering {
+  animation-name: xfade-in;
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  animation-fill-mode: both;
+  will-change: opacity;
+}
+@keyframes xfade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Ambient full-spectrum analyzer behind the fullscreen stage. Sits above the
+   background canvas (z 1) and scrim (z 3) is layered over it for a soft tint,
+   while the stage content (z 4+) stays in front. */
+.np-spectrum {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: var(--np-spectrum-height);
+  /* Flex column so the full-mode spectrum (flex:1) stretches to fill the band
+     instead of collapsing to its content minimum. */
+  display: flex;
+  flex-direction: column;
+  z-index: 2;
+  opacity: 0.32;
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(to top, #000 0%, #000 46%, rgba(0, 0, 0, 0.36) 76%, transparent 100%);
+  mask-image: linear-gradient(to top, #000 0%, #000 46%, rgba(0, 0, 0, 0.36) 76%, transparent 100%);
+}
+.np-spectrum .spectrum-viz {
+  background: transparent;
+  border-radius: 0;
+}
+.np-spectrum .spectrum-viz.full .spectrum-body { padding: 0 24px 6px; }
+.np-spectrum .spectrum-db-axis,
+.np-spectrum .spectrum-freq-row { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .xfade-art-layer.entering { animation: none; }
+  .pp-player-top .info { animation: none; }
+  .np-track-meta { animation: none; }
 }
 
 .np-lyrics-stack {
@@ -4416,12 +4683,14 @@ button:disabled { cursor: not-allowed; }
   .np-bg-blob-a, .np-bg-blob-b, .np-bg-blob-c, .np-bg-blob-d { animation: none; }
 }
 
-/* "Up next" toast — slides up from the bottom of the fullscreen view during the
-   final seconds of a track to preview what plays next. */
+/* "Up next" toast — drops into the upper fullscreen view during the final
+   seconds of a track to preview what plays next. */
 .np-up-next-toast {
   position: absolute;
-  right: 212px; bottom: 38px;
-  transform: translateY(calc(100% + 36px));
+  right: clamp(32px, 6vw, 92px);
+  top: calc(80px + clamp(12px, 2vh, 26px));
+  bottom: auto;
+  transform: translateY(calc(-100% - 20px));
   display: grid;
   grid-template-columns: auto 1fr;
   align-items: center;
@@ -4596,6 +4865,9 @@ button:disabled { cursor: not-allowed; }
   background: rgba(255, 255, 255, 0.04);
   border-radius: 4px;
   overflow: hidden;
+  /* Bound the per-segment layout/paint to this track so the LED columns don't
+     invalidate each other (safe with overflow:hidden — visually identical). */
+  contain: layout paint;
   display: flex; flex-direction: column; gap: 2px;
   padding: 2px;
   /* Recessed-panel feel: subtle inner border + top-edge shadow. */
@@ -4614,7 +4886,10 @@ button:disabled { cursor: not-allowed; }
      on/off. Off segments keep a faint glow so idle columns read as present. */
   opacity: calc(0.07 + 0.93 * clamp(0, calc(var(--lit, 0) - var(--idx, 0)), 1));
   transition: opacity 60ms linear;
-  will-change: opacity;
+  /* No will-change here: a full spectrum is bandCount × FULL_VIZ_SEGMENTS
+     segments (up to ~1440), and promoting every one to its own compositor layer
+     caused a large composite spike on mount. Opacity-only repaints are cheap, so
+     the transition stays smooth without the layer explosion. */
   pointer-events: none;
 }
 /* Separate clip LED that sits ABOVE the column (a sibling of the bar track, so
@@ -4716,18 +4991,6 @@ button:disabled { cursor: not-allowed; }
 .settings .eq-graph { background: transparent; border: none; border-radius: 0; }
 .settings .set-row { padding-left: 0; padding-right: 0; }
 .settings .set-color-extra { padding-left: 0; padding-right: 0; }
-.update-card {
-  display: grid;
-  gap: 14px;
-}
-.update-status-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding-bottom: 12px;
-  border-bottom: 0.5px solid var(--divider);
-}
 .update-status-badge {
   min-width: 94px;
   height: 26px;
@@ -4745,35 +5008,26 @@ button:disabled { cursor: not-allowed; }
 .update-status-badge.error { color: #ff453a; border-color: color-mix(in oklab, #ff453a 30%, var(--divider)); }
 .update-status-badge.downloading,
 .update-status-badge.checking { color: #64d2ff; border-color: color-mix(in oklab, #64d2ff 30%, var(--divider)); }
-.update-details {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px 18px;
-  color: var(--text-secondary);
-  font-size: 11.5px;
-}
-.update-details strong {
+.update-value {
+  font-size: 13px;
   color: var(--text-primary);
-  font-weight: 650;
-}
-.update-progress-block {
-  display: grid;
-  gap: 6px;
-  color: var(--text-tertiary);
-  font-size: 11px;
+  font-weight: 600;
 }
 .update-progress-meter {
   height: 6px;
   overflow: hidden;
   border-radius: 999px;
-  background: color-mix(in oklab, var(--bg-tint) 14%, transparent);
+  background: var(--bg-elev);
 }
 .update-progress-meter i {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: #64d2ff;
+  background: linear-gradient(90deg, #34c759, #64d2ff);
+  transition: width 160ms ease;
 }
+.update-notes-row { align-items: stretch; }
+.update-notes-wrap { flex: 1; min-width: 0; }
 .update-release-notes {
   max-height: 120px;
   overflow: auto;
@@ -4781,9 +5035,10 @@ button:disabled { cursor: not-allowed; }
   color: var(--text-secondary);
   font-size: 11.5px;
   line-height: 1.45;
-  padding: 10px 0;
-  border-top: 0.5px solid var(--divider);
-  border-bottom: 0.5px solid var(--divider);
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--divider);
+  border-radius: 8px;
 }
 .update-actions {
   display: flex;
@@ -5134,7 +5389,7 @@ button:disabled { cursor: not-allowed; }
   height: 30px;
   border: 0.5px solid var(--border-default);
   border-radius: var(--r-input);
-  background: var(--bg-elev);
+  background: var(--control-bg);
   color: var(--text-primary);
   font: inherit;
   font-size: 12px;
@@ -5183,6 +5438,14 @@ button:disabled { cursor: not-allowed; }
   gap: 12px;
   margin-top: 18px;
 }
+/* Inside the preferences popup the panel is the modal body, so drop the inline
+   top margin and let the list use the taller modal space. */
+.modal-body .lyrics-library-panel {
+  margin-top: 0;
+}
+.modal-body .lyrics-library-list {
+  max-height: min(56vh, 520px);
+}
 .lyrics-library-head,
 .lyrics-library-toolbar,
 .lyrics-library-actions {
@@ -5213,7 +5476,9 @@ button:disabled { cursor: not-allowed; }
   padding: 3px;
   border: 0.5px solid var(--divider);
   border-radius: 8px;
-  background: var(--bg-panel);
+  /* Transparent so the modal's glass shows through; the border + active-tab
+     fill keep the control legible. */
+  background: transparent;
 }
 .lyrics-library-tabs button {
   height: 28px;
@@ -5245,7 +5510,7 @@ button:disabled { cursor: not-allowed; }
   padding: 0 10px;
   border: 0.5px solid var(--divider);
   border-radius: 8px;
-  background: var(--bg-panel);
+  background: transparent;
   color: var(--text-tertiary);
 }
 .lyrics-library-search input {
@@ -5266,7 +5531,7 @@ button:disabled { cursor: not-allowed; }
   overflow: auto;
   border: 0.5px solid var(--divider);
   border-radius: 8px;
-  background: var(--bg-panel);
+  background: transparent;
 }
 .lyrics-library-row {
   min-height: 42px;
@@ -5400,6 +5665,61 @@ button:disabled { cursor: not-allowed; }
   color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
 }
+/* Live spectrum analyzer embedded above the EQ sliders. */
+.eq-visualizer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 168px;
+  padding: 8px 8px 0;
+  border-bottom: 0.5px solid var(--divider);
+}
+.eq-visualizer .spectrum-viz {
+  background: transparent;
+  border-radius: 0;
+}
+.eq-visualizer .spectrum-viz.full .spectrum-body { padding: 10px 6px 6px; }
+.eq-visualizer-hint {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 16px;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), var(--bg-panel) 94%);
+  pointer-events: none;
+}
+
+/* Band-count control (quick-pick chips + fine slider up to 32). */
+.eq-bandcount-row { align-items: flex-start; }
+.eq-bandcount-control {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+}
+.eq-bandcount-presets { display: inline-flex; gap: 4px; }
+.eq-bandcount-chip {
+  min-width: 30px; height: 24px; padding: 0 8px;
+  border: 0.5px solid var(--border-default);
+  border-radius: var(--r-input);
+  background: var(--bg-elev);
+  color: var(--text-secondary);
+  font: inherit; font-size: 11.5px; font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+.eq-bandcount-chip:hover { color: var(--text-primary); }
+.eq-bandcount-chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.eq-bandcount-slider { display: inline-flex; align-items: center; gap: 8px; }
+.eq-bandcount-slider input[type="range"] { width: 132px; accent-color: var(--accent); }
+.eq-bandcount-value {
+  min-width: 18px; text-align: right;
+  font-family: var(--font-mono); font-size: 11.5px; font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
 .eq-preset-row {
   display: flex;
   align-items: center;
@@ -5451,6 +5771,256 @@ button:disabled { cursor: not-allowed; }
   margin-left: auto;
   color: var(--text-tertiary);
   font-size: 11px;
+}
+
+/* Unified EQ surface: live spectrum behind, the EQ-response curve over it, and
+   slider thumbs kept visible without their native tracks. Dragging darkens the
+   spectrum just enough to make active editing clear without hiding the analyzer.
+   Curve nodes, slider thumbs and frequency labels share the same equal-fraction
+   columns (gap:0) so they line up; the spectrum sits behind with a small gap. */
+.eq-unified {
+  position: relative;
+  height: 200px;
+  overflow: hidden;
+  /* Thumb size doubles as the vertical track's cross-axis width. A native
+     vertical (writing-mode) range pins its thumb to the track's block-start, so
+     a full-width track left the dot ~(column-width/2 − radius) to the LEFT of the
+     spectrum bar / curve node behind it. Sizing the track to the thumb removes
+     that freedom; .eq-band's align-items:center then centers the dot in its
+     column, 1:1 with the bar — at any band count or window width. */
+  --eq-thumb-size: 18px;
+  --eq-slider-thumb: rgba(255, 255, 255, 0.96);
+  --eq-slider-thumb-active: rgba(218, 220, 228, 0.98);
+  --eq-slider-thumb-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12), 0 4px 11px rgba(0, 0, 0, 0.28);
+}
+/* Strip the embedded spectrum's own chrome — only the EQ's axis/labels show.
+   Mirrors the .np-spectrum treatment. */
+.eq-unified .spectrum-viz { background: transparent; border-radius: 0; }
+.eq-unified .spectrum-db-axis,
+.eq-unified .spectrum-freq-row { display: none; }
+.eq-unified .spectrum-viz.full .spectrum-body { padding: 12px 12px 0; }
+.eq-unified .spectrum-viz.full .spectrum-bands { gap: 2px; }
+
+/* Flex column so the full-mode spectrum (flex:1) stretches to fill the layer. */
+.eq-unified-spectrum {
+  position: absolute; inset: 0 0 22px;
+  display: flex; flex-direction: column;
+}
+
+.eq-unified-curve {
+  position: absolute;
+  left: 12px; right: 12px; top: 12px; bottom: 22px;
+  width: auto; height: auto;
+  pointer-events: none;
+  z-index: 1;
+  transition: opacity 140ms ease;
+}
+.eq-curve-zero {
+  stroke: var(--divider);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+}
+.eq-curve-line {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.eq-unified-scrim {
+  position: absolute; inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.38);
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.eq-unified-hint {
+  position: absolute; inset: 0 0 22px;
+  z-index: 2;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 34px 16px 0;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  /* Fades to the color the surface actually sits on in Settings (the panel is
+     transparent there, so the backdrop is --bg-content, not --bg-panel). */
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), var(--bg-content) 94%);
+  pointer-events: none;
+}
+
+.eq-unified-bands {
+  position: absolute;
+  left: 12px; right: 12px; top: 12px; bottom: 22px;
+  z-index: 3;
+  display: flex; align-items: stretch; justify-content: space-between;
+  gap: 0;
+  opacity: 1;
+  pointer-events: none;
+  transition: opacity 140ms ease;
+}
+/* Stay hit-testable whenever the EQ is enabled (the reveal only drives the
+   visual). A touch/pen device has no :hover before contact, so the first touch
+   must be able to land on a slider to engage editing — otherwise the reveal
+   could never start. Disabled keeps pointer-events:none (inputs are disabled). */
+.eq-unified:not([data-enabled="false"]) .eq-unified-bands { pointer-events: auto; }
+
+.eq-unified .eq-band input[type="range"] {
+  /* Track cross-axis = thumb width so the dot can't drift off-column (see
+     .eq-unified). .eq-band centers this narrow input within its flex column. */
+  width: var(--eq-thumb-size);
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  background: transparent;
+  accent-color: transparent;
+  cursor: ns-resize;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.eq-unified .eq-band input[type="range"]::-webkit-slider-runnable-track {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+
+.eq-unified .eq-band input[type="range"]::-webkit-slider-thumb {
+  width: var(--eq-thumb-size);
+  height: var(--eq-thumb-size);
+  border: 0;
+  border-radius: 999px;
+  background: var(--eq-slider-thumb);
+  box-shadow: var(--eq-slider-thumb-shadow);
+  -webkit-appearance: none;
+}
+
+.eq-unified .eq-band input[type="range"]::-moz-range-track {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+
+.eq-unified .eq-band input[type="range"]::-moz-range-progress {
+  background: transparent;
+}
+
+.eq-unified .eq-band input[type="range"]::-moz-range-thumb {
+  width: var(--eq-thumb-size);
+  height: var(--eq-thumb-size);
+  border: 0;
+  border-radius: 999px;
+  background: var(--eq-slider-thumb);
+  box-shadow: var(--eq-slider-thumb-shadow);
+}
+
+.eq-unified .eq-band input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow:
+    0 0 0 2px color-mix(in oklab, var(--accent), transparent 34%),
+    var(--eq-slider-thumb-shadow);
+}
+
+.eq-unified .eq-band input[type="range"]:focus-visible::-moz-range-thumb {
+  box-shadow:
+    0 0 0 2px color-mix(in oklab, var(--accent), transparent 34%),
+    var(--eq-slider-thumb-shadow);
+}
+
+.eq-unified .eq-band input[type="range"]:active::-webkit-slider-thumb,
+.eq-unified.interacting .eq-band input[type="range"]::-webkit-slider-thumb {
+  background: var(--eq-slider-thumb-active);
+}
+
+.eq-unified .eq-band input[type="range"]:active::-moz-range-thumb,
+.eq-unified.interacting .eq-band input[type="range"]::-moz-range-thumb {
+  background: var(--eq-slider-thumb-active);
+}
+
+.eq-unified-labels {
+  position: absolute;
+  left: 12px; right: 12px; bottom: 5px;
+  z-index: 3;
+  display: flex; align-items: center;
+  pointer-events: none;
+}
+.eq-unified-labels .hz {
+  flex: 1; min-width: 0;
+  text-align: center;
+}
+
+/* Darken only while a pointer drag is in progress. .interacting is the JS
+   belt-and-suspenders so a drag that leaves the box doesn't drop the state. */
+.eq-unified.interacting .eq-unified-scrim { opacity: 1; }
+
+.eq-unified.interacting .eq-unified-bands { opacity: 1; pointer-events: auto; }
+
+/* Fade the curve back while dragging so the thumb position reads clearly. */
+.eq-unified.interacting .eq-unified-curve { opacity: 0.62; }
+
+/* Live dB readout: a small balloon that floats over the thumb being dragged.
+   Shares .eq-unified-bands' inset so left/top % land on the thumb (top via
+   gainToY, x via the band's column center). */
+.eq-unified-readout-layer {
+  position: absolute;
+  left: 12px; right: 12px; top: 12px; bottom: 22px;
+  z-index: 4;
+  pointer-events: none;
+}
+/* Frosted glass. It only shows mid-drag, when .eq-unified-scrim darkens the
+   spectrum behind it (opacity 1), so the sampled backdrop is dark in BOTH
+   themes — hence a fixed dark tint + light text + text-shadow keeps the digits
+   legible over the blurred, possibly-colorful bars regardless of theme. */
+.eq-unified-readout {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 12px)); /* floats above the thumb */
+  padding: 3px 8px;
+  border-radius: 7px;
+  background: rgba(22, 22, 28, 0.5);
+  border: 0.5px solid rgba(255, 255, 255, 0.2);
+  box-shadow:
+    0 8px 22px rgba(0, 0, 0, 0.42),
+    0 1px 0 rgba(255, 255, 255, 0.1) inset;
+  backdrop-filter: blur(14px) saturate(1.4);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0.2px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.96);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+  white-space: nowrap;
+}
+/* Flip below the thumb near the top so it can't clip past overflow:hidden. */
+.eq-unified-readout.below { transform: translate(-50%, 12px); }
+.eq-unified-readout::after {
+  content: '';
+  position: absolute;
+  left: 50%; bottom: -4px;
+  width: 7px; height: 7px;
+  transform: translateX(-50%) rotate(45deg);
+  background: rgba(22, 22, 28, 0.5);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
+  border-right: 0.5px solid rgba(255, 255, 255, 0.2);
+  border-bottom: 0.5px solid rgba(255, 255, 255, 0.2);
+}
+.eq-unified-readout.below::after {
+  bottom: auto; top: -4px;
+  border: 0;
+  border-left: 0.5px solid rgba(255, 255, 255, 0.2);
+  border-top: 0.5px solid rgba(255, 255, 255, 0.2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .eq-unified-scrim,
+  .eq-unified-bands,
+  .eq-unified-curve { transition: none; }
 }
 
 /* Import */
@@ -8255,7 +8825,7 @@ button.device-artwork-group-row:focus-visible {
   background:
     linear-gradient(color-mix(in oklab, var(--bg-tint) 22%, transparent),
                     color-mix(in oklab, var(--bg-tint) 22%, transparent)),
-    var(--bg-window);
+    transparent;
   border-bottom: 0.5px solid var(--divider);
   overflow-x: auto;
   scrollbar-width: none;
@@ -8268,7 +8838,7 @@ button.device-artwork-group-row:focus-visible {
   background:
     linear-gradient(color-mix(in oklab, var(--bg-tint) 11%, transparent),
                     color-mix(in oklab, var(--bg-tint) 11%, transparent)),
-    var(--bg-window);
+    transparent;
 }
 .device-subtabs {
   display: flex;
@@ -9169,15 +9739,19 @@ button.device-artwork-group-row:focus-visible {
 .rule-row .select {
   height: 26px; padding: 0 10px;
   border: 0.5px solid var(--border-default);
-  background: var(--bg-elev);
+  background: var(--control-bg);
   border-radius: var(--r-input);
   font-size: 12.5px;
   color: var(--text-primary);
   display: inline-flex; align-items: center; gap: 4px;
+  cursor: pointer;
 }
+.rule-row .select:hover { background: var(--control-bg-hover); }
+.rule-row .select.active,
 .rule-row .device-mode.active {
-  background: var(--bg-selected);
+  background: var(--control-bg-active);
   color: var(--text-primary);
+  box-shadow: inset 0 0 0 0.5px var(--border-strong);
 }
 
 /* Downloads / Online */
@@ -9767,8 +10341,6 @@ button.device-artwork-group-row:focus-visible {
   .service-card .service-select { min-width: 0; }
   .har-fields > div { grid-template-columns: 1fr; }
   .settings { padding: 22px 16px; }
-  .update-status-row { align-items: flex-start; flex-direction: column; }
-  .update-details { grid-template-columns: 1fr; }
 }
 
 /* Utility */
@@ -10310,6 +10882,7 @@ button.device-artwork-group-row:focus-visible {
     --np-stage-pad-x: 28px;
     --np-stage-pad-y: 14px;
     --np-art-size: clamp(184px, 34vh, 278px);
+    --np-spectrum-height: clamp(68px, 15vh, 112px);
   }
 
   .np-full-head {
@@ -10386,8 +10959,9 @@ button.device-artwork-group-row:focus-visible {
   }
 
   .np-up-next-toast {
-    right: 32px;
-    bottom: 86px;
+    right: 24px;
+    top: 84px;
+    bottom: auto;
     max-width: 220px;
   }
 

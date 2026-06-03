@@ -5,6 +5,7 @@ import type { DbAlbum, DbArtist, DbFolder, DbGenre, DbPlaylist, DbTrack } from '
 import type {
   LyricsCandidate,
   LyricsLibraryOverview,
+  LyricsLibraryProgress,
   LyricsSelectionProgress,
   LyricsSelectionSummary,
   LyricsSettingsState,
@@ -440,7 +441,22 @@ export interface ExclusiveModeState {
 export interface EqState {
   enabled: boolean
   preset: string
-  bands: number[]              // global EQ gains in dB
+  bands: number[]              // global EQ gains in dB, one per active band
+  bandCount: number            // number of active bands (configurable, ≤ 32)
+}
+
+// Volume leveler (loudness normalization / "Sound Check"). Config mirrors
+// shared/constants/leveler.ts LevelerConfig.
+export interface LevelerConfig {
+  enabled: boolean
+  targetLufs: number           // normalization target, LUFS
+  preventClipping: boolean     // cap boosts to keep the true peak under 0 dBFS
+}
+
+export interface LevelerState extends LevelerConfig {
+  // The gain (dB) the leveler is currently applying to the playing track. 0 when
+  // disabled or the track has no loudness data. Display-only.
+  currentGainDb: number
 }
 
 export interface FftEvent {
@@ -531,10 +547,17 @@ export interface EqApi {
   setEnabled(enabled: boolean): Promise<void>
   setBand(index: number, gain: number): Promise<void>
   setBands(bands: number[]): Promise<void>
+  setBandCount(count: number): Promise<void>
   previewBand(index: number, gain: number): Promise<void>
   setPreset(name: string): Promise<void>
   presets(): Promise<string[]>
   onChanged(h: (e: EqState) => void): EventOff
+}
+
+export interface LevelerApi {
+  getState(): Promise<LevelerState>
+  setConfig(patch: Partial<LevelerConfig>): Promise<LevelerState>
+  onChanged(h: (e: LevelerState) => void): EventOff
 }
 
 export interface TracksApi {
@@ -558,7 +581,9 @@ export interface ArtistsApi {
 
 export interface LyricsApi {
   get(trackId: number): Promise<LyricsView>
-  libraryOverview(): Promise<LyricsLibraryOverview>
+  // `force` rebuilds the per-folder lyrics index from disk (reconciles sidecars
+  // changed outside the app); the default fast path reads the cached index.
+  libraryOverview(force?: boolean): Promise<LyricsLibraryOverview>
   fetch(trackId: number, force?: boolean): Promise<LyricsView>
   search(trackId: number): Promise<LyricsCandidate[]>
   importCandidate(trackId: number, lrclibId: string): Promise<LyricsView>
@@ -572,6 +597,8 @@ export interface LyricsApi {
 
   onChanged(h: (e: { trackId: number }) => void): EventOff
   onSelectionProgress(h: (e: LyricsSelectionProgress) => void): EventOff
+  // Fires while the library overview scans disk to (re)build the lyrics index.
+  onLibraryProgress(h: (e: LyricsLibraryProgress) => void): EventOff
 }
 
 export interface SettingsApi {
@@ -642,6 +669,7 @@ export interface Api {
   queue: QueueApi
   audio: AudioApi
   eq: EqApi
+  leveler: LevelerApi
   tracks: TracksApi
   albums: AlbumsApi
   artists: ArtistsApi

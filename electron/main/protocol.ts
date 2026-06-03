@@ -25,7 +25,7 @@ export function registerProtocolSchemes(): void {
 export function registerProtocolHandlers(): void {
   const artworkDir = join(app.getPath('userData'), 'artwork')
 
-  protocol.handle('crate', request => {
+  protocol.handle('crate', async request => {
     const url = new URL(request.url)
     // host is the first path segment after crate:// e.g. "artwork".
     if (url.hostname === 'artwork') {
@@ -53,7 +53,7 @@ export function registerProtocolHandlers(): void {
         return new Response('Bad Request', { status: 400 })
       }
       try {
-        const filePath = getDeviceSyncService().rockboxThemeAssetPath(deviceId, relativePath)
+        const filePath = await getDeviceSyncService().rockboxThemeAssetPath(deviceId, relativePath)
         return net.fetch(pathToFileURL(filePath).toString())
       } catch {
         return new Response('Not Found', { status: 404 })

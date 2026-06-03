@@ -25,6 +25,7 @@ import {
 } from './adapters'
 import { usePlaybackStore } from './playbackStore'
 import { useQueueStore } from './queueStore'
+import { useActivityCenterStore } from './activityCenterStore'
 import { runTrackDeletionLifecycle } from '@renderer/utils/trackDeletionLifecycle'
 
 const TRACK_NO_WITHOUT = Number.MAX_SAFE_INTEGER
@@ -169,6 +170,12 @@ interface LibraryState {
   deletingTrackIds: Set<number>
   markDeletingTracks(ids: number[]): void
   clearDeletingTracks(ids: number[]): void
+  // Tracks that have been optimistically removed from the UI but whose disk
+  // deletion has not settled yet. `refresh()` filters these out so an unrelated
+  // reload can't resurrect a row mid-deletion.
+  pendingTrashIds: Set<number>
+  applyOptimisticTrash(ids: number[]): void
+  clearPendingTrash(ids: number[]): void
 }
 
 export const useLibraryStore = create<LibraryState>((set, get) => ({
@@ -185,6 +192,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   importing: null,
   metadataCompletionPrompt: null,
   deletingTrackIds: new Set<number>(),
+  pendingTrashIds: new Set<number>(),
 
   async refresh() {
     if (get().loading) return
@@ -192,7 +200,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     try {
       const api = window.api.library
 
-      const [dbTracks, dbAlbums, dbArtists, dbGenres, dbPlaylists, dbFolders, count] =
+      const [rawDbTracks, dbAlbums, dbArtists, dbGenres, dbPlaylists, dbFolders, count] =
         await Promise.all([
           api.tracks({ limit: 10000 }),
           api.albums(),
@@ -202,6 +210,15 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
           api.folders(),
           api.trackCount(),
         ])
+
+      // Drop rows whose disk deletion is still in flight so a reload triggered
+      // mid-deletion (e.g. a `library:changed` broadcast) can't resurrect an
+      // optimistically removed track before the trash settles.
+      const pendingTrash = get().pendingTrashIds
+      const dbTracks = pendingTrash.size > 0
+        ? rawDbTracks.filter(row => !pendingTrash.has(row.id))
+        : rawDbTracks
+      const trackCount = Math.max(0, count - (rawDbTracks.length - dbTracks.length))
 
       const tracks = dbTracks.map(dbToUiTrack)
       const tracksByAlbumId = new Map<string, Track[]>()
@@ -295,7 +312,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         genres: dbGenres.map(g => ({ id: `g${g.id}`, name: g.name })),
         playlists,
         folders: dbFolders,
-        trackCount: count,
+        trackCount,
         loaded: true,
         loading: false,
         error: null,
@@ -337,6 +354,30 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       const next = new Set(s.deletingTrackIds)
       for (const id of ids) next.delete(id)
       return { deletingTrackIds: next }
+    })
+  },
+
+  applyOptimisticTrash(ids) {
+    if (ids.length === 0) return
+    const idSet = new Set(ids)
+    set(s => {
+      const tracks = s.tracks.filter(t => t.dbId == null || !idSet.has(t.dbId))
+      const removed = s.tracks.length - tracks.length
+      const pendingTrashIds = new Set(s.pendingTrashIds)
+      for (const id of ids) pendingTrashIds.add(id)
+      return {
+        tracks,
+        pendingTrashIds,
+        trackCount: Math.max(0, s.trackCount - removed),
+      }
+    })
+  },
+
+  clearPendingTrash(ids) {
+    set(s => {
+      const next = new Set(s.pendingTrashIds)
+      for (const id of ids) next.delete(id)
+      return { pendingTrashIds: next }
     })
   },
 }))
@@ -561,6 +602,11 @@ export async function trashTracks(trackDbIds: number[]): Promise<TrashTracksResu
 
 export const TRACK_DELETE_ROW_MS = 240
 export const TRACK_DELETE_ROW_EASE = 'cubic-bezier(0.4, 0, 0.2, 1)'
+// The collapse transition starts ~2 rAF after `markDeletingTracks` (React commit
+// + the double requestAnimationFrame in TrackTable), so the `wait` clock leads
+// the animation by ~20-40ms. Hold a small buffer before unmounting the row so it
+// has fully reached height 0 — otherwise removing it at exactly 240ms pops.
+const TRACK_DELETE_SETTLE_MS = TRACK_DELETE_ROW_MS + 64
 const TRACK_DELETE_VOLUME_FADE_MS = 130
 const TRACK_DELETE_PLAYER_CLOSE_MS = 280
 
@@ -573,7 +619,19 @@ function getTrackDeleteVisualDelayMs(): number {
   if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
     return 0
   }
-  return TRACK_DELETE_ROW_MS
+  return TRACK_DELETE_SETTLE_MS
+}
+
+function notifyTrashFailures(failed: TrashTracksResult['failed']): void {
+  if (failed.length === 0) return
+  const first = failed[0]
+  useActivityCenterStore.getState().upsert({
+    id: `track-trash-failed:${failed.map(f => f.id).sort((a, b) => a - b).join('-')}`,
+    category: 'library',
+    status: 'error',
+    title: failed.length === 1 ? 'No se pudo mover a Papelera' : `${failed.length} temas no se borraron`,
+    detail: `${first?.title ?? ''}${first?.error ? ` · ${first.error}` : ''}`,
+  })
 }
 
 function fadeAudioVolume(fromVol: number, toVol: number, durationMs: number): Promise<void> {
@@ -625,15 +683,32 @@ export async function trashTracksWithAnimation(trackDbIds: number[]): Promise<vo
     await delay(TRACK_DELETE_PLAYER_CLOSE_MS)
   }
 
-  await runTrackDeletionLifecycle({
+  const { settled } = runTrackDeletionLifecycle({
     visualDelayMs: getTrackDeleteVisualDelayMs(),
     wait: delay,
     prepareBeforeDelete,
+    // Remove the rows from the in-memory library the instant the collapse
+    // animation finishes — the list settles without waiting on the drive.
+    settleUi: () => useLibraryStore.getState().applyOptimisticTrash(ids),
     deleteTracks: () => window.api.tracks.trash(ids),
-    afterDelete: result => pruneDeletedTracksFromQueue(result.trashedTrackIds),
-    refresh: () => useLibraryStore.getState().refresh(),
-    cleanup: () => useLibraryStore.getState().clearDeletingTracks(ids),
+    afterDelete: result => {
+      pruneDeletedTracksFromQueue(result.trashedTrackIds)
+      notifyTrashFailures(result.failed)
+    },
+    // Reconcile against the DB once the disk settles: tracks that failed to
+    // trash are still in the DB and reappear; successfully trashed ones stay
+    // gone. Clear `pendingTrashIds` first so the refresh restores the failures.
+    reconcile: () => {
+      const store = useLibraryStore.getState()
+      store.clearPendingTrash(ids)
+      store.clearDeletingTracks(ids)
+      return store.refresh()
+    },
   })
+
+  // Only wait for the UI to settle; the disk trash + reconcile run in the
+  // background and must never block the caller (or the deletion animation).
+  await settled
 }
 
 let libraryListenerCleanups: Array<() => void> | null = null

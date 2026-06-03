@@ -14,19 +14,17 @@ import {
 import { useQueueStore } from '@renderer/stores/queueStore'
 import { ContextMenu, type ContextMenuItem } from './ContextMenu'
 import { Icon } from './Icon'
-import { MetadataCompletionModal } from './MetadataCompletionModal'
+import { useNavIntentStore } from '@renderer/stores/navIntentStore'
 
 type TrackDialog =
   | { kind: 'playlist'; tracks: Track[] }
   | { kind: 'details'; track: Track }
   | { kind: 'edit'; track: Track }
-  | { kind: 'metadata'; tracks: Track[] }
   | { kind: 'trash'; tracks: Track[] }
 
 type AlbumDialog =
   | { kind: 'details'; album: Album }
   | { kind: 'edit'; album: Album }
-  | { kind: 'metadata'; album: Album }
   | { kind: 'trash'; album: Album }
 
 interface MenuState<T> {
@@ -448,6 +446,7 @@ function AlbumMetadataEditor({ album, onClose }: { album: Album; onClose: () => 
 export function useTrackActions() {
   const [menu, setMenu] = useState<MenuState<Track> | null>(null)
   const [dialog, setDialog] = useState<TrackDialog | null>(null)
+  const requestMetadataFix = useNavIntentStore(s => s.requestMetadataFix)
 
   const openTrackMenu = (event: MouseEvent<HTMLElement>, track: Track) => {
     event.preventDefault()
@@ -498,7 +497,7 @@ export function useTrackActions() {
         label: 'Completar metadatos...',
         icon: 'sparkle',
         disabled,
-        onSelect: () => setDialog({ kind: 'metadata', tracks: [track] }),
+        onSelect: () => requestMetadataFix(trackDbIds([track]), track.t),
       },
       {
         id: 'lyrics',
@@ -517,7 +516,7 @@ export function useTrackActions() {
         onSelect: () => setDialog({ kind: 'trash', tracks: [track] }),
       },
     ]
-  }, [menu])
+  }, [menu, requestMetadataFix])
 
   const elements = (
     <>
@@ -525,9 +524,6 @@ export function useTrackActions() {
       {dialog?.kind === 'playlist' && <PlaylistPickerModal tracks={dialog.tracks} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'details' && <TrackDetailsModal track={dialog.track} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'edit' && <TrackMetadataEditor track={dialog.track} onClose={() => setDialog(null)} />}
-      {dialog?.kind === 'metadata' && (
-        <MetadataCompletionModal trackIds={trackDbIds(dialog.tracks)} onClose={() => setDialog(null)} />
-      )}
       {dialog?.kind === 'trash' && (
         <ConfirmTrashModal
           title="Mover archivo a Papelera"
@@ -546,6 +542,7 @@ export function useAlbumActions() {
   const [menu, setMenu] = useState<MenuState<Album> | null>(null)
   const [dialog, setDialog] = useState<AlbumDialog | null>(null)
   const playNow = useQueueStore(s => s.playNow)
+  const requestMetadataFix = useNavIntentStore(s => s.requestMetadataFix)
 
   const openAlbumMenu = (event: MouseEvent<HTMLElement>, album: Album) => {
     event.preventDefault()
@@ -608,7 +605,7 @@ export function useAlbumActions() {
         label: 'Completar metadatos...',
         icon: 'sparkle',
         disabled: !hasDbTracks,
-        onSelect: () => setDialog({ kind: 'metadata', album }),
+        onSelect: () => requestMetadataFix(trackDbIds(album.tracks), album.title),
       },
       { id: 'sep-2', divider: true },
       {
@@ -620,16 +617,13 @@ export function useAlbumActions() {
         onSelect: () => setDialog({ kind: 'trash', album }),
       },
     ]
-  }, [menu])
+  }, [menu, requestMetadataFix])
 
   const elements = (
     <>
       {menu && <ContextMenu x={menu.x} y={menu.y} items={items} onClose={() => setMenu(null)} />}
       {dialog?.kind === 'details' && <AlbumDetailsModal album={dialog.album} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'edit' && <AlbumMetadataEditor album={dialog.album} onClose={() => setDialog(null)} />}
-      {dialog?.kind === 'metadata' && (
-        <MetadataCompletionModal trackIds={trackDbIds(dialog.album.tracks)} onClose={() => setDialog(null)} />
-      )}
       {dialog?.kind === 'trash' && (
         <ConfirmTrashModal
           title="Mover álbum a Papelera"

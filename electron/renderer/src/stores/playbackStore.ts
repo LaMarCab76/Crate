@@ -150,8 +150,12 @@ if (typeof window !== 'undefined' && window.api?.audio) {
     if (currentPath && state.currentTrack?.path && state.currentTrack.path !== currentPath) return
     state.setStreamSource(source)
     state.setBufferProgress({ bufferedBytes, totalBytes, bufferedSec, bufferComplete })
-    if (reason === 'progressive-read-failed') {
+    if (source === 'file' && !bufferComplete && bufferedBytes != null) {
       state.setStreamSourceState('promoting')
+    } else if (reason === 'progressive-read-failed') {
+      state.setStreamSourceState('promoting')
+    } else if (bufferComplete || source === 'memory') {
+      state.setStreamSourceState('idle')
     }
   })
 

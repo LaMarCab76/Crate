@@ -44,12 +44,14 @@ const titleMap: Record<View['kind'], string> = {
   downloads: 'Downloads',
   devices: 'Devices',
   device: 'Device',
+  metadataFix: 'Completar metadatos',
 }
 
 function titleForView(view: View): string {
   if (view.kind === 'album') return view.album.title
   if (view.kind === 'artist') return view.artist.name
   if (view.kind === 'playlist') return view.playlist.name
+  if (view.kind === 'metadataFix') return view.title ?? titleMap.metadataFix
   if (view.kind === 'device') {
     if (view.section === 'dashboard') return 'Device'
     if (view.section === 'sync') return 'Device Sync'
@@ -133,7 +135,9 @@ export function Toolbar({
       <button className="tb-nav-btn" disabled={idx >= history.length - 1} onClick={onForward} title="Forward">
         <Icon name="fwd" size={15} />
       </button>
-      <div className="tb-title">{title}</div>
+      <div className="tb-title-slot">
+        <div className="tb-title" title={title}>{title}</div>
+      </div>
 
       <div className={`tb-search${isActive ? ' is-active' : ''}${viewQueryable ? ' has-scope' : ''}`} onClick={focusSearch}>
         <Icon name="search" size={13} style={{ color: 'var(--text-tertiary)' }} />

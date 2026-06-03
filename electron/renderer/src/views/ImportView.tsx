@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { Icon } from '@renderer/components/Icon'
-import { MetadataCompletionModal } from '@renderer/components/MetadataCompletionModal'
 import { FolderRemovalConfirmModal } from '@renderer/components/FolderRemovalConfirmModal'
 import { useFolders, useImporting, useLibraryStore, useMetadataCompletionPrompt } from '@renderer/stores/libraryStore'
+import { useNavIntentStore } from '@renderer/stores/navIntentStore'
 import type { DbFolder } from '@shared/types/db'
 
 function ProgressBar({ value, max }: { value: number; max: number }) {
@@ -38,7 +38,7 @@ export function ImportView() {
   const dismissMetadataPrompt = useLibraryStore(s => s.dismissMetadataCompletionPrompt)
   const pickFolder = useLibraryStore(s => s.pickFolder)
   const addFolder = useLibraryStore(s => s.addFolder)
-  const [metadataModalOpen, setMetadataModalOpen] = useState(false)
+  const requestMetadataFix = useNavIntentStore(s => s.requestMetadataFix)
   const [removeTarget, setRemoveTarget] = useState<DbFolder | null>(null)
   const pickAndAdd = async () => {
     const picked = await pickFolder()
@@ -101,7 +101,7 @@ export function ImportView() {
             <strong>Metadatos incompletos detectados</strong>
             <span>{metadataPrompt.trackIds.length} archivos tienen campos faltantes después de la importación.</span>
           </div>
-          <button type="button" className="btn sm" onClick={() => setMetadataModalOpen(true)}>
+          <button type="button" className="btn sm" onClick={() => requestMetadataFix(metadataPrompt.trackIds, undefined, metadataPrompt.trackIds.length)}>
             Revisar
           </button>
           <button type="button" className="tb-icon-btn" title="Descartar" onClick={dismissMetadataPrompt}>
@@ -167,12 +167,6 @@ export function ImportView() {
         </div>
       </div>
 
-      {metadataModalOpen && metadataPrompt && (
-        <MetadataCompletionModal
-          trackIds={metadataPrompt.trackIds}
-          onClose={() => setMetadataModalOpen(false)}
-        />
-      )}
       {removeTarget && (
         <FolderRemovalConfirmModal folder={removeTarget} onClose={() => setRemoveTarget(null)} />
       )}

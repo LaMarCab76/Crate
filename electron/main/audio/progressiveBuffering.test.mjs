@@ -3,7 +3,10 @@ import { test } from 'node:test'
 import {
   decidePlaybackMemoryUse,
   estimateBufferedSeconds,
+  BACKGROUND_MEMORY_PROMOTION_TIMEOUT_MS,
   PRELOAD_MEMORY_TIMEOUT_MS,
+  PLAYBACK_MEMORY_READ_CHUNK_BYTES,
+  parseMacVmStatAvailableMemoryBytes,
   TWO_TRACK_MEMORY_FREE_THRESHOLD_BYTES,
 } from './progressiveBuffering.ts'
 
@@ -12,6 +15,11 @@ const MiB = 1024 * 1024
 
 test('uses a tolerant memory preload timeout before the file fallback', () => {
   assert.equal(PRELOAD_MEMORY_TIMEOUT_MS, 3000)
+})
+
+test('uses a longer timeout and chunked reads for background promotion', () => {
+  assert.equal(BACKGROUND_MEMORY_PROMOTION_TIMEOUT_MS, 120_000)
+  assert.equal(PLAYBACK_MEMORY_READ_CHUNK_BYTES, 8 * MiB)
 })
 
 test('estimates buffered seconds with clamps and invalid metadata', () => {
@@ -81,6 +89,48 @@ test('keeps large tracks out of memory under the same low-free-memory pressure',
     canUse: false,
     reason: 'memory-size-limit',
     sizeBytes,
+  })
+})
+
+test('parses macOS vm_stat reclaimable memory for playback', () => {
+  const vmStatOutput = `Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                               1,000.
+Pages active:                             50,000.
+Pages inactive:                           2,000.
+Pages speculative:                        3,000.
+Pages throttled:                          0.
+Pages wired down:                         25,000.
+Pages purgeable:                          4,000.
+Pages occupied by compressor:             10,000.
+`
+
+  assert.equal(parseMacVmStatAvailableMemoryBytes(vmStatOutput), 10_000 * 16_384)
+})
+
+test('uses macOS reclaimable memory to allow a 131 MiB FLAC despite low strict freemem', () => {
+  const journeyBackTalkSizeBytes = 136_960_574
+  const lowStrictFreeMemBytes = 192_905_216
+  const macAvailableMemBytes = 3 * GiB
+  const totalMemBytes = 51_539_607_552
+
+  assert.deepEqual(decidePlaybackMemoryUse({
+    fileSizeBytes: journeyBackTalkSizeBytes,
+    freeMemBytes: lowStrictFreeMemBytes,
+    totalMemBytes,
+  }), {
+    canUse: false,
+    reason: 'memory-size-limit',
+    sizeBytes: journeyBackTalkSizeBytes,
+  })
+
+  assert.deepEqual(decidePlaybackMemoryUse({
+    fileSizeBytes: journeyBackTalkSizeBytes,
+    freeMemBytes: macAvailableMemBytes,
+    totalMemBytes,
+  }), {
+    canUse: true,
+    reason: null,
+    sizeBytes: journeyBackTalkSizeBytes,
   })
 })
 

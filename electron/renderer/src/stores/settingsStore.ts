@@ -22,7 +22,6 @@ export interface Tweak {
   translucent: boolean
   crossfade: number
   gapless: boolean
-  soundcheck: boolean
   artistsPrincipalOnly: boolean
   artistsMode: ArtistsMode
   artistsTopN: number
@@ -66,7 +65,6 @@ const TWEAK_DEFAULTS: Tweak = {
   translucent: true,
   crossfade: 4,
   gapless: true,
-  soundcheck: false,
   artistsPrincipalOnly: false,
   artistsMode: 'manual',
   artistsTopN: 20,
@@ -106,9 +104,11 @@ function load(): Tweak {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY)
     if (!raw) return TWEAK_DEFAULTS
-    const parsed = JSON.parse(raw) as Partial<Tweak> & { bgSource?: string; fullPlayerFileDataVisible?: unknown }
-    const merged = { ...TWEAK_DEFAULTS, ...parsed } as Tweak & { fullPlayerFileDataVisible?: unknown }
+    const parsed = JSON.parse(raw) as Partial<Tweak> & { bgSource?: string; fullPlayerFileDataVisible?: unknown; soundcheck?: unknown }
+    const merged = { ...TWEAK_DEFAULTS, ...parsed } as Tweak & { fullPlayerFileDataVisible?: unknown; soundcheck?: unknown }
     delete merged.fullPlayerFileDataVisible
+    // soundcheck migrated to the dedicated leveler store (crate.leveler.v1).
+    delete merged.soundcheck
     // Migrate users that had the old bgSource = 'artwork' to the player tint.
     // The removed accent/bg color fields fall away on the next persist.
     if (parsed.bgSource === 'artwork' && merged.playerTintSource === 'default') {

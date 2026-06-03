@@ -1,6 +1,6 @@
 import { parseFile } from 'music-metadata'
 import { basename, extname } from 'node:path'
-import { statSync } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { saveArtwork, type ArtworkSaveResult } from './ArtworkCache'
 
 export interface TrackMetadata {
@@ -60,7 +60,7 @@ function parseBpm(v: unknown): number | null {
 }
 
 export async function readTrackMetadata(filePath: string): Promise<TrackMetadata> {
-  const stats = statSync(filePath)
+  const stats = await stat(filePath)
   const filename = basename(filePath)
   const fallbackTitle = filename.replace(/\.[^.]+$/, '')
 

@@ -9,6 +9,8 @@ import type {
   ExclusiveModeState,
   FftEvent,
   FftMode,
+  LevelerConfig,
+  LevelerState,
   ImportCompleteEvent,
   ImportProgressEvent,
   LevelsEvent,
@@ -72,6 +74,7 @@ import type {
 import type {
   LyricsCandidate,
   LyricsLibraryOverview,
+  LyricsLibraryProgress,
   LyricsSelectionProgress,
   LyricsSelectionSummary,
   LyricsSettingsState,
@@ -219,12 +222,20 @@ const api: Api = {
       ipcRenderer.invoke('eq:setBand', { index, gain }) as Promise<void>,
     setBands: (bands: number[]) =>
       ipcRenderer.invoke('eq:setBands', { bands }) as Promise<void>,
+    setBandCount: (count: number) =>
+      ipcRenderer.invoke('eq:setBandCount', { count }) as Promise<void>,
     previewBand: (index: number, gain: number) =>
       ipcRenderer.invoke('eq:previewBand', { index, gain }) as Promise<void>,
     setPreset: (name: string) =>
       ipcRenderer.invoke('eq:setPreset', { name }) as Promise<void>,
     presets: () => ipcRenderer.invoke('eq:presets') as Promise<string[]>,
     onChanged: (h) => subscribe<EqState>('eq:changed', h),
+  },
+  leveler: {
+    getState: () => ipcRenderer.invoke('leveler:getState') as Promise<LevelerState>,
+    setConfig: (patch: Partial<LevelerConfig>) =>
+      ipcRenderer.invoke('leveler:setConfig', patch) as Promise<LevelerState>,
+    onChanged: (h) => subscribe<LevelerState>('leveler:changed', h),
   },
   tracks: {
     countPlay: (trackId: number) =>
@@ -263,8 +274,8 @@ const api: Api = {
   lyrics: {
     get: (trackId: number) =>
       ipcRenderer.invoke('lyrics:get', trackId) as Promise<LyricsView>,
-    libraryOverview: () =>
-      ipcRenderer.invoke('lyrics:libraryOverview') as Promise<LyricsLibraryOverview>,
+    libraryOverview: (force?: boolean) =>
+      ipcRenderer.invoke('lyrics:libraryOverview', force) as Promise<LyricsLibraryOverview>,
     fetch: (trackId: number, force?: boolean) =>
       ipcRenderer.invoke('lyrics:fetch', { trackId, force }) as Promise<LyricsView>,
     search: (trackId: number) =>
@@ -287,6 +298,7 @@ const api: Api = {
       ipcRenderer.invoke('lyrics:fetchForSelection', trackIds) as Promise<LyricsSelectionSummary>,
     onChanged: (h) => subscribe<{ trackId: number }>('lyrics:changed', h),
     onSelectionProgress: (h) => subscribe<LyricsSelectionProgress>('lyrics:selection:progress', h),
+    onLibraryProgress: (h) => subscribe<LyricsLibraryProgress>('lyrics:library:progress', h),
   },
   devices: {
     detectCandidates: () =>

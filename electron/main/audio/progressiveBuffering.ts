@@ -1,4 +1,6 @@
 export const PRELOAD_MEMORY_TIMEOUT_MS = 3000
+export const BACKGROUND_MEMORY_PROMOTION_TIMEOUT_MS = 120_000
+export const PLAYBACK_MEMORY_READ_CHUNK_BYTES = 8 * 1024 * 1024
 export const PLAYBACK_MEMORY_RESERVE_BYTES = 512 * 1024 * 1024
 export const PLAYBACK_MEMORY_SMALL_TRACK_BYTES = 128 * 1024 * 1024
 export const PLAYBACK_MEMORY_MIN_FREE_AFTER_SMALL_TRACK_BYTES = 256 * 1024 * 1024
@@ -56,8 +58,41 @@ export function calculatePlaybackMemoryReserveBytes(args: {
   return Math.max(configuredReserve, proportionalReserve)
 }
 
+const MAC_VM_STAT_AVAILABLE_PAGE_LABELS = new Set([
+  'pages free',
+  'pages inactive',
+  'pages speculative',
+  'pages purgeable',
+])
+
+export function parseMacVmStatAvailableMemoryBytes(vmStatOutput: string): number | null {
+  const pageSizeMatch = vmStatOutput.match(/page size of\s+([\d,]+)\s+bytes/i)
+  if (!pageSizeMatch) return null
+
+  const pageSizeBytes = Number(pageSizeMatch[1].replaceAll(',', ''))
+  if (!Number.isSafeInteger(pageSizeBytes) || pageSizeBytes <= 0) return null
+
+  let availablePages = 0
+  for (const line of vmStatOutput.split(/\r?\n/)) {
+    const pageMatch = line.match(/^\s*(Pages [^:]+):\s*([\d,]+)\./i)
+    if (!pageMatch) continue
+
+    const label = pageMatch[1].toLowerCase()
+    if (!MAC_VM_STAT_AVAILABLE_PAGE_LABELS.has(label)) continue
+
+    const pages = Number(pageMatch[2].replaceAll(',', ''))
+    if (Number.isSafeInteger(pages) && pages > 0) availablePages += pages
+  }
+
+  if (availablePages <= 0) return null
+  const availableBytes = availablePages * pageSizeBytes
+  return Number.isSafeInteger(availableBytes) ? availableBytes : null
+}
+
 export function decidePlaybackMemoryUse(args: {
   fileSizeBytes: number
+  // Memory available for playback allocation. On macOS this can include
+  // reclaimable pages, not just the strict value reported by os.freemem().
   freeMemBytes: number
   totalMemBytes: number
   reserveBytes?: number

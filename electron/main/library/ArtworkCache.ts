@@ -1,12 +1,25 @@
-import { app } from 'electron'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
 
 let cacheDir: string | null = null
 
+// Inject the artwork directory explicitly. Used by the library worker
+// (utilityProcess), where Electron's `app` module — and thus
+// `app.getPath('userData')` — is unavailable. The main process keeps using the
+// lazy `app.getPath` default in ensureCacheDir().
+export function setArtworkDir(dir: string): void {
+  cacheDir = dir
+  mkdirSync(cacheDir, { recursive: true })
+}
+
 function ensureCacheDir(): string {
   if (cacheDir) return cacheDir
+  // Lazy require keeps `electron` out of the worker bundle's eval path: the
+  // worker always calls setArtworkDir() first, so it never reaches this branch.
+  // createRequire is needed because the bundle is ESM (no global `require`).
+  const { app } = createRequire(import.meta.url)('electron') as typeof import('electron')
   cacheDir = join(app.getPath('userData'), 'artwork')
   mkdirSync(cacheDir, { recursive: true })
   return cacheDir

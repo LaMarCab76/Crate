@@ -150,8 +150,9 @@ export const BASS_LEVEL_VOL    = 8
 
 // ---------------- BASS_FX ----------------
 
-// EQ filter types — we only use PEAKEQ (multi-band parametric peak).
+// EQ filter types from bass_fx.h.
 export const BASS_FX_BFX_PEAKEQ = 0x10004
+export const BASS_FX_BFX_BQF    = 0x10013
 
 // ---------------- Helper ----------------
 

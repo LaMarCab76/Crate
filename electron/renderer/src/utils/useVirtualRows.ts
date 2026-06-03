@@ -45,9 +45,9 @@ export function useVirtualRows(
   count: number,
   rowHeight: number,
   overscan = 10,
-): { setBody: (el: HTMLTableSectionElement | null) => void; window: VirtualWindow } {
+): { setBody: (el: HTMLElement | null) => void; window: VirtualWindow } {
   const [win, setWin] = useState<VirtualWindow>(() => initialWindow(count, rowHeight, overscan))
-  const bodyRef = useRef<HTMLTableSectionElement | null>(null)
+  const bodyRef = useRef<HTMLElement | null>(null)
   const scrollRef = useRef<HTMLElement | null>(null)
   const frame = useRef(0)
   // Latest values read inside the (stable) recompute callback without re-creating it.
@@ -87,7 +87,7 @@ export function useVirtualRows(
     })
   }, [recompute])
 
-  const setBody = useCallback((el: HTMLTableSectionElement | null) => {
+  const setBody = useCallback((el: HTMLElement | null) => {
     bodyRef.current = el
     scrollRef.current = findScrollParent(el)
   }, [])

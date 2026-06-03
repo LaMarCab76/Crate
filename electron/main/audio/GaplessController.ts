@@ -103,8 +103,25 @@ export class GaplessController {
   // track-ended event used by queueStore as fallback.
   private currentTrackEndRegistration: RegisteredCallback | null = null
   private failedMemoryByPath = new Map<string, number>()
+  // Invoked after every successful swap (manual "Next" AND the native
+  // end-of-stream auto-advance), so per-stream effects that don't survive the
+  // handle change — EQ FX, the volume-leveler gain — get re-applied to the new
+  // stream. Set by the audio-channel which owns those managers.
+  private onAfterSwap: (() => void) | null = null
+  // Invoked with the next track's path right before the preloaded stream is
+  // adopted/played, so the leveler gain for the NEW track is in place before the
+  // first sample. Set by the audio-channel.
+  private onBeforeSwap: ((path: string) => void) | null = null
 
   constructor(private engine: AudioEngine) {}
+
+  setOnAfterSwap(cb: (() => void) | null): void {
+    this.onAfterSwap = cb
+  }
+
+  setOnBeforeSwap(cb: ((path: string) => void) | null): void {
+    this.onBeforeSwap = cb
+  }
 
   bindCurrentTrackEnd(): void {
     const currentStream = this.engine.getCurrentStream()
@@ -254,6 +271,10 @@ export class GaplessController {
 
     const old = this.engine.releaseCurrent()
     if (old.handle !== 0) this.engine.freeStream(old.handle)
+    // Set the new track's leveler gain BEFORE adoptStream applies the channel
+    // volume and starts playback, so the first samples don't briefly play at the
+    // previous track's gain (audible jump when the two differ a lot).
+    this.onBeforeSwap?.(preloaded.path)
     // adoptStream() starts playback itself (so the FFT timer re-syncs against a
     // live channel), so we don't call ChannelPlay here.
     const info = this.engine.adoptStream(preloaded.handle, preloaded.path, preloaded.memoryBuffer, {
@@ -272,6 +293,9 @@ export class GaplessController {
       },
     })
     this.bindCurrentTrackEnd()
+    // Re-apply per-stream effects (EQ FX, leveler gain) to the freshly adopted
+    // stream before notifying the renderer of the handoff.
+    this.onAfterSwap?.()
     const result: StreamLoadResult = {
       attempted: preloaded.preload.attempted,
       source: preloaded.preload.source,

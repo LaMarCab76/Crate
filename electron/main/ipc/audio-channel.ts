@@ -1,14 +1,18 @@
 import { BrowserWindow, ipcMain, screen, type WebContents } from 'electron'
 import { getAudioEngine, type StreamInfo } from '../audio/AudioEngine'
 import { getEQManager } from '../audio/EQManager'
+import { getLevelerManager } from '../audio/LevelerManager'
 import { GaplessController } from '../audio/GaplessController'
 import { getExclusiveModeManager } from '../audio/ExclusiveModeManager'
 import { getPlaybackAnalysisService } from '../audio/PlaybackAnalysisService'
 import { broadcast } from './events'
 import { getRepos } from '../db/repositories'
+import { estimateLufsFromAnalysis, type LevelerLoudness } from '@shared/constants/leveler'
+import type { DbTrack } from '@shared/types/db'
 import type {
   AudioOutputDevice,
   FftMode,
+  LevelerConfig,
   PlaybackCacheStats,
   StreamLoadResult,
   StreamInfoPayload,
@@ -32,8 +36,32 @@ type StreamLoadResultLike = {
 
 let gapless: GaplessController | null = null
 
+// Re-apply per-stream effects after a gapless swap (manual or native auto-
+// advance). EQ FX and the leveler gain are attached to a specific stream handle,
+// which the swap replaces, so both must be re-applied to the new stream.
+function afterGaplessSwap(): void {
+  const engine = getAudioEngine()
+  getEQManager().reapply(engine.getCurrentStream())
+  broadcastEqState()
+  applyLevelerForCurrentTrack()
+}
+
+// Pre-seed the leveler gain for the track about to be adopted, so playback
+// starts at the correct gain instead of briefly inheriting the previous track's
+// (which can be audibly off when their loudness differs).
+function beforeGaplessSwap(path: string): void {
+  const leveler = getLevelerManager()
+  const track = getRepos().tracks.getByPath(path)
+  leveler.setTrackLoudness(resolveTrackLoudness(track))
+  getAudioEngine().setNormalizationGain(leveler.currentGainLinear())
+}
+
 function getGapless(): GaplessController {
-  if (!gapless) gapless = new GaplessController(getAudioEngine())
+  if (!gapless) {
+    gapless = new GaplessController(getAudioEngine())
+    gapless.setOnBeforeSwap(beforeGaplessSwap)
+    gapless.setOnAfterSwap(afterGaplessSwap)
+  }
   return gapless
 }
 
@@ -79,7 +107,89 @@ function serializeStreamLoadResult(result: StreamLoadResultLike | null): StreamL
 function broadcastEqState(): void {
   const eq = getEQManager()
   const s = eq.getState()
-  broadcast('eq:changed', { enabled: s.enabled, preset: s.preset, bands: s.bands })
+  broadcast('eq:changed', { enabled: s.enabled, preset: s.preset, bands: s.bands, bandCount: s.bandCount })
+}
+
+// ---------------- Volume leveler ----------------
+
+// Resolve a track's loudness for the leveler: prefer the persisted integrated
+// loudness (from a ReplayGain/R128 tag at import), and fall back to an estimate
+// derived from the cached playback analysis (RMS = peak − crest factor). Peak is
+// only available once the analysis has been computed, and feeds clip prevention.
+function resolveTrackLoudness(track: DbTrack | null | undefined): LevelerLoudness {
+  if (!track) return { trackLufs: null, peakDb: null }
+  let trackLufs = track.r128_integrated_loudness ?? null
+  let peakDb: number | null = null
+  let cached = null
+  try {
+    cached = getPlaybackAnalysisService().getCached(track.path, undefined, track.id)
+  } catch {
+    cached = null
+  }
+  if (cached) {
+    peakDb = cached.peakDb
+    if (trackLufs == null) trackLufs = estimateLufsFromAnalysis(cached.peakDb, cached.drApprox)
+  }
+  return { trackLufs, peakDb }
+}
+
+function levelerStatePayload() {
+  const leveler = getLevelerManager()
+  return { ...leveler.getConfig(), currentGainDb: leveler.currentGainDb() }
+}
+
+function broadcastLevelerState(): void {
+  broadcast('leveler:changed', levelerStatePayload())
+}
+
+// Recompute the leveler gain for whatever track is currently loaded and push it
+// to the engine. When the leveler is on but the track has no loudness data yet
+// (untagged + not analyzed), kick off a background analysis and re-apply once it
+// lands, so the leveler "warms up" on first play and is instant thereafter.
+function applyLevelerForCurrentTrack(): void {
+  const engine = getAudioEngine()
+  const leveler = getLevelerManager()
+  const path = engine.getCurrentPath()
+  const track = path ? getRepos().tracks.getByPath(path) : undefined
+
+  leveler.setTrackLoudness(resolveTrackLoudness(track))
+  engine.setNormalizationGain(leveler.currentGainLinear())
+  broadcastLevelerState()
+
+  const cfg = leveler.getConfig()
+  if (!cfg.enabled || !track || track.r128_integrated_loudness != null) return
+
+  const playbackAnalysis = getPlaybackAnalysisService()
+  let alreadyCached = false
+  try {
+    alreadyCached = playbackAnalysis.getCached(track.path, undefined, track.id) != null
+  } catch {
+    alreadyCached = false
+  }
+  if (alreadyCached) return
+
+  const targetPath = track.path
+  void playbackAnalysis.ensure(track.path, undefined, track.id).then(() => {
+    if (engine.getCurrentPath() !== targetPath) return
+    const fresh = getRepos().tracks.getByPath(targetPath)
+    leveler.setTrackLoudness(resolveTrackLoudness(fresh))
+    engine.setNormalizationGain(leveler.currentGainLinear())
+    broadcastLevelerState()
+  }).catch(() => {
+    /* decode failed — leave the track unleveled */
+  })
+}
+
+function promoteCurrentFileStreamToMemory(path: string, estimatedDurationSec: number | null): void {
+  const engine = getAudioEngine()
+  void engine.promoteCurrentToMemory({ expectedPath: path, estimatedDurationSec }).then(result => {
+    if (result.source !== 'memory' || engine.getCurrentPath() !== path) return
+    getEQManager().reapply(engine.getCurrentStream())
+    broadcastEqState()
+    applyLevelerForCurrentTrack()
+  }).catch(err => {
+    console.warn('[audio] background memory promotion failed:', err instanceof Error ? err.message : err)
+  })
 }
 
 function normalizeFftMode(mode: unknown): FftMode {
@@ -121,6 +231,7 @@ function assertTrackPathMatches(path: string, trackId: unknown, channel: string)
 export function registerAudioChannel(): void {
   const engine = getAudioEngine()
   const eq = getEQManager()
+  const leveler = getLevelerManager()
   const playbackAnalysis = getPlaybackAnalysisService()
   // Construct the exclusive-mode manager eagerly so it wires its
   // setOnDeviceChanged callback into the engine before any IPC arrives.
@@ -137,6 +248,8 @@ export function registerAudioChannel(): void {
     getGapless().bindCurrentTrackEnd()
     eq.reapply(engine.getCurrentStream())
     broadcastEqState()
+    applyLevelerForCurrentTrack()
+    if (loadResult.source === 'file') promoteCurrentFileStreamToMemory(path, track?.duration ?? null)
     return serializeStreamLoadResult(loadResult)
   })
 
@@ -217,9 +330,10 @@ export function registerAudioChannel(): void {
     const expectedPath = typeof payload?.expectedPath === 'string' && payload.expectedPath.trim().length > 0
       ? payload.expectedPath
       : null
+    // swapToNext() re-applies EQ + leveler via the onAfterSwap hook (shared with
+    // the native auto-advance path), so we don't repeat it here.
     const result = getGapless().swapToNext(expectedPath)
     getGapless().bindCurrentTrackEnd()
-    if (result) eq.reapply(engine.getCurrentStream())
     return serializeStreamLoadResult(result)
   })
   ipcMain.handle('audio:promoteCurrentToMemory', async () => {
@@ -227,6 +341,9 @@ export function registerAudioChannel(): void {
     if (result.source === 'memory') {
       eq.reapply(engine.getCurrentStream())
       broadcastEqState()
+      // Same track, so the gain is unchanged, but re-assert it (the in-memory
+      // re-adopt resets channel FX) and keep the renderer's readout in sync.
+      applyLevelerForCurrentTrack()
     }
     return serializeStreamLoadResult(result)
   })
@@ -272,11 +389,10 @@ export function registerAudioChannel(): void {
   })
 
   // ---------------- EQ ----------------
-  ipcMain.handle('eq:getState', () => ({
-    enabled: eq.getState().enabled,
-    preset: eq.getState().preset,
-    bands: eq.getState().bands,
-  }))
+  ipcMain.handle('eq:getState', () => {
+    const s = eq.getState()
+    return { enabled: s.enabled, preset: s.preset, bands: s.bands, bandCount: s.bandCount }
+  })
   ipcMain.handle('eq:setEnabled', (_, payload: { enabled: boolean }) => {
     eq.setEnabled(payload.enabled)
     broadcastEqState()
@@ -289,6 +405,10 @@ export function registerAudioChannel(): void {
     eq.setBands(payload.bands)
     broadcastEqState()
   })
+  ipcMain.handle('eq:setBandCount', (_, payload: { count: number }) => {
+    eq.setBandCount(payload.count)
+    broadcastEqState()
+  })
   ipcMain.handle('eq:previewBand', (_, payload: { index: number; gain: number }) => {
     eq.previewBand(payload.index, payload.gain)
   })
@@ -297,4 +417,14 @@ export function registerAudioChannel(): void {
     broadcastEqState()
   })
   ipcMain.handle('eq:presets', () => eq.getPresetNames())
+
+  // ---------------- Volume leveler ----------------
+  ipcMain.handle('leveler:getState', () => levelerStatePayload())
+  ipcMain.handle('leveler:setConfig', (_, patch: Partial<LevelerConfig>) => {
+    leveler.setConfig(patch ?? {})
+    // Recompute for the current track (also warms up analysis on enable) and
+    // push the new gain to the engine + renderer.
+    applyLevelerForCurrentTrack()
+    return levelerStatePayload()
+  })
 }

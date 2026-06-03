@@ -8,6 +8,7 @@ import { parseArtistName } from './ArtistNameParser'
 import { broadcast } from '../ipc/events'
 import { createThrottledBroadcaster } from '../ipc/throttle'
 import { getLibraryBackup } from '../services/LibraryBackup'
+import { lufsFromReplayGain } from '@shared/constants/leveler'
 import type { DbFolder, DbTrackInsert } from '@shared/types/db'
 
 export const AUDIO_EXTENSIONS = new Set([
@@ -114,7 +115,10 @@ export function buildTrackInsert(
     album_id: albumId,
     artist_id: artistId,
     genre_id: genreId,
-    r128_integrated_loudness: null,
+    // Seed the volume-leveler loudness from the file's ReplayGain track tag
+    // (gain to the -18 LUFS reference → absolute LUFS). Untagged files stay null
+    // and get an estimate from the playback analysis at play time instead.
+    r128_integrated_loudness: lufsFromReplayGain(md.replayGainTrack),
     state_updated_at: null,
   }
 }

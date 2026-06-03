@@ -28,7 +28,7 @@ export function registerLyricsChannel(): void {
 
   ipcMain.handle('lyrics:get', (_, trackId: number) => svc.getForTrack(assertId(trackId, 'trackId')))
 
-  ipcMain.handle('lyrics:libraryOverview', () => svc.libraryOverview())
+  ipcMain.handle('lyrics:libraryOverview', (_, force?: boolean) => svc.libraryOverview({ force: force === true }))
 
   ipcMain.handle('lyrics:fetch', async (_, p: { trackId: number; force?: boolean }) => {
     const trackId = assertId(p?.trackId, 'trackId')

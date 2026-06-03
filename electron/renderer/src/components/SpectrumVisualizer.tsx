@@ -75,6 +75,10 @@ interface Props {
   // Active means the owning surface is intentionally visible. The component
   // also verifies viewport intersection before demanding FFT frames.
   active?: boolean
+  // Fullscreen modes only: force exactly this many columns instead of deriving
+  // the count from the available width. Used by the EQ surface to align the
+  // spectrum bars 1:1 with the EQ bands. Clamped to the engine's column range.
+  columns?: number
 }
 
 // Pure FFT spectrum. The EQ used to live here as draggable columns, but it now
@@ -82,7 +86,7 @@ interface Props {
 // stack of LED-style segments plus a separate clip LED above it; both read
 // --lit, written once per band per frame on the .spectrum-band element from the
 // JS hot loop. The clip LED lights up when the band tops out.
-export function SpectrumVisualizer({ mode = 'mini', active = true }: Props) {
+export function SpectrumVisualizer({ mode = 'mini', active = true, columns }: Props) {
   const playbackStatus = usePlaybackStore(s => s.status)
   const sampleRate = usePlaybackStore(s => s.streamInfo?.freq) ?? 44100
   const [windowVisible, setWindowVisible] = useState(() =>
@@ -100,7 +104,14 @@ export function SpectrumVisualizer({ mode = 'mini', active = true }: Props) {
 
   const bandsRef = useRef<HTMLDivElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
-  const [bandCount, setBandCount] = useState(isFull ? FULL_MIN_BANDS : isCompact ? COMPACT_MIN_BANDS : MINI_BAND_COUNT)
+  const [bandCount, setBandCount] = useState(() => {
+    // Honor a forced fullscreen column count on the very first paint so the EQ
+    // surface doesn't flash FULL_MIN_BANDS bars before the effect corrects it.
+    if (isFullscreenSpectrum && columns != null) {
+      return Math.max(1, Math.min(FULL_MAX_BANDS, Math.round(columns)))
+    }
+    return isFull ? FULL_MIN_BANDS : isCompact ? COMPACT_MIN_BANDS : MINI_BAND_COUNT
+  })
 
   // Keep the latest band count readable from the rAF loop without re-running
   // (and thus re-subscribing) the animation effect on every resize.
@@ -136,10 +147,20 @@ export function SpectrumVisualizer({ mode = 'mini', active = true }: Props) {
       .filter(t => t.x >= 0 && t.x <= 1)
   }, [isCompact, isFullscreenSpectrum, sampleRate])
 
-  // Fullscreen modes derive the column count from the bands area width.
+  // Fullscreen modes derive the column count from the bands area width — unless
+  // a fixed `columns` is supplied (EQ surface), in which case we honor it exactly
+  // and skip the ResizeObserver so the bars line up 1:1 with the EQ bands.
   useEffect(() => {
     if (!isFullscreenSpectrum) {
       setBandCount(MINI_BAND_COUNT)
+      return
+    }
+    if (columns != null) {
+      // Honor the requested count exactly (down to a single column) so it tracks
+      // the EQ band count even below the width-derived FULL_MIN_BANDS floor; only
+      // cap at the engine's emitted-bin ceiling.
+      const n = Math.max(1, Math.min(FULL_MAX_BANDS, Math.round(columns)))
+      setBandCount(prev => (prev === n ? prev : n))
       return
     }
     const el = bandsRef.current
@@ -162,7 +183,7 @@ export function SpectrumVisualizer({ mode = 'mini', active = true }: Props) {
     const ro = new ResizeObserver(measure)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [isCompact, isFullscreenSpectrum])
+  }, [isCompact, isFullscreenSpectrum, columns])
 
   useEffect(() => {
     if (typeof document === 'undefined') return

@@ -3,12 +3,11 @@ import { writeFileSync } from 'node:fs'
 import { getRepos, type Repos } from '../db/repositories'
 import { broadcast } from '../ipc/events'
 import type { DbTrack } from '@shared/types/db'
+import type { LyricsIndexEntry } from '@shared/types/lyrics-index'
 import type {
   LyricsCandidate,
   LyricsLibraryOverview,
-  LyricsResult,
   LyricsSource,
-  LyricsStatus,
   LyricsView,
   LyricsSelectionSummary,
 } from '@shared/types/lyrics'
@@ -21,59 +20,20 @@ import {
   toConfidence,
 } from './LyricsMatcher'
 import { getLyricsLookupQueue, type LyricsLookupQueue } from './LyricsLookupQueue'
-import { buildLyricsLibraryOverview } from './lyricsLibraryOverview'
+import {
+  buildOverviewWithIndex,
+  emptyLyricsView as emptyView,
+  viewFromDiskReads,
+  viewFromLyricsResult as viewFromResult,
+} from './lyricsLibraryOverview'
+import { getLibraryWorkerClient } from '../workers/LibraryWorkerClient'
+import { getLyricsIndexService } from './LyricsIndexService'
 import { LrclibProvider, type LrclibQuery, type LrclibRaw } from './providers/LrclibProvider'
 import { readEmbeddedLyrics } from './providers/EmbeddedLyricsProvider'
 import { readSidecarLrc } from './providers/SidecarLrcProvider'
 import { writeSidecarLrc, removeSidecarLrc } from './writers/SidecarLrcWriter'
 
 const NOT_FOUND_TTL_MS = 7 * 24 * 60 * 60 * 1000
-
-function emptyView(trackId: number, status: LyricsStatus): LyricsView {
-  return {
-    trackId,
-    status,
-    source: null,
-    plainLyrics: null,
-    syncedLyricsLrc: null,
-    instrumental: false,
-    isUserEdited: false,
-    embeddedInFile: false,
-    sidecarWritten: false,
-    confidence: 0,
-  }
-}
-
-// Build the renderer-facing view from on-disk content (a sidecar `.lrc` or an
-// embedded tag read). `isUserEdited` / `low_confidence` are no longer persisted
-// (they lived in the DB) — a freshly written sidecar simply reads back as
-// found_synced / found_plain.
-function viewFromResult(
-  trackId: number,
-  res: LyricsResult,
-  flags: { sidecarWritten: boolean; embeddedInFile: boolean },
-): LyricsView {
-  const synced = res.syncedLyricsLrc ?? null
-  const plain = res.plainLyrics ?? null
-  let status: LyricsStatus
-  if (res.instrumental) status = 'instrumental'
-  else if (synced) status = 'found_synced'
-  else if (plain) status = 'found_plain'
-  else status = 'none'
-
-  return {
-    trackId,
-    status,
-    source: res.source,
-    plainLyrics: plain,
-    syncedLyricsLrc: synced,
-    instrumental: res.instrumental,
-    isUserEdited: false,
-    embeddedInFile: flags.embeddedInFile,
-    sidecarWritten: flags.sidecarWritten,
-    confidence: res.confidence,
-  }
-}
 
 function userView(trackId: number, plain: string | null, synced: string | null, sidecarWritten: boolean): LyricsView {
   return {
@@ -115,6 +75,7 @@ function rawScore(track: DbTrack, raw: LrclibRaw): number {
 export class LyricsService {
   private repos: Repos
   private lrclib = new LrclibProvider()
+  private index = getLyricsIndexService()
   private lookupQueue: LyricsLookupQueue = getLyricsLookupQueue()
   private searchCache = new Map<number, { createdAt: number; results: LrclibRaw[] }>()
 
@@ -139,18 +100,95 @@ export class LyricsService {
     if (!track) return emptyView(trackId, 'none')
 
     // Sidecar is the source of truth; embedded tags are a secondary read source.
+    // Shared with the library worker via viewFromDiskReads so both paths agree.
     const sidecar = readSidecarLrc(track.path)
-    if (sidecar) return viewFromResult(trackId, sidecar, { sidecarWritten: true, embeddedInFile: false })
-
-    const embedded = readEmbeddedLyrics(track.path)
-    if (embedded) return viewFromResult(trackId, embedded, { sidecarWritten: false, embeddedInFile: true })
+    const embedded = sidecar ? null : readEmbeddedLyrics(track.path)
+    const view = viewFromDiskReads(trackId, sidecar, embedded)
+    if (view.status !== 'none') return view
 
     if (this.notFound.has(trackId)) return emptyView(trackId, 'not_found')
-    return emptyView(trackId, 'none')
+    return view
   }
 
-  libraryOverview(): LyricsLibraryOverview {
-    return buildLyricsLibraryOverview(this.repos.tracks.getAll({ orderBy: 'artist' }), id => this.getForTrack(id))
+  // Build the library-wide lyrics overview. Reads from the per-folder lyrics
+  // index where possible (no disk I/O) and only scans `.lrc`/embedded tags for
+  // tracks the index doesn't yet know. The scan is chunked and yields the event
+  // loop so a cold/forced build keeps the app responsive instead of freezing the
+  // main process. `force` ignores the cache and rescans everything, reconciling
+  // sidecars added/removed outside the app.
+  async libraryOverview(opts?: { force?: boolean }): Promise<LyricsLibraryOverview> {
+    const force = opts?.force === true
+    const tracks = this.repos.tracks.getAll({ orderBy: 'artist' })
+
+    const folderPaths = new Map<number, string | null>()
+    const folderPathFor = (folderId: number): string | null => {
+      const cached = folderPaths.get(folderId)
+      if (cached !== undefined) return cached
+      const folder = this.repos.folders.getById(folderId)
+      const path = folder?.path ?? null
+      folderPaths.set(folderId, path)
+      return path
+    }
+
+    const lookup = (track: DbTrack): LyricsIndexEntry | null => {
+      const path = folderPathFor(track.folder_id)
+      return path ? this.index.lookup(track.folder_id, path, track.path) : null
+    }
+    const persistEntry = (track: DbTrack, entry: LyricsIndexEntry): void => {
+      const path = folderPathFor(track.folder_id)
+      if (path) this.index.set(track.folder_id, path, track.path, entry)
+    }
+
+    if (force) {
+      // Drop each affected folder's entries first so tracks removed from the
+      // library since the last scan are pruned, then repopulate via the scan.
+      for (const folderId of new Set(tracks.map(t => t.folder_id))) {
+        const path = folderPathFor(folderId)
+        if (path) this.index.clearFolder(folderId, path)
+      }
+    }
+
+    // The heavy work — reading every `.lrc` sidecar and opening every audio file
+    // for embedded tags — runs in the library worker (utilityProcess) so the main
+    // process never freezes. We pre-scan only the tracks the index can't resolve,
+    // populate the index from the streamed results, then build the overview from
+    // cache hits. On worker failure we fall back to the in-main scan below.
+    const toScan = force ? tracks : tracks.filter(track => !lookup(track))
+    try {
+      if (toScan.length > 0) {
+        const trackById = new Map(tracks.map(t => [t.id, t] as const))
+        const total = toScan.length
+        await getLibraryWorkerClient().scanLyrics(
+          toScan.map(track => ({ trackId: track.id, path: track.path })),
+          (trackId, entry) => {
+            const track = trackById.get(trackId)
+            if (track) persistEntry(track, entry)
+          },
+          (done, t) => broadcast('lyrics:library:progress', { done, total: t }),
+        )
+        broadcast('lyrics:library:progress', { done: total, total })
+      }
+      // The index now resolves every scanned track, so force=false and the
+      // builder reads from cache. `scan` is only a safety net for tracks with no
+      // folder path (which can't be cached); it never opens audio at scale here.
+      return await buildOverviewWithIndex(tracks, {
+        force: false,
+        lookup,
+        scan: track => this.getForTrack(track.id),
+        onScanned: persistEntry,
+      })
+    } catch (err) {
+      console.warn(
+        `[lyrics] library worker scan failed, using in-main path: ${err instanceof Error ? err.message : String(err)}`,
+      )
+      return buildOverviewWithIndex(tracks, {
+        force,
+        lookup,
+        scan: track => this.getForTrack(track.id),
+        onScanned: persistEntry,
+        onProgress: (done, total) => broadcast('lyrics:library:progress', { done, total }),
+      })
+    }
   }
 
   // --- online fetch (auto-accept) ----------------------------------------
@@ -277,7 +315,7 @@ export class LyricsService {
     const track = this.repos.tracks.getById(trackId)
     if (!track) return emptyView(trackId, 'none')
     const synced = isSyncedLrc(lrcText)
-    const written = this.writeSidecar(track, lrcText)
+    const written = this.writeSidecar(track, lrcText, 'user')
     this.notFound.delete(trackId)
     return userView(trackId, synced ? null : lrcText, synced ? lrcText : null, written)
   }
@@ -289,9 +327,10 @@ export class LyricsService {
     if (!content) {
       // Empty save clears the lyrics: remove the assigned sidecar file.
       removeSidecarLrc(track.path)
+      this.index.removeEntryForTrack(track)
       return emptyView(trackId, 'none')
     }
-    const written = this.writeSidecar(track, content)
+    const written = this.writeSidecar(track, content, 'user')
     this.notFound.delete(trackId)
     return userView(trackId, plain, synced, written)
   }
@@ -305,7 +344,7 @@ export class LyricsService {
       throw new Error('Synced lyrics are required to set an offset.')
     }
     const shifted = setLrcOffset(synced, offsetMs)
-    const written = this.writeSidecar(track, shifted)
+    const written = this.writeSidecar(track, shifted, 'user')
     return userView(trackId, current?.plainLyrics ?? null, shifted, written)
   }
 
@@ -329,7 +368,10 @@ export class LyricsService {
 
   remove(trackId: number): void {
     const track = this.repos.tracks.getById(trackId)
-    if (track) removeSidecarLrc(track.path)
+    if (track) {
+      removeSidecarLrc(track.path)
+      this.index.removeEntryForTrack(track)
+    }
     this.notFound.delete(trackId)
   }
 
@@ -391,7 +433,7 @@ export class LyricsService {
     const plain = instrumental ? null : raw.plainLyrics ?? null
     const synced = instrumental ? null : raw.syncedLyrics ?? null
     const content = synced ?? plain
-    const written = content ? this.writeSidecar(track, content) : false
+    const written = content ? this.writeSidecar(track, content, 'lrclib') : false
     this.notFound.delete(track.id)
 
     return {
@@ -409,14 +451,27 @@ export class LyricsService {
   }
 
   // Write the `.lrc` sidecar next to the audio file. The sidecar is the canonical
-  // store, so this always overwrites. Returns whether the write succeeded.
-  private writeSidecar(track: DbTrack, content: string): boolean {
+  // store, so this always overwrites. Returns whether the write succeeded. On
+  // success the per-folder lyrics index entry is refreshed (best-effort) so the
+  // library overview stays accurate without a disk rescan.
+  private writeSidecar(track: DbTrack, content: string, source: LyricsSource = 'sidecar'): boolean {
     try {
       writeSidecarLrc(track.path, content)
-      return true
     } catch {
       return false
     }
+    try {
+      this.index.setForTrack(track, {
+        status: isSyncedLrc(content) ? 'found_synced' : 'found_plain',
+        source,
+        hasLyrics: true,
+        embeddedInFile: false,
+        sidecarWritten: true,
+      })
+    } catch {
+      /* index is a best-effort cache; never fail the write because of it */
+    }
+    return true
   }
 
   private rememberSearchResults(trackId: number, results: LrclibRaw[]): void {

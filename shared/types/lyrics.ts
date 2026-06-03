@@ -87,6 +87,13 @@ export interface LyricsSelectionProgress {
   nextAllowedAt?: number | null
 }
 
+// Progress while the library overview builds its per-folder index from disk
+// (only emitted during a cold or forced scan, never on cached opens).
+export interface LyricsLibraryProgress {
+  done: number
+  total: number
+}
+
 export interface LyricsLibraryItem {
   trackId: number
   title: string

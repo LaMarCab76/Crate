@@ -10,9 +10,10 @@
 //     hands an additional in-memory stream over via adoptStream().
 
 import { broadcast } from '../ipc/events'
-import { readFile, stat } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
+import { open, stat } from 'node:fs/promises'
 import { statSync } from 'node:fs'
-import { freemem, totalmem } from 'node:os'
+import { freemem, platform, totalmem } from 'node:os'
 import {
   BASS_ACTIVE_PAUSED, BASS_ACTIVE_PLAYING, BASS_ACTIVE_STOPPED,
   BASS_ATTRIB_VOL, BASS_DATA_FFT2048, BASS_DEVICE_DEFAULT, BASS_DEVICE_ENABLED,
@@ -38,9 +39,13 @@ import type {
   StreamLoadFailureReason,
 } from '@shared/types/ipc-contract'
 import {
+  BACKGROUND_MEMORY_PROMOTION_TIMEOUT_MS,
   calculatePlaybackMemoryReserveBytes,
   decidePlaybackMemoryUse,
+  estimateBufferedSeconds,
+  parseMacVmStatAvailableMemoryBytes,
   PRELOAD_MEMORY_TIMEOUT_MS,
+  PLAYBACK_MEMORY_READ_CHUNK_BYTES,
   PLAYBACK_MEMORY_MIN_FREE_AFTER_SMALL_TRACK_BYTES,
   PLAYBACK_MEMORY_RESERVE_BYTES,
   PLAYBACK_MEMORY_SMALL_TRACK_BYTES,
@@ -82,6 +87,38 @@ const ANALYSIS_CACHE_MAX = 50
 const TABLE_BARS_FPS = 60
 const TABLE_BARS_BANDS = 5
 const TABLE_BARS_DISPLAY_GAIN = 2.8
+
+interface PlaybackMemorySnapshot {
+  freeMemBytes: number
+  availableMemBytes: number
+  totalMemBytes: number
+}
+
+function readMacPlaybackAvailableMemoryBytes(): number | null {
+  if (platform() !== 'darwin') return null
+
+  try {
+    const vmStatOutput = execFileSync('/usr/bin/vm_stat', {
+      encoding: 'utf8',
+      timeout: 500,
+    })
+    return parseMacVmStatAvailableMemoryBytes(vmStatOutput)
+  } catch {
+    return null
+  }
+}
+
+function getPlaybackMemorySnapshot(): PlaybackMemorySnapshot {
+  const freeMemBytes = freemem()
+  const totalMemBytes = totalmem()
+  const macAvailableMemBytes = readMacPlaybackAvailableMemoryBytes()
+  return {
+    freeMemBytes,
+    availableMemBytes: Math.max(freeMemBytes, macAvailableMemBytes ?? 0),
+    totalMemBytes,
+  }
+}
+
 function noBufferTelemetry(): ProgressiveBufferTelemetry {
   return {
     bufferedBytes: null,
@@ -170,11 +207,20 @@ interface LoadOptions {
   estimatedDurationSec?: number | null
 }
 
+interface PromoteCurrentToMemoryOptions {
+  expectedPath?: string | null
+  estimatedDurationSec?: number | null
+  memoryReadTimeoutMs?: number
+}
+
 interface CreateStreamOptions {
   memoryOnly?: boolean
   skipMemory?: boolean
   memoryReadTimeoutMs?: number
   isPreload?: boolean
+  estimatedDurationSec?: number | null
+  abortSignal?: AbortSignal
+  onBufferProgress?: (telemetry: ProgressiveBufferTelemetry) => void
 }
 
 let engine: AudioEngine | null = null
@@ -185,6 +231,9 @@ export class AudioEngine {
   private currentPath: string | null = null
   private streamInfo: StreamInfo | null = null
   private volume = 1.0
+  // Per-track loudness-normalization multiplier (volume leveler). Combined with
+  // `volume` to produce the channel's BASS_ATTRIB_VOL. 1.0 = no change.
+  private normalizationGain = 1.0
   private status: PlaybackStatus = 'stopped'
   private progressTimer: NodeJS.Timeout | null = null
   private frameTimer: NodeJS.Timeout | null = null
@@ -215,9 +264,19 @@ export class AudioEngine {
   // ExclusiveModeManager to transfer hog ownership across device switches
   // without coupling the manager into the engine directly.
   private onDeviceChanged: ((bassDeviceId: number) => void) | null = null
+  private memoryPromotionAbort: AbortController | null = null
+  private memoryPromotionToken = 0
 
   setOnDeviceChanged(cb: ((bassDeviceId: number) => void) | null): void {
     this.onDeviceChanged = cb
+  }
+
+  private cancelMemoryPromotion(): void {
+    this.memoryPromotionToken += 1
+    if (this.memoryPromotionAbort) {
+      this.memoryPromotionAbort.abort()
+      this.memoryPromotionAbort = null
+    }
   }
 
   ensureInit(): void {
@@ -242,6 +301,7 @@ export class AudioEngine {
 
   // Free the current stream (if any) and clear cached info.
   private freeCurrent(): void {
+    this.cancelMemoryPromotion()
     if (this.currentStream !== 0) {
       this.freeStream(this.currentStream)
       this.currentStream = 0
@@ -292,9 +352,12 @@ export class AudioEngine {
 
   async load(path: string, options: LoadOptions = {}): Promise<StreamLoadResult> {
     this.ensureInit()
+    this.cancelMemoryPromotion()
     this.setStatus('loading')
 
-    const createdResult = await this.createStream(path)
+    const createdResult = await this.createStream(path, {
+      estimatedDurationSec: options.estimatedDurationSec ?? null,
+    })
     if (!createdResult.stream) {
       this.currentPath = path
       this.currentStream = 0
@@ -331,8 +394,8 @@ export class AudioEngine {
       buffer: createdResult.buffer,
     })
 
-    // Apply current volume to the freshly created stream.
-    loadBass().ChannelSetAttribute(handle, BASS_ATTRIB_VOL, this.volume)
+    // Apply current volume (× leveler gain) to the freshly created stream.
+    this.applyChannelVolume(handle)
     this.updateCurrentStreamSource(this.currentStreamSource)
 
     this.streamInfo = info
@@ -340,20 +403,48 @@ export class AudioEngine {
     return this.getCurrentStreamLoadResult()
   }
 
-  async promoteCurrentToMemory(): Promise<StreamLoadResult> {
+  async promoteCurrentToMemory(options: PromoteCurrentToMemoryOptions = {}): Promise<StreamLoadResult> {
     this.ensureInit()
     if (this.currentStream === 0 || !this.currentPath || !this.streamInfo) {
       return this.getCurrentStreamLoadResult()
     }
     if (this.currentStreamSource !== 'file') return this.getCurrentStreamLoadResult()
+    if (options.expectedPath && options.expectedPath !== this.currentPath) return this.getCurrentStreamLoadResult()
 
-    const currentPosition = this.getPosition()
-    const restoreStatus = this.getStatus()
-    const shouldPlay = restoreStatus === 'playing'
+    const targetPath = this.currentPath
+    const controller = new AbortController()
+    this.cancelMemoryPromotion()
+    const promotionToken = ++this.memoryPromotionToken
+    this.memoryPromotionAbort = controller
+
     const createResult = await this.createStream(this.currentPath, {
       memoryOnly: true,
-      memoryReadTimeoutMs: PRELOAD_MEMORY_TIMEOUT_MS,
+      memoryReadTimeoutMs: options.memoryReadTimeoutMs ?? BACKGROUND_MEMORY_PROMOTION_TIMEOUT_MS,
+      estimatedDurationSec: options.estimatedDurationSec ?? this.streamInfo.duration,
+      abortSignal: controller.signal,
+      onBufferProgress: buffer => {
+        broadcast('audio:buffer-progress', {
+          currentPath: targetPath,
+          source: 'file',
+          reason: null,
+          bufferedBytes: buffer.bufferedBytes,
+          totalBytes: buffer.totalBytes,
+          bufferedSec: buffer.bufferedSec,
+          bufferComplete: buffer.bufferComplete,
+        })
+      },
     })
+
+    if (this.memoryPromotionAbort === controller) this.memoryPromotionAbort = null
+
+    if (
+      controller.signal.aborted ||
+      promotionToken !== this.memoryPromotionToken ||
+      this.currentPath !== targetPath ||
+      this.currentStreamSource !== 'file'
+    ) {
+      return this.getCurrentStreamLoadResult()
+    }
 
     if (!createResult.stream || createResult.source !== 'memory') {
       this.setCurrentStreamLoadResult({
@@ -364,12 +455,24 @@ export class AudioEngine {
         attemptedMemory: createResult.attemptedMemory,
         buffer: createResult.buffer,
       })
+      broadcast('audio:buffer-progress', {
+        currentPath: targetPath,
+        source: this.currentStreamSource,
+        reason: createResult.reason,
+        bufferedBytes: createResult.buffer.bufferedBytes,
+        totalBytes: createResult.buffer.totalBytes,
+        bufferedSec: createResult.buffer.bufferedSec,
+        bufferComplete: createResult.buffer.bufferComplete,
+      })
       return this.getCurrentStreamLoadResult()
     }
 
+    const currentPosition = this.getPosition()
+    const restoreStatus = this.getStatus()
+    const shouldPlay = restoreStatus === 'playing'
     const old = this.releaseCurrent()
     if (old.handle !== 0) this.freeStream(old.handle)
-    this.adoptStream(createResult.stream.handle, this.currentPath, createResult.stream.memoryBuffer, {
+    this.adoptStream(createResult.stream.handle, targetPath, createResult.stream.memoryBuffer, {
       startPositionSec: currentPosition,
       shouldPlay,
       restoreStatus,
@@ -465,12 +568,34 @@ export class AudioEngine {
   }
 
   setVolume(v: number): void {
-    const clamped = Math.max(0, Math.min(1, v))
-    this.volume = clamped
-    if (this.currentStream !== 0) {
-      const bass = loadBass()
-      bass.ChannelSetAttribute(this.currentStream, BASS_ATTRIB_VOL, clamped)
-    }
+    this.volume = Math.max(0, Math.min(1, v))
+    this.applyChannelVolume()
+  }
+
+  // Set the volume-leveler multiplier (1.0 = unchanged). Combined with the user
+  // volume and pushed to the channel immediately so a config change is audible
+  // without waiting for the next track.
+  setNormalizationGain(linear: number): void {
+    const gain = Number.isFinite(linear) && linear > 0 ? linear : 1.0
+    if (this.normalizationGain === gain) return
+    this.normalizationGain = gain
+    this.applyChannelVolume()
+  }
+
+  getNormalizationGain(): number { return this.normalizationGain }
+
+  // The effective channel volume = user volume × leveler gain. BASS allows >1
+  // (amplification); the leveler caps its own gain so this stays sane.
+  private effectiveVolume(): number {
+    return Math.max(0, this.volume * this.normalizationGain)
+  }
+
+  // Single place that writes BASS_ATTRIB_VOL. Defaults to the current stream but
+  // accepts a handle for streams being set up (load/adopt) before they become
+  // current.
+  private applyChannelVolume(handle: HSTREAM = this.currentStream): void {
+    if (handle === 0) return
+    loadBass().ChannelSetAttribute(handle, BASS_ATTRIB_VOL, this.effectiveVolume())
   }
 
   setFftMode(mode: FftMode, screenHz?: number): void {
@@ -539,7 +664,7 @@ export class AudioEngine {
         const code = bass.ErrorGetCode()
         throw new Error(`BASS_ChannelSetDevice failed: ${bassErrorName(code)} (${code})`)
       }
-      bass.ChannelSetAttribute(this.currentStream, BASS_ATTRIB_VOL, this.volume)
+      this.applyChannelVolume()
 
       if (wasPlaying) {
         if (!bass.Start()) {
@@ -566,6 +691,7 @@ export class AudioEngine {
   // reinitDevice() + load() can resume from the same path/position.
   teardownForReinit(): void {
     if (!this.initialized) return
+    this.cancelMemoryPromotion()
     const bass = loadBass()
     if (this.currentStream !== 0) {
       try { bass.ChannelStop(this.currentStream) } catch { /* may already be stopped */ }
@@ -658,6 +784,7 @@ export class AudioEngine {
   // Hand the current stream off to a caller (e.g. GaplessController preserving
   // a preloaded stream). This class no longer owns it after the call.
   releaseCurrent(): { handle: HSTREAM; path: string | null; info: StreamInfo | null; memoryBuffer: Buffer | null } {
+    this.cancelMemoryPromotion()
     const out = {
       handle: this.currentStream,
       path: this.currentPath,
@@ -711,7 +838,7 @@ export class AudioEngine {
     // syncFftTimer() queries BASS for the live channel state, so the channel
     // must already be playing or it would stop the FFT timer (visualizer
     // freezes after a gapless swap).
-    bass.ChannelSetAttribute(handle, BASS_ATTRIB_VOL, this.volume)
+    this.applyChannelVolume(handle)
 
     if (shouldPlay) {
       const playStarted = bass.ChannelPlay(handle, 0)
@@ -764,7 +891,13 @@ export class AudioEngine {
         attemptedMemory: false,
         buffer: noBufferTelemetry(),
       } as StreamCreateResult
-      : await this.createMemoryStream(path, fileSizeBytes, options.memoryReadTimeoutMs, allowSecondTrack)
+      : await this.createMemoryStream(path, fileSizeBytes, {
+        timeoutMs: options.memoryReadTimeoutMs,
+        allowSecondTrack,
+        estimatedDurationSec: options.estimatedDurationSec ?? null,
+        abortSignal: options.abortSignal,
+        onBufferProgress: options.onBufferProgress,
+      })
 
     if (memoryResult.stream) {
       return memoryResult
@@ -844,19 +977,88 @@ export class AudioEngine {
     }
   }
 
-  private async createMemoryStream(path: string, sizeBytes: number, timeoutMs = PRELOAD_MEMORY_TIMEOUT_MS, allowSecondTrack = false): Promise<StreamCreateResult> {
+  private makeBufferTelemetry(bufferedBytes: number, totalBytes: number, estimatedDurationSec: number | null | undefined): ProgressiveBufferTelemetry {
+    return {
+      bufferedBytes,
+      totalBytes,
+      bufferedSec: estimateBufferedSeconds(bufferedBytes, totalBytes, estimatedDurationSec),
+      bufferComplete: bufferedBytes >= totalBytes,
+    }
+  }
+
+  private async readPlaybackFileIntoBuffer(args: {
+    path: string
+    sizeBytes: number
+    timeoutMs: number
+    estimatedDurationSec?: number | null
+    abortSignal?: AbortSignal
+    onBufferProgress?: (telemetry: ProgressiveBufferTelemetry) => void
+  }): Promise<{ buffer: Buffer | null; reason: StreamCreateFailureReason | null }> {
+    const timeoutController = new AbortController()
+    const timeoutId = setTimeout(() => timeoutController.abort(), args.timeoutMs)
+    let lastProgressAt = 0
+
+    const emitProgress = (bufferedBytes: number, force = false) => {
+      if (!args.onBufferProgress) return
+      const now = Date.now()
+      if (!force && now - lastProgressAt < 250) return
+      lastProgressAt = now
+      args.onBufferProgress(this.makeBufferTelemetry(bufferedBytes, args.sizeBytes, args.estimatedDurationSec))
+    }
+
+    try {
+      const buffer = Buffer.allocUnsafe(args.sizeBytes)
+      const file = await open(args.path, 'r')
+      let offset = 0
+      emitProgress(0, true)
+
+      try {
+        while (offset < args.sizeBytes) {
+          if (timeoutController.signal.aborted) return { buffer: null, reason: 'memory-timeout' }
+          if (args.abortSignal?.aborted) return { buffer: null, reason: 'memory-read-failed' }
+
+          const bytesToRead = Math.min(PLAYBACK_MEMORY_READ_CHUNK_BYTES, args.sizeBytes - offset)
+          const { bytesRead } = await file.read(buffer, offset, bytesToRead, offset)
+          if (bytesRead <= 0) break
+          offset += bytesRead
+          emitProgress(offset)
+          await new Promise<void>(resolve => setImmediate(resolve))
+        }
+      } finally {
+        await file.close().catch(() => { /* best-effort close */ })
+      }
+
+      if (timeoutController.signal.aborted) return { buffer: null, reason: 'memory-timeout' }
+      if (args.abortSignal?.aborted) return { buffer: null, reason: 'memory-read-failed' }
+      if (offset !== args.sizeBytes) return { buffer: null, reason: 'memory-read-failed' }
+      emitProgress(args.sizeBytes, true)
+      return { buffer, reason: null }
+    } finally {
+      clearTimeout(timeoutId)
+    }
+  }
+
+  private async createMemoryStream(path: string, sizeBytes: number, options: {
+    timeoutMs?: number
+    allowSecondTrack?: boolean
+    estimatedDurationSec?: number | null
+    abortSignal?: AbortSignal
+    onBufferProgress?: (telemetry: ProgressiveBufferTelemetry) => void
+  } = {}): Promise<StreamCreateResult> {
     const start = Date.now()
 
-    const memoryDecision = this.canUseMemoryForPlayback(sizeBytes, allowSecondTrack)
+    const memorySnapshot = getPlaybackMemorySnapshot()
+    const memoryDecision = this.canUseMemoryForPlayback(sizeBytes, options.allowSecondTrack ?? false, memorySnapshot)
     if (!memoryDecision.canUse) {
       console.info('[audio] playback memory rejected', {
         path,
         reason: memoryDecision.reason,
         sizeBytes,
-        freeMem: freemem(),
-        totalMem: totalmem(),
+        freeMem: memorySnapshot.freeMemBytes,
+        availableMem: memorySnapshot.availableMemBytes,
+        totalMem: memorySnapshot.totalMemBytes,
         reserveBytes: calculatePlaybackMemoryReserveBytes({
-          totalMemBytes: totalmem(),
+          totalMemBytes: memorySnapshot.totalMemBytes,
           reserveBytes: PLAYBACK_MEMORY_RESERVE_BYTES,
         }),
         smallTrackGraceBytes: PLAYBACK_MEMORY_SMALL_TRACK_BYTES,
@@ -884,12 +1086,28 @@ export class AudioEngine {
       }
     }
 
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
-
     try {
-      const signal = controller.signal
-      const buffer = await readFile(path, { signal })
+      const readResult = await this.readPlaybackFileIntoBuffer({
+        path,
+        sizeBytes,
+        timeoutMs: options.timeoutMs ?? PRELOAD_MEMORY_TIMEOUT_MS,
+        estimatedDurationSec: options.estimatedDurationSec,
+        abortSignal: options.abortSignal,
+        onBufferProgress: options.onBufferProgress,
+      })
+      if (!readResult.buffer) {
+        return {
+          stream: null,
+          source: 'none',
+          reason: readResult.reason ?? 'memory-read-failed',
+          sizeBytes: readResult.reason === 'memory-timeout' ? null : sizeBytes,
+          durationMs: Date.now() - start,
+          attemptedMemory: true,
+          buffer: noBufferTelemetry(),
+        }
+      }
+
+      const buffer = readResult.buffer
       if (buffer.byteLength === 0) {
         return {
           stream: null,
@@ -933,6 +1151,17 @@ export class AudioEngine {
         buffer: completeBufferTelemetry(buffer.byteLength, info.duration),
       }
     } catch (err) {
+      if (options.abortSignal?.aborted) {
+        return {
+          stream: null,
+          source: 'none',
+          reason: 'memory-read-failed',
+          sizeBytes: null,
+          durationMs: Date.now() - start,
+          attemptedMemory: true,
+          buffer: noBufferTelemetry(),
+        }
+      }
       if (err instanceof Error && err.name === 'AbortError') {
         return {
           stream: null,
@@ -954,10 +1183,7 @@ export class AudioEngine {
         attemptedMemory: true,
         buffer: noBufferTelemetry(),
       }
-    } finally {
-      clearTimeout(timeoutId)
     }
-
   }
 
   private createFileStream(path: string): CreatedStream | null {
@@ -967,11 +1193,15 @@ export class AudioEngine {
     return { handle, info: this.computeStreamInfo(handle), memoryBuffer: null }
   }
 
-  private canUseMemoryForPlayback(size: number, allowSecondTrack = false): { canUse: boolean; reason: StreamCreateFailureReason | null; sizeBytes: number } {
+  private canUseMemoryForPlayback(
+    size: number,
+    allowSecondTrack = false,
+    memorySnapshot: PlaybackMemorySnapshot = getPlaybackMemorySnapshot(),
+  ): { canUse: boolean; reason: StreamCreateFailureReason | null; sizeBytes: number } {
     return decidePlaybackMemoryUse({
       fileSizeBytes: size,
-      freeMemBytes: freemem(),
-      totalMemBytes: totalmem(),
+      freeMemBytes: memorySnapshot.availableMemBytes,
+      totalMemBytes: memorySnapshot.totalMemBytes,
       reserveBytes: PLAYBACK_MEMORY_RESERVE_BYTES,
       allowSecondTrack,
     })

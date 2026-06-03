@@ -1,6 +1,6 @@
 import { app, dialog, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import {
   access,
   copyFile,
@@ -439,8 +439,20 @@ function summaryFor(actions: DeviceSyncAction[], pcBefore: number, deviceBefore:
   }
 }
 
+// Async existence check: routes the (potentially slow) syscall through the libuv
+// threadpool instead of blocking the main event loop. Use this on any path that
+// can live on an external/sleeping drive so the spin-up wait doesn't freeze the app.
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await access(p)
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function readYamlFile<T>(path: string): Promise<T | null> {
-  if (!existsSync(path)) return null
+  if (!(await pathExists(path))) return null
   try {
     return parseYaml(await readFile(path, 'utf8')) as T
   } catch (err) {
@@ -449,19 +461,10 @@ async function readYamlFile<T>(path: string): Promise<T | null> {
   }
 }
 
-function readYamlFileSync<T>(path: string): T | null {
-  if (!existsSync(path)) return null
+async function readTextProbeAsync(path: string): Promise<string | null> {
+  if (!(await pathExists(path))) return null
   try {
-    return parseYaml(readFileSync(path, 'utf8')) as T
-  } catch {
-    return null
-  }
-}
-
-function readTextProbe(path: string): string | null {
-  if (!existsSync(path)) return null
-  try {
-    return readFileSync(path, 'utf8').slice(0, TEXT_PROBE_LIMIT)
+    return (await readFile(path, 'utf8')).slice(0, TEXT_PROBE_LIMIT)
   } catch {
     return null
   }
@@ -586,8 +589,8 @@ export class DeviceSyncService {
       const normalizedRoot = resolve(rootPath)
       if (this.getDeviceRowByRoot(normalizedRoot)) continue
 
-      const hasRockbox = existsSync(join(normalizedRoot, ROCKBOX_DIR))
-      const hasCrateState = existsSync(join(normalizedRoot, APP_STATE_DIR, 'device.yaml'))
+      const hasRockbox = await pathExists(join(normalizedRoot, ROCKBOX_DIR))
+      const hasCrateState = await pathExists(join(normalizedRoot, APP_STATE_DIR, 'device.yaml'))
       if (hasRockbox || hasCrateState) {
         candidates.push({
           rootPath: normalizedRoot,
@@ -734,7 +737,11 @@ export class DeviceSyncService {
   }
 
   async listDevices(): Promise<DeviceRecord[]> {
-    return this.listDeviceRows().map(row => this.rowToRecord(this.refreshDeviceRockboxState(row)))
+    return Promise.all(
+      this.listDeviceRows().map(async row =>
+        this.rowToRecordAsync(await this.refreshDeviceRockboxState(row)),
+      ),
+    )
   }
 
   async connect(payload: DeviceConnectPayload): Promise<DeviceRecord> {
@@ -829,13 +836,13 @@ export class DeviceSyncService {
     }
 
     this.setPortableState(deviceId, true, null)
-    const record = this.rowToRecord(this.getDeviceRow(deviceId)!)
+    const record = await this.rowToRecordAsync(this.getDeviceRow(deviceId)!)
     await this.publishVolumeSnapshot(true)
     return record
   }
 
   async updateSettings(deviceId: string, settings: DeviceSettingsUpdate): Promise<DeviceRecord> {
-    const row = this.requireDevice(deviceId)
+    const row = await this.requireDevice(deviceId)
     const artworkMaxEdge = clampDeviceArtworkEdge(settings.artworkMaxEdge, row.artwork_max_edge)
     const fetchMissingLyrics = settings.fetchMissingLyrics === undefined
       ? row.fetch_lyrics === 1
@@ -911,13 +918,13 @@ export class DeviceSyncService {
       )
     }
 
-    const record = this.rowToRecord(this.getDeviceRow(row.id)!)
+    const record = await this.rowToRecordAsync(this.getDeviceRow(row.id)!)
     await this.publishVolumeSnapshot(true)
     return record
   }
 
   async scan(deviceId: string): Promise<DeviceScanResult> {
-    const row = this.requireDevice(deviceId)
+    const row = await this.requireDevice(deviceId)
     const scan = await this.scanDeviceRow(row, true)
     const storage = await this.deviceStorage(row, scan.tracks)
     const scannedAt = nowIso()
@@ -929,7 +936,7 @@ export class DeviceSyncService {
     getDatabase()
       .prepare(`UPDATE devices SET track_count = ?, last_scan_at = ?, last_seen_at = ? WHERE id = ?`)
       .run(nextTrackCount, scannedAt, scannedAt, row.id)
-    const device = this.rowToRecord(this.getDeviceRow(row.id)!)
+    const device = await this.rowToRecordAsync(this.getDeviceRow(row.id)!)
     await this.publishVolumeSnapshot(true)
     return {
       device,
@@ -943,7 +950,7 @@ export class DeviceSyncService {
   // audio file already on the device, probes the embedded artwork dimensions and
   // reports which tracks exceed the device's max edge. Never modifies files.
   async analyzeDeviceArtwork(deviceId: string): Promise<DeviceArtworkAnalysisResult> {
-    const row = this.requireDevice(deviceId)
+    const row = await this.requireDevice(deviceId)
     const maxEdge = clampDeviceArtworkEdge(row.artwork_max_edge)
     const musicRoot = this.deviceMusicRoot(row)
     const files = await this.collectAudioFiles(row.id, musicRoot, false)
@@ -1044,7 +1051,7 @@ export class DeviceSyncService {
     deviceId: string,
     selection?: DeviceArtworkOptimizationSelection,
   ): Promise<DeviceArtworkOptimizationSummary> {
-    const row = this.requireDevice(deviceId)
+    const row = await this.requireDevice(deviceId)
     await this.assertPortableStateWritable(row)
     const deviceMusicRoot = this.deviceMusicRoot(row)
     const selectedDeviceFiles = selection
@@ -1159,17 +1166,20 @@ export class DeviceSyncService {
   async overview(deviceId: string): Promise<DeviceOverviewResult> {
     const stored = this.getDeviceRow(deviceId)
     if (!stored) throw new Error('Device is not connected')
-    const row = existsSync(stored.root_path)
-      ? this.refreshDeviceRockboxState(stored)
+    // Wake the drive off the event loop first; the spin-up wait happens on the
+    // libuv threadpool so the UI (and audio) stay responsive while it spins up.
+    await stat(stored.root_path).catch(() => undefined)
+    const row = (await pathExists(stored.root_path))
+      ? await this.refreshDeviceRockboxState(stored)
       : stored
     return {
-      device: this.rowToRecord(row),
+      device: await this.rowToRecordAsync(row),
       capacity: await this.deviceCapacity(row),
     }
   }
 
   async deviceLibrary(deviceId: string): Promise<DeviceLibraryResult> {
-    const row = this.requireDevice(deviceId)
+    const row = await this.requireDevice(deviceId)
     const scan = await this.scanDeviceRow(row, false)
     const [playlists, rockboxThemeResult, storage] = await Promise.all([
       this.scanDevicePlaylists(row, scan.tracks),
@@ -1185,7 +1195,7 @@ export class DeviceSyncService {
     getDatabase()
       .prepare(`UPDATE devices SET track_count = ?, last_seen_at = ? WHERE id = ?`)
       .run(nextLibTrackCount, scannedAt, row.id)
-    const device = this.rowToRecord(this.getDeviceRow(row.id)!)
+    const device = await this.rowToRecordAsync(this.getDeviceRow(row.id)!)
     await this.publishVolumeSnapshot(true)
 
     const albums = this.deviceAlbums(scan.tracks)
@@ -1210,13 +1220,13 @@ export class DeviceSyncService {
   }
 
   async rockboxThemes(deviceId: string): Promise<RockboxThemeLibraryResult> {
-    const row = this.requireDevice(deviceId)
+    const row = await this.requireDevice(deviceId)
     const rockboxThemeResult = await scanRockboxThemes(row.root_path)
     const scannedAt = nowIso()
     getDatabase()
       .prepare(`UPDATE devices SET last_seen_at = ? WHERE id = ?`)
       .run(scannedAt, row.id)
-    const device = this.rowToRecord(this.getDeviceRow(row.id)!)
+    const device = await this.rowToRecordAsync(this.getDeviceRow(row.id)!)
     await this.publishVolumeSnapshot(true)
 
     return {
@@ -1226,8 +1236,8 @@ export class DeviceSyncService {
     }
   }
 
-  rockboxThemeAssetPath(deviceId: string, relativePath: string): string {
-    const row = this.requireDevice(deviceId)
+  async rockboxThemeAssetPath(deviceId: string, relativePath: string): Promise<string> {
+    const row = await this.requireDevice(deviceId)
     const normalized = relativePath.split('\\').join('/').replace(/^\/+/, '')
     if (!normalized || isRockboxIgnoredRelativePath(normalized)) {
       throw new Error('Invalid Rockbox theme asset path')
@@ -1239,12 +1249,12 @@ export class DeviceSyncService {
     const rockboxRoot = join(row.root_path, ROCKBOX_DIR)
     const target = fromPosix(rockboxRoot, parts.join('/'))
     assertInside(resolve(rockboxRoot), resolve(target))
-    if (!existsSync(target)) throw new Error('Rockbox theme asset was not found')
+    if (!(await pathExists(target))) throw new Error('Rockbox theme asset was not found')
     return target
   }
 
   async deleteRockboxTheme(deviceId: string, themeId: string): Promise<RockboxThemeDeleteResult> {
-    const row = this.requireDevice(deviceId)
+    const row = await this.requireDevice(deviceId)
     const rockboxRoot = join(row.root_path, ROCKBOX_DIR)
     const before = await scanRockboxThemes(row.root_path)
     const theme = before.themes.find(item => item.id === themeId)
@@ -1257,7 +1267,7 @@ export class DeviceSyncService {
       theme.fmsPath ?? '',
     ].filter(Boolean))
     const themeAssetDir = `wps/${sanitizeThemeName(theme.name)}`
-    if (existsSync(fromPosix(rockboxRoot, themeAssetDir))) candidatePaths.add(themeAssetDir)
+    if (await pathExists(fromPosix(rockboxRoot, themeAssetDir))) candidatePaths.add(themeAssetDir)
 
     const files: RockboxThemeDeleteFileResult[] = []
     for (const relativePath of [...candidatePaths]) {
@@ -1277,9 +1287,9 @@ export class DeviceSyncService {
   }
 
   async installRockboxThemes(deviceId: string, sourcePaths: string[]): Promise<RockboxThemeInstallResult> {
-    const row = this.requireDevice(deviceId)
+    const row = await this.requireDevice(deviceId)
     const rockboxRoot = join(row.root_path, ROCKBOX_DIR)
-    if (!existsSync(rockboxRoot)) {
+    if (!(await pathExists(rockboxRoot))) {
       throw new Error('Rockbox is not installed on this device')
     }
 
@@ -1298,7 +1308,7 @@ export class DeviceSyncService {
   }
 
   async planSync(request: DeviceSyncPlanRequest): Promise<DeviceSyncPlan> {
-    const row = this.requireDevice(request.deviceId)
+    const row = await this.requireDevice(request.deviceId)
     const mode = validateSyncMode(request.mode)
     const pcTargetPath = resolve(request.pcTargetPath ?? row.pc_target_path)
     const deviceMusicRoot = this.deviceMusicRoot(row)
@@ -1426,7 +1436,7 @@ export class DeviceSyncService {
     if (!cached) throw new Error('Sync plan expired. Create a new plan before applying.')
 
     const { plan, deviceRoot, deviceMusicRoot } = cached
-    let row = this.requireDevice(plan.deviceId)
+    let row = await this.requireDevice(plan.deviceId)
     await this.assertPortableStateWritable(row)
     const executablePlan = this.planForSelection(plan, selection, deviceMusicRoot)
     const writeCompleteState = this.selectionCoversPlan(plan, selection)
@@ -1435,7 +1445,7 @@ export class DeviceSyncService {
       (row.optimize_artwork_on_sync === 1) !== selection.optimizeArtwork
     ) {
       await this.updateSettings(row.id, { optimizeArtworkOnSync: selection.optimizeArtwork })
-      row = this.requireDevice(plan.deviceId)
+      row = await this.requireDevice(plan.deviceId)
     }
     const optimizeArtwork = resolveOptimizeArtworkSelection(
       selection?.optimizeArtwork,
@@ -1476,7 +1486,7 @@ export class DeviceSyncService {
     const found = await this.findPendingJournal(journalId)
     if (!found) throw new Error('Pending sync journal was not found')
 
-    const row = this.requireDevice(found.journal.plan.deviceId)
+    const row = await this.requireDevice(found.journal.plan.deviceId)
     const deviceMusicRoot = this.deviceMusicRoot(row)
     const journal = found.journal
     journal.status = 'running'
@@ -2358,7 +2368,7 @@ export class DeviceSyncService {
   private async deviceStorage(row: DeviceRow, tracks: DeviceTrack[]): Promise<DeviceStorageSummary> {
     const musicBytes = tracks.reduce((sum, track) => sum + (track.fileSize ?? 0), 0)
     const rockboxRoot = join(row.root_path, ROCKBOX_DIR)
-    const rockboxBytes = existsSync(rockboxRoot)
+    const rockboxBytes = (await pathExists(rockboxRoot))
       ? await this.directorySize(rockboxRoot).catch(() => 0)
       : 0
 
@@ -2388,7 +2398,7 @@ export class DeviceSyncService {
   }
 
   private async deviceCapacity(row: DeviceRow): Promise<DeviceCapacitySummary> {
-    if (!existsSync(row.root_path)) {
+    if (!(await pathExists(row.root_path))) {
       return emptyCapacitySummary('Device is offline')
     }
 
@@ -2654,26 +2664,30 @@ export class DeviceSyncService {
     return normalized.join('/')
   }
 
-  private deviceVersions(row: DeviceRow): DeviceVersionInfo {
+  private async deviceVersionsAsync(row: DeviceRow): Promise<DeviceVersionInfo> {
     const stateDir = join(row.root_path, APP_STATE_DIR)
-    const deviceYaml = readYamlFileSync<DeviceYaml>(join(stateDir, 'device.yaml'))
-    const machineStateVersion = this.detectMachineStateVersion(stateDir)
+    const [deviceYaml, machineStateVersion, rockboxVersion, firmwareVersion] = await Promise.all([
+      readYamlFile<DeviceYaml>(join(stateDir, 'device.yaml')),
+      this.detectMachineStateVersion(stateDir),
+      this.detectRockboxVersion(row.root_path),
+      this.detectFirmwareVersion(row.root_path),
+    ])
     return {
       crateStateVersion: typeof deviceYaml?.version === 'number' ? deviceYaml.version : null,
       machineStateVersion,
-      rockboxVersion: this.detectRockboxVersion(row.root_path),
-      firmwareVersion: this.detectFirmwareVersion(row.root_path),
+      rockboxVersion,
+      firmwareVersion,
     }
   }
 
-  private detectMachineStateVersion(stateDir: string): number | null {
+  private async detectMachineStateVersion(stateDir: string): Promise<number | null> {
     const machinesDir = join(stateDir, 'machines')
-    if (!existsSync(machinesDir)) return null
+    if (!(await pathExists(machinesDir))) return null
     let version: number | null = null
     try {
-      for (const entry of readdirSync(machinesDir, { withFileTypes: true })) {
+      for (const entry of await readdir(machinesDir, { withFileTypes: true })) {
         if (!entry.isFile() || !entry.name.endsWith('.yaml')) continue
-        const machine = readYamlFileSync<MachineYaml>(join(machinesDir, entry.name))
+        const machine = await readYamlFile<MachineYaml>(join(machinesDir, entry.name))
         if (typeof machine?.version !== 'number') continue
         version = version == null ? machine.version : Math.max(version, machine.version)
       }
@@ -2683,9 +2697,9 @@ export class DeviceSyncService {
     return version
   }
 
-  private detectRockboxVersion(rootPath: string): string | null {
+  private async detectRockboxVersion(rootPath: string): Promise<string | null> {
     for (const parts of ROCKBOX_VERSION_FILES) {
-      const text = readTextProbe(join(rootPath, ...parts))
+      const text = await readTextProbeAsync(join(rootPath, ...parts))
       if (!text) continue
       const version = extractVersionFromText(text, /rockbox/i)
       if (version) return version
@@ -2693,9 +2707,9 @@ export class DeviceSyncService {
     return null
   }
 
-  private detectFirmwareVersion(rootPath: string): string | null {
+  private async detectFirmwareVersion(rootPath: string): Promise<string | null> {
     for (const parts of FIRMWARE_VERSION_FILES) {
-      const text = readTextProbe(join(rootPath, ...parts))
+      const text = await readTextProbeAsync(join(rootPath, ...parts))
       if (!text) continue
       const version = extractVersionFromText(text)
       if (version) return version
@@ -2765,7 +2779,10 @@ export class DeviceSyncService {
     return err instanceof Error ? err : new Error(String(err))
   }
 
-  private rowToRecord(row: DeviceRow): DeviceRecord {
+  // Pure: no filesystem I/O. The two drive-touching fields (isAvailable, versions)
+  // are resolved off the event loop by rowToRecordAsync and passed in, so callers
+  // on the device read path never block the main thread on a sleeping drive.
+  private rowToRecord(row: DeviceRow, isAvailable: boolean, versions: DeviceVersionInfo): DeviceRecord {
     return {
       id: row.id,
       name: row.name,
@@ -2778,15 +2795,23 @@ export class DeviceSyncService {
       fetchMissingLyrics: row.fetch_lyrics === 1,
       optimizeArtworkOnSync: row.optimize_artwork_on_sync === 1,
       hasRockbox: row.has_rockbox === 1,
-      isAvailable: existsSync(row.root_path),
+      isAvailable,
       trackCount: row.track_count,
       sourceLibraryIds: this.deviceLibraryIds(row.id),
-      versions: this.deviceVersions(row),
+      versions,
       portableState: this.portableStateFor(row),
       lastSeenAt: row.last_seen_at,
       lastScanAt: row.last_scan_at,
       lastSyncAt: row.last_sync_at,
     }
+  }
+
+  private async rowToRecordAsync(row: DeviceRow): Promise<DeviceRecord> {
+    const [isAvailable, versions] = await Promise.all([
+      pathExists(row.root_path),
+      this.deviceVersionsAsync(row),
+    ])
+    return this.rowToRecord(row, isAvailable, versions)
   }
 
   // Folders (libraries) this device is configured to sync from. Empty list means
@@ -2836,16 +2861,16 @@ export class DeviceSyncService {
       .get(rootPath)
   }
 
-  private requireDevice(deviceId: string): DeviceRow {
+  private async requireDevice(deviceId: string): Promise<DeviceRow> {
     const row = this.getDeviceRow(deviceId)
     if (!row) throw new Error('Device is not connected')
-    if (!existsSync(row.root_path)) throw new Error('Device is not mounted')
+    if (!(await pathExists(row.root_path))) throw new Error('Device is not mounted')
     return this.refreshDeviceRockboxState(row)
   }
 
-  private refreshDeviceRockboxState(row: DeviceRow): DeviceRow {
-    if (!existsSync(row.root_path)) return row
-    const hasRockbox = existsSync(join(row.root_path, ROCKBOX_DIR)) ? 1 : 0
+  private async refreshDeviceRockboxState(row: DeviceRow): Promise<DeviceRow> {
+    if (!(await pathExists(row.root_path))) return row
+    const hasRockbox = (await pathExists(join(row.root_path, ROCKBOX_DIR))) ? 1 : 0
     if (row.has_rockbox === hasRockbox) return row
 
     getDatabase()

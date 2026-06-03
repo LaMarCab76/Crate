@@ -14,10 +14,12 @@ import { getDeviceSyncService } from './devices/DeviceSyncService'
 import { getFolderWatcher } from './library/FolderWatcher'
 import { getLibraryReconciler } from './library/LibraryReconciler'
 import { getLyricsBackfillService } from './lyrics/LyricsBackfillService'
+import { getLyricsIndexService } from './lyrics/LyricsIndexService'
 import { getLyricsSettings } from './lyrics/LyricsSettings'
 import { getAudioEngine } from './audio/AudioEngine'
 import { getExclusiveModeManager } from './audio/ExclusiveModeManager'
 import { getLibraryBackup } from './services/LibraryBackup'
+import { getLibraryWorkerClient } from './workers/LibraryWorkerClient'
 import { getAppUpdateService } from './updates/AppUpdateService'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
@@ -176,7 +178,9 @@ app.on('will-quit', () => {
   // Flush any pending portable-library backup writes before we close the DB,
   // otherwise the JSON would miss the last few mutations of the session.
   try { getLibraryBackup().flushAll() } catch (err) { console.error('[backup] flush failed:', err) }
+  try { getLyricsIndexService().flushAll() } catch (err) { console.error('[lyrics-index] flush failed:', err) }
   getFolderWatcher().stopAll()
+  try { getLibraryWorkerClient().dispose() } catch { /* worker may not have spawned */ }
   try { getLyricsBackfillService().stop() } catch { /* service may not have initialized */ }
   try { getLibraryReconciler().dispose() } catch { /* reconciler may not have initialized */ }
   try { getDeviceSyncService().stopVolumeMonitor() } catch { /* service may not have initialized */ }

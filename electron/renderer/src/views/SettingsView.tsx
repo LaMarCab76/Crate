@@ -1,14 +1,28 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { PlayerTintSource, Tweak } from '@renderer/stores/settingsStore'
 import type { DbFolder } from '@shared/types/db'
 import { useEqStore } from '@renderer/stores/eqStore'
+import { useLevelerStore } from '@renderer/stores/levelerStore'
+import {
+  LEVELER_TARGET_MIN,
+  LEVELER_TARGET_MAX,
+  LEVELER_TARGET_STEP,
+  formatLevelerGain,
+} from '@shared/constants/leveler'
 import { Icon } from '@renderer/components/Icon'
 import { ModalShell } from '@renderer/components/ModalShell'
 import { FolderRemovalConfirmModal } from '@renderer/components/FolderRemovalConfirmModal'
 import type { DeviceConnectTarget } from '@renderer/components/DeviceConnectModal'
 import { useDeviceStore } from '@renderer/stores/deviceStore'
 import { useFolders, useLibraryStore } from '@renderer/stores/libraryStore'
-import { EQ_BAND_LABELS, EQ_GAIN_MAX, EQ_GAIN_MIN, EQ_GAIN_STEP } from '@shared/constants/equalizer'
+import {
+  EQ_BAND_COUNT_PRESETS,
+  EQ_MAX_BAND_COUNT,
+  EQ_MIN_BAND_COUNT,
+  eqBandLabels,
+} from '@shared/constants/equalizer'
+import { EqGraph } from '@renderer/components/EqGraph'
+import { usePlaybackStore } from '@renderer/stores/playbackStore'
 import { LYRICS_OFFSET_LIMIT_MS, clampLyricsOffsetMs } from '@shared/lyrics/lrc'
 import type {
   AppUpdateState,
@@ -21,6 +35,7 @@ import { COLOR_PRESETS } from '@renderer/utils/colorPresets'
 import { clearPlaybackTableBarsMemoryCache } from '@renderer/utils/playbackTableBars'
 import { basenameForPath } from '@renderer/utils/devicePaths'
 import { fmtTime } from '@renderer/utils/format'
+import { useVirtualRows } from '@renderer/utils/useVirtualRows'
 import {
   filterLyricsLibraryItems,
   lyricsLibraryCounts,
@@ -32,7 +47,7 @@ import {
   UP_NEXT_TOAST_START_SEC_MAX,
   UP_NEXT_TOAST_START_SEC_MIN,
 } from '@renderer/utils/upNextToast'
-import type { LyricsLibraryOverview, LyricsSelectionProgress } from '@shared/types/lyrics'
+import type { LyricsLibraryOverview, LyricsLibraryProgress, LyricsSelectionProgress } from '@shared/types/lyrics'
 
 interface Props {
   tweak: Tweak
@@ -357,18 +372,16 @@ function AppearanceSection({ tweak, setTweak }: Props) {
           </div>
           <div className="rule-row" style={{ margin: 0 }}>
             <div
-              className="select"
-              style={{ background: !tweak.dark ? 'var(--bg-selected)' : 'var(--bg-elev)' }}
+              className={`select ${!tweak.dark ? 'active' : ''}`}
               onClick={() => setTweak('dark', false)}
-              role="button" tabIndex={0}
+              role="button" tabIndex={0} aria-pressed={!tweak.dark}
             >
               Light
             </div>
             <div
-              className="select"
-              style={{ background: tweak.dark ? 'var(--bg-selected)' : 'var(--bg-elev)' }}
+              className={`select ${tweak.dark ? 'active' : ''}`}
               onClick={() => setTweak('dark', true)}
-              role="button" tabIndex={0}
+              role="button" tabIndex={0} aria-pressed={tweak.dark}
             >
               Dark
             </div>
@@ -383,10 +396,9 @@ function AppearanceSection({ tweak, setTweak }: Props) {
             {(['compact', 'regular', 'comfy'] as const).map(d => (
               <div
                 key={d}
-                className="select"
-                style={{ background: tweak.density === d ? 'var(--bg-selected)' : 'var(--bg-elev)' }}
+                className={`select ${tweak.density === d ? 'active' : ''}`}
                 onClick={() => setTweak('density', d)}
-                role="button" tabIndex={0}
+                role="button" tabIndex={0} aria-pressed={tweak.density === d}
               >
                 {d}
               </div>
@@ -426,10 +438,9 @@ function PlaybackGeneralSection({ tweak, setTweak }: Props) {
               {(['default', 'preset', 'custom', 'artwork'] as const).map(s => (
                 <div
                   key={s}
-                  className="select"
-                  style={{ background: tweak.playerTintSource === s ? 'var(--bg-selected)' : 'var(--bg-elev)' }}
+                  className={`select ${tweak.playerTintSource === s ? 'active' : ''}`}
                   onClick={() => setTweak('playerTintSource', s as PlayerTintSource)}
-                  role="button" tabIndex={0}
+                  role="button" tabIndex={0} aria-pressed={tweak.playerTintSource === s}
                 >
                   {s === 'default' ? 'Default' : s === 'preset' ? 'Preset' : s === 'custom' ? 'Custom' : 'Artwork'}
                 </div>
@@ -535,25 +546,81 @@ function PlaybackGeneralSection({ tweak, setTweak }: Props) {
               tabIndex={0}
             />
           </div>
-          <div className="set-row">
-            <div>
-              <div className="lbl">Sound check</div>
-              <div className="sub">Normalize song loudness to a consistent target.</div>
-            </div>
-            <div
-              className={`toggle ${tweak.soundcheck ? 'on' : ''}`}
-              onClick={() => setTweak('soundcheck', !tweak.soundcheck)}
-              role="switch"
-              aria-checked={tweak.soundcheck}
-              tabIndex={0}
-            />
-          </div>
+          <LevelerSettings />
         </div>
       </section>
       <section className="set-section">
         <h2>Playback Cache</h2>
         <PlaybackCachePanel />
       </section>
+    </>
+  )
+}
+
+// Volume leveler (Sound Check) controls. Backed by the shared levelerStore, so
+// these mirror — and stay in sync with — the in-player Audio Output popover.
+function LevelerSettings() {
+  const enabled = useLevelerStore(s => s.enabled)
+  const targetLufs = useLevelerStore(s => s.targetLufs)
+  const preventClipping = useLevelerStore(s => s.preventClipping)
+  const currentGainDb = useLevelerStore(s => s.currentGainDb)
+  const setEnabled = useLevelerStore(s => s.setEnabled)
+  const setTargetLufs = useLevelerStore(s => s.setTargetLufs)
+  const setPreventClipping = useLevelerStore(s => s.setPreventClipping)
+
+  return (
+    <>
+      <div className="set-row">
+        <div>
+          <div className="lbl">Nivelador de volumen</div>
+          <div className="sub">
+            Normaliza el volumen de cada canción a un nivel constante (Sound Check).
+            {enabled ? ` Ganancia actual: ${formatLevelerGain(currentGainDb)}.` : ''}
+          </div>
+        </div>
+        <div
+          className={`toggle ${enabled ? 'on' : ''}`}
+          onClick={() => { void setEnabled(!enabled) }}
+          role="switch"
+          aria-checked={enabled}
+          aria-label="Activar nivelador de volumen"
+          tabIndex={0}
+        />
+      </div>
+      {enabled && (
+        <>
+          <div className="set-row">
+            <div>
+              <div className="lbl">Nivel objetivo</div>
+              <div className="sub">Más bajo deja más margen sin saturación. {targetLufs} LUFS</div>
+            </div>
+            <input
+              type="range"
+              min={LEVELER_TARGET_MIN}
+              max={LEVELER_TARGET_MAX}
+              step={LEVELER_TARGET_STEP}
+              value={targetLufs}
+              onChange={e => { void setTargetLufs(Number(e.target.value)) }}
+              style={{ width: 160 }}
+              aria-label="Nivel objetivo de normalización en LUFS"
+            />
+          </div>
+          <div className="set-row">
+            <div>
+              <div className="lbl">Evitar saturación</div>
+              <div className="sub">Limita la amplificación para que el pico no supere los 0 dBFS.</div>
+            </div>
+            <div
+              className={`toggle ${preventClipping ? 'on' : ''}`}
+              onClick={() => { void setPreventClipping(!preventClipping) }}
+              role="switch"
+              aria-checked={preventClipping}
+              aria-label="Evitar saturación al nivelar"
+              tabIndex={0}
+            />
+          </div>
+        </>
+      )}
     </>
   )
 }
@@ -568,6 +635,7 @@ function PlaybackEqSection() {
 }
 
 function PlaybackLyricsSection({ tweak, setTweak }: Props) {
+  const [libraryOpen, setLibraryOpen] = useState(false)
   return (
     <section className="set-section">
       <h2>Lyrics</h2>
@@ -593,8 +661,21 @@ function PlaybackLyricsSection({ tweak, setTweak }: Props) {
             />
           </div>
         ))}
+        <div className="set-row">
+          <div>
+            <div className="lbl">Biblioteca de letras</div>
+            <div className="sub">Revisa qué canciones tienen letras y cuáles faltan, y descarga las que falten.</div>
+          </div>
+          <button className="btn" type="button" onClick={() => setLibraryOpen(true)}>
+            <Icon name="lyrics" size={13} /> Administrar biblioteca
+          </button>
+        </div>
       </div>
-      <LyricsLibraryManager />
+      {libraryOpen && (
+        <ModalShell title="Biblioteca de letras" onClose={() => setLibraryOpen(false)}>
+          <LyricsLibraryManager />
+        </ModalShell>
+      )}
     </section>
   )
 }
@@ -607,13 +688,14 @@ function LyricsLibraryManager() {
   const [tab, setTab] = useState<LyricsLibraryTab>('missing')
   const [selected, setSelected] = useState<Set<number>>(() => new Set())
   const [progress, setProgress] = useState<LyricsSelectionProgress | null>(null)
+  const [scanProgress, setScanProgress] = useState<LyricsLibraryProgress | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const refreshOverview = async () => {
+  const refreshOverview = async (force = false) => {
     setLoading(true)
     setError(null)
     try {
-      const next = await window.api.lyrics.libraryOverview()
+      const next = await window.api.lyrics.libraryOverview(force)
       setOverview(next)
       setSelected(current => pruneLyricsSelection(current, next.items))
     } catch (err) {
@@ -625,10 +707,16 @@ function LyricsLibraryManager() {
 
   useEffect(() => {
     void refreshOverview()
-    const off = window.api.lyrics.onSelectionProgress(event => {
+    const offSelection = window.api.lyrics.onSelectionProgress(event => {
       setProgress(event)
     })
-    return off
+    const offLibrary = window.api.lyrics.onLibraryProgress(event => {
+      setScanProgress(event.done >= event.total ? null : event)
+    })
+    return () => {
+      offSelection()
+      offLibrary()
+    }
     // refreshOverview is an event helper; this panel only needs one load on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -691,10 +779,9 @@ function LyricsLibraryManager() {
     <div className="lyrics-library-panel">
       <div className="lyrics-library-head">
         <div>
-          <h3>Biblioteca de letras</h3>
           <span>{counts.withLyrics.toLocaleString()} con letras · {counts.missingLyrics.toLocaleString()} sin letras</span>
         </div>
-        <button className="btn" type="button" disabled={loading || running} onClick={() => void refreshOverview()}>
+        <button className="btn" type="button" disabled={loading || running} onClick={() => void refreshOverview(true)}>
           <Icon name="rotate" size={13} /> Actualizar
         </button>
       </div>
@@ -746,32 +833,67 @@ function LyricsLibraryManager() {
 
       <div className="lyrics-library-list">
         {loading ? (
-          <div className="lyrics-library-empty">Cargando biblioteca…</div>
+          <div className="lyrics-library-empty">
+            {scanProgress
+              ? `Analizando biblioteca… ${scanProgress.done.toLocaleString()}/${scanProgress.total.toLocaleString()}`
+              : 'Cargando biblioteca…'}
+          </div>
         ) : visibleItems.length === 0 ? (
           <div className="lyrics-library-empty">Sin canciones para mostrar.</div>
         ) : (
-          visibleItems.map(item => (
-            <div className="lyrics-library-row" key={item.trackId}>
-              {tab === 'missing' ? (
-                <input
-                  type="checkbox"
-                  checked={selected.has(item.trackId)}
-                  onChange={() => toggleSelected(item.trackId)}
-                  aria-label={`Seleccionar ${item.title}`}
-                />
-              ) : (
-                <Icon name={item.embeddedInFile ? 'song' : 'lyrics'} size={14} />
-              )}
-              <span>
-                <strong>{item.title}</strong>
-                <em>{item.artist}{item.album ? ` · ${item.album}` : ''}</em>
-              </span>
-              <b>{lyricsItemStatusLabel(item)}</b>
-              <code>{fmtTime(item.duration)}</code>
-            </div>
-          ))
+          <LyricsLibraryRows items={visibleItems} tab={tab} selected={selected} onToggle={toggleSelected} />
         )}
       </div>
+    </div>
+  )
+}
+
+// Windowed list: only the rows overlapping the viewport are mounted, so the
+// panel stays responsive with a multi-thousand-track library. Reuses the same
+// dependency-free virtualization hook as the main track table.
+function LyricsLibraryRows({
+  items,
+  tab,
+  selected,
+  onToggle,
+}: {
+  items: LyricsLibraryOverview['items']
+  tab: LyricsLibraryTab
+  selected: Set<number>
+  onToggle: (trackId: number) => void
+}) {
+  const [measuredRowH, setMeasuredRowH] = useState(0)
+  const rowHeight = measuredRowH || 43
+  const { setBody, window: vwin } = useVirtualRows(items.length, rowHeight)
+  const measureRow = useCallback((el: HTMLElement | null) => {
+    if (!el) return
+    const h = el.offsetHeight
+    if (h > 0) setMeasuredRowH(prev => (prev === h ? prev : h))
+  }, [])
+  return (
+    <div ref={setBody}>
+      {vwin.padTop > 0 && <div aria-hidden style={{ height: vwin.padTop }} />}
+      {items.slice(vwin.start, vwin.end).map((item, k) => (
+        <div className="lyrics-library-row" key={item.trackId} ref={k === 0 ? measureRow : undefined}>
+          {tab === 'missing' ? (
+            <input
+              type="checkbox"
+              checked={selected.has(item.trackId)}
+              onChange={() => onToggle(item.trackId)}
+              aria-label={`Seleccionar ${item.title}`}
+            />
+          ) : (
+            <Icon name={item.embeddedInFile ? 'song' : 'lyrics'} size={14} />
+          )}
+          <span>
+            <strong>{item.title}</strong>
+            <em>{item.artist}{item.album ? ` · ${item.album}` : ''}</em>
+          </span>
+          <b>{lyricsItemStatusLabel(item)}</b>
+          <code>{fmtTime(item.duration)}</code>
+        </div>
+      ))}
+      {vwin.padBottom > 0 && <div aria-hidden style={{ height: vwin.padBottom }} />}
     </div>
   )
 }
@@ -956,8 +1078,8 @@ function UpdatesSection() {
   return (
     <section className="set-section">
       <h2>Actualizaciones</h2>
-      <div className="set-card update-card">
-        <div className="update-status-row">
+      <div className="set-card">
+        <div className="set-row">
           <div>
             <div className="lbl">GitHub Releases</div>
             <div className="sub">{updateSummary(current)}</div>
@@ -965,42 +1087,72 @@ function UpdatesSection() {
           <span className={`update-status-badge ${current.status}`}>{UPDATE_STATUS_LABEL[current.status]}</span>
         </div>
 
-        <div className="update-details">
-          <span>Instalada <strong>{current.currentVersion}</strong></span>
-          <span>Último chequeo <strong>{formatUpdateDate(current.lastCheckedAt)}</strong></span>
-          {current.updateVersion && <span>Release <strong>{current.updateVersion}</strong></span>}
-          {current.releaseDate && <span>Publicado <strong>{formatUpdateDate(current.releaseDate)}</strong></span>}
+        <div className="set-row">
+          <div>
+            <div className="lbl">Versión instalada</div>
+            <div className="sub">Último chequeo {formatUpdateDate(current.lastCheckedAt)}</div>
+          </div>
+          <span className="update-value">{current.currentVersion}</span>
         </div>
 
+        {current.updateVersion && (
+          <div className="set-row">
+            <div>
+              <div className="lbl">Nueva versión</div>
+              {current.releaseDate && (
+                <div className="sub">Publicado {formatUpdateDate(current.releaseDate)}</div>
+              )}
+            </div>
+            <span className="update-value">{current.updateVersion}</span>
+          </div>
+        )}
+
         {current.status === 'downloading' && (
-          <div className="update-progress-block">
-            <div className="update-progress-meter" aria-label={`Descarga ${Math.round(progress)}%`}>
+          <div className="set-row">
+            <div>
+              <div className="lbl">Descargando</div>
+              <div className="sub">{Math.round(progress)}%{transferred ? ` · ${transferred}` : ''}</div>
+            </div>
+            <div className="update-progress-meter" style={{ width: 160 }} aria-label={`Descarga ${Math.round(progress)}%`}>
               <i style={{ width: `${progress}%` }} />
             </div>
-            <span>{Math.round(progress)}%{transferred ? ` · ${transferred}` : ''}</span>
           </div>
         )}
 
         {current.releaseNotes && (
-          <div className="update-release-notes">
-            {current.releaseNotes}
+          <div className="set-row update-notes-row">
+            <div className="update-notes-wrap">
+              <div className="lbl">Notas de la versión</div>
+              <div className="update-release-notes">{current.releaseNotes}</div>
+            </div>
           </div>
         )}
 
         {current.error && current.status !== 'unsupported' && (
-          <div className="device-error inline">{current.error}</div>
+          <div className="set-row update-notes-row">
+            <div className="update-notes-wrap">
+              <div className="lbl">Error</div>
+              <div className="device-error inline">{current.error}</div>
+            </div>
+          </div>
         )}
 
-        <div className="update-actions">
-          <button className="btn" type="button" disabled={!current.canCheck || action != null} onClick={() => { void run('check') }}>
-            <Icon name="rotate" size={13} /> {action === 'check' ? 'Buscando' : 'Buscar ahora'}
-          </button>
-          <button className="btn primary" type="button" disabled={!current.canDownload || action != null} onClick={() => { void run('download') }}>
-            <Icon name="download" size={13} /> {action === 'download' ? 'Descargando' : 'Descargar'}
-          </button>
-          <button className="btn" type="button" disabled={!current.canInstall || action != null} onClick={() => { void run('install') }}>
-            <Icon name="sync" size={13} /> Reiniciar e instalar
-          </button>
+        <div className="set-row">
+          <div>
+            <div className="lbl">Gestión</div>
+            <div className="sub">Buscar, descargar e instalar nuevas versiones.</div>
+          </div>
+          <div className="update-actions">
+            <button className="btn" type="button" disabled={!current.canCheck || action != null} onClick={() => { void run('check') }}>
+              <Icon name="rotate" size={13} /> {action === 'check' ? 'Buscando' : 'Buscar ahora'}
+            </button>
+            <button className="btn primary" type="button" disabled={!current.canDownload || action != null} onClick={() => { void run('download') }}>
+              <Icon name="download" size={13} /> {action === 'download' ? 'Descargando' : 'Descargar'}
+            </button>
+            <button className="btn" type="button" disabled={!current.canInstall || action != null} onClick={() => { void run('install') }}>
+              <Icon name="sync" size={13} /> Reiniciar e instalar
+            </button>
+          </div>
         </div>
       </div>
     </section>
@@ -1233,16 +1385,26 @@ function PlaybackCachePanel() {
   const [limitMb, setLimitMb] = useState('1024')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
+  const audioApi = typeof window === 'undefined' ? null : window.api?.audio
+  const unavailable = !audioApi
 
   const loadStats = async () => {
-    const next = await window.api.audio.getPlaybackCacheStats()
+    if (!audioApi) {
+      setStatus('Cache disponible solo en la app de escritorio')
+      return
+    }
+    const next = await audioApi.getPlaybackCacheStats()
     setStats(next)
     setLimitMb(String(cacheLimitMb(next)))
   }
 
   useEffect(() => {
+    if (!audioApi) {
+      setStatus('Cache disponible solo en la app de escritorio')
+      return
+    }
     let cancelled = false
-    void window.api.audio.getPlaybackCacheStats()
+    void audioApi.getPlaybackCacheStats()
       .then(next => {
         if (cancelled) return
         setStats(next)
@@ -1250,7 +1412,7 @@ function PlaybackCachePanel() {
       })
       .catch(() => { /* main not ready */ })
 
-    const off = window.api.audio.onPlaybackCacheChanged(next => {
+    const off = audioApi.onPlaybackCacheChanged(next => {
       if (cancelled) return
       setStats(next)
       setLimitMb(String(cacheLimitMb(next)))
@@ -1259,14 +1421,18 @@ function PlaybackCachePanel() {
       cancelled = true
       off()
     }
-  }, [])
+  }, [audioApi])
 
   const saveLimit = async () => {
+    if (!audioApi) {
+      setStatus('Cache disponible solo en la app de escritorio')
+      return
+    }
     const mb = Math.max(64, Math.floor(Number(limitMb) || 1024))
     setBusy(true)
     setStatus(null)
     try {
-      const next = await window.api.audio.setPlaybackCacheLimit(mb * 1024 * 1024)
+      const next = await audioApi.setPlaybackCacheLimit(mb * 1024 * 1024)
       setStats(next)
       setLimitMb(String(cacheLimitMb(next)))
       setStatus('Límite actualizado')
@@ -1276,10 +1442,14 @@ function PlaybackCachePanel() {
   }
 
   const clearCache = async () => {
+    if (!audioApi) {
+      setStatus('Cache disponible solo en la app de escritorio')
+      return
+    }
     setBusy(true)
     setStatus(null)
     try {
-      const next = await window.api.audio.clearPlaybackCache()
+      const next = await audioApi.clearPlaybackCache()
       clearPlaybackTableBarsMemoryCache()
       setStats(next)
       setLimitMb(String(cacheLimitMb(next)))
@@ -1322,12 +1492,12 @@ function PlaybackCachePanel() {
             min={64}
             step={64}
             value={limitMb}
-            disabled={busy}
+            disabled={busy || unavailable}
             onChange={e => setLimitMb(e.target.value)}
             aria-label="Playback cache limit in MB"
           />
           <span>MB</span>
-          <button className="btn ghost" disabled={busy} onClick={saveLimit}>Guardar</button>
+          <button className="btn ghost" disabled={busy || unavailable} onClick={saveLimit}>Guardar</button>
         </div>
       </div>
       <div className="set-row">
@@ -1336,8 +1506,8 @@ function PlaybackCachePanel() {
           <div className="sub">{status ?? `Límite actual: ${formatCacheBytes(max)}`}</div>
         </div>
         <div className="cache-limit-controls">
-          <button className="btn ghost" disabled={busy} onClick={() => { void loadStats() }}>Actualizar</button>
-          <button className="btn danger" disabled={busy || used <= 0} onClick={clearCache}>Limpiar cache</button>
+          <button className="btn ghost" disabled={busy || unavailable} onClick={() => { void loadStats() }}>Actualizar</button>
+          <button className="btn danger" disabled={busy || unavailable || used <= 0} onClick={clearCache}>Limpiar cache</button>
         </div>
       </div>
     </div>
@@ -1348,11 +1518,26 @@ function EqPanel() {
   const enabled = useEqStore(s => s.enabled)
   const preset = useEqStore(s => s.preset)
   const bands = useEqStore(s => s.bands)
+  const bandCount = useEqStore(s => s.bandCount)
   const presetNames = useEqStore(s => s.presetNames)
   const setEnabled = useEqStore(s => s.setEnabled)
   const setBand = useEqStore(s => s.setBand)
   const setPreset = useEqStore(s => s.setPreset)
+  const setBandCount = useEqStore(s => s.setBandCount)
+  const playbackStatus = usePlaybackStore(s => s.status)
+  const hasTrack = usePlaybackStore(s => s.currentTrack != null)
   const selectedPreset = presetNames.includes(preset) ? preset : 'Custom'
+  const isPlaying = playbackStatus === 'playing'
+
+  // The band-count slider commits on release (each change reattaches every
+  // PEAKEQ instance, so we don't want to thrash that on every drag tick).
+  const [countDraft, setCountDraft] = useState(bandCount)
+  useEffect(() => { setCountDraft(bandCount) }, [bandCount])
+  const commitCount = (count: number) => { void setBandCount(count) }
+
+  const labels = useMemo(() => eqBandLabels(bandCount), [bandCount])
+  // Keep the frequency axis readable as the count grows: show at most ~13 ticks.
+  const labelStep = Math.max(1, Math.ceil(bandCount / 13))
 
   return (
     <>
@@ -1360,7 +1545,7 @@ function EqPanel() {
         <div className="set-row">
           <div>
             <div className="lbl">Enable equalizer</div>
-            <div className="sub">15-band peaking EQ applied to the BASS playback chain.</div>
+            <div className="sub">{bandCount}-band peaking EQ applied to the BASS playback chain.</div>
           </div>
           <div
             className={`toggle ${enabled ? 'on' : ''}`}
@@ -1370,47 +1555,55 @@ function EqPanel() {
             tabIndex={0}
           />
         </div>
+        <div className="set-row eq-bandcount-row">
+          <div>
+            <div className="lbl">Bands</div>
+            <div className="sub">Hasta {EQ_MAX_BAND_COUNT} barras configurables. Actual: {bandCount}.</div>
+          </div>
+          <div className="eq-bandcount-control">
+            <div className="eq-bandcount-presets">
+              {EQ_BAND_COUNT_PRESETS.map(count => (
+                <button
+                  key={count}
+                  type="button"
+                  className={`eq-bandcount-chip ${bandCount === count ? 'active' : ''}`}
+                  onClick={() => commitCount(count)}
+                >
+                  {count}
+                </button>
+              ))}
+            </div>
+            <div className="eq-bandcount-slider">
+              <input
+                type="range"
+                min={EQ_MIN_BAND_COUNT}
+                max={EQ_MAX_BAND_COUNT}
+                step={1}
+                value={countDraft}
+                onChange={e => setCountDraft(Number(e.target.value))}
+                onPointerUp={() => commitCount(countDraft)}
+                onKeyUp={() => commitCount(countDraft)}
+                aria-label="Number of EQ bands"
+              />
+              <span className="eq-bandcount-value">{countDraft}</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="eq-graph" style={{ opacity: enabled ? 1 : 0.45 }}>
-        <div className="eq-bands">
-          {EQ_BAND_LABELS.map((label, i) => {
-            // Map the gain range to 0..1 for the hidden design parity fill.
-            const gain = bands[i] ?? 0
-            const normalized = (gain - EQ_GAIN_MIN) / (EQ_GAIN_MAX - EQ_GAIN_MIN)
-            return (
-              <div key={label} className="eq-band">
-                <input
-                  type="range"
-                  min={EQ_GAIN_MIN}
-                  max={EQ_GAIN_MAX}
-                  step={EQ_GAIN_STEP}
-                  value={gain}
-                  disabled={!enabled}
-                  onChange={e => { void setBand(i, parseFloat(e.target.value)) }}
-                  title={`${label} Hz: ${gain.toFixed(1)} dB`}
-                  style={{
-                    flex: 1,
-                    width: 16,
-                    writingMode: 'vertical-lr',
-                    direction: 'rtl',
-                    // Vertical orientation via CSS appearance hint (browser-specific).
-                    ['appearance' as never]: 'slider-vertical',
-                    ['WebkitAppearance' as never]: 'slider-vertical',
-                  }}
-                />
-                <div className="hz">{label}</div>
-                <div className="gain">
-                  {gain > 0 ? `+${gain.toFixed(0)}` : gain.toFixed(0)}
-                </div>
-                {/* Visual track behind the slider for parity with the design */}
-                <div style={{ position: 'absolute', pointerEvents: 'none', opacity: 0 }}>
-                  <div className="col"><div className="fill" style={{ bottom: 0, height: `${normalized * 100}%` }} /></div>
-                </div>
-              </div>
-            )
-          })}
-        </div>
+        {/* Unified surface: live spectrum + EQ-response curve, with the sliders
+            exposing only their thumbs until drag darkens the spectrum. */}
+        <EqGraph
+          enabled={enabled}
+          bands={bands}
+          bandCount={bandCount}
+          labels={labels}
+          labelStep={labelStep}
+          playing={isPlaying}
+          hasTrack={hasTrack}
+          onSetBand={(i, g) => { void setBand(i, g) }}
+        />
         <div className="eq-preset-row">
           <label className="eq-preset-control">
             <span>Preset</span>

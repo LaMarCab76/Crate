@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { Icon, type IconName } from '@renderer/components/Icon'
+import { LoadingState } from '@renderer/components/LoadingState'
 import { useDeviceLibrary, useDeviceStore, useRockboxThemeLibrary } from '@renderer/stores/deviceStore'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
 import { fmtFileSize, fmtTime } from '@renderer/utils/format'
@@ -640,7 +641,7 @@ export function DeviceLibraryView({
 
   function renderSection() {
     if (isRockboxSection) {
-      if (!rockboxThemeLibrary) return <div className="device-empty large">Cargando themes...</div>
+      if (!rockboxThemeLibrary) return <LoadingState label="Cargando themes..." />
       return (
         <div
           className={`device-theme-panel ${dragOver ? 'drag-over' : ''}`}
@@ -694,7 +695,7 @@ export function DeviceLibraryView({
         </div>
       )
     }
-    if (!library) return <div className="device-empty large">Cargando dispositivo...</div>
+    if (!library) return <LoadingState label="Cargando dispositivo..." />
     switch (section) {
       case 'library':
         return libView === 'albums'
@@ -730,7 +731,10 @@ export function DeviceLibraryView({
           )}
           <div className="device-browser-actions">
             <button className="btn" type="button" disabled={loading} onClick={refresh}>
-              <Icon name="rotate" size={13} /> Actualizar
+              {loading && library
+                ? <span className="track-loading-spinner loading-state-spinner inline" aria-hidden="true" />
+                : <Icon name="rotate" size={13} />}
+              {' '}Actualizar
             </button>
           </div>
         </div>

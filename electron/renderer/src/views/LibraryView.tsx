@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
 import { Icon } from '@renderer/components/Icon'
-import { MetadataCompletionModal } from '@renderer/components/MetadataCompletionModal'
 import { TrackTable } from '@renderer/components/TrackTable'
 import { ListPrefsMenu, SortDirectionButton } from '@renderer/components/ListPrefsMenu'
 import { useListPrefs } from '@renderer/stores/settingsStore'
+import { useNavIntentStore } from '@renderer/stores/navIntentStore'
 import { createListPrefsDefaults, trackMatchesQuery, type LibraryTrackSortBy, sortTracks } from '@renderer/utils/listSort'
 import { fmtTotal } from '@renderer/utils/format'
 import { useLibraryStore, useMetadataCompletionPrompt, useVisibleTracks } from '@renderer/stores/libraryStore'
@@ -71,7 +71,7 @@ export function LibraryView() {
   const tracks = useVisibleTracks()
   const metadataPrompt = useMetadataCompletionPrompt()
   const dismissMetadataPrompt = useLibraryStore(s => s.dismissMetadataCompletionPrompt)
-  const [metadataModalOpen, setMetadataModalOpen] = useState(false)
+  const requestMetadataFix = useNavIntentStore(s => s.requestMetadataFix)
   const [prefs, setPrefs] = useListPrefs('library')
   const [defaults] = useState(() => createListPrefsDefaults())
   const visibleTracks = useMemo(() => {
@@ -159,7 +159,7 @@ export function LibraryView() {
             <strong>Metadatos incompletos detectados</strong>
             <span>{metadataPrompt.trackIds.length} archivos recientes tienen campos faltantes.</span>
           </div>
-          <button type="button" className="btn sm" onClick={() => setMetadataModalOpen(true)}>
+          <button type="button" className="btn sm" onClick={() => requestMetadataFix(metadataPrompt.trackIds, undefined, metadataPrompt.trackIds.length)}>
             Revisar
           </button>
           <button type="button" className="tb-icon-btn" title="Descartar" onClick={dismissMetadataPrompt}>
@@ -168,12 +168,6 @@ export function LibraryView() {
         </div>
       )}
       <TrackTable tracks={visibleTracks} showArt />
-      {metadataModalOpen && metadataPrompt && (
-        <MetadataCompletionModal
-          trackIds={metadataPrompt.trackIds}
-          onClose={() => setMetadataModalOpen(false)}
-        />
-      )}
     </>
   )
 }

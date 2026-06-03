@@ -1,11 +1,13 @@
 import { type CSSProperties, useEffect, useState } from 'react'
 import { Artwork } from './Artwork'
+import { CrossfadeArtwork } from './CrossfadeArtwork'
 import { CodecStrip } from './CodecStrip'
 import { FullScreenQueue } from './FullScreenQueue'
 import { Icon } from './Icon'
 import { LyricsPanel } from './LyricsPanel'
 import { useTrackActions } from './MediaActions'
 import { PlayerStage } from './PlayerStage'
+import { SpectrumVisualizer } from './SpectrumVisualizer'
 import { TrackLoadingOverlay } from './TrackLoadingOverlay'
 import { toggleTrackFavorite, useAlbumByUiId } from '@renderer/stores/libraryStore'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
@@ -30,6 +32,8 @@ export function NowPlayingFull({ onCollapse }: NowPlayingFullProps) {
   const upNextAlbum = useAlbumByUiId(upNext?.albumId)
   const upNextToastStartSec = useTweakStore(s => s.tweak.upNextToastStartSec)
   const upNextToastEndSec = useTweakStore(s => s.tweak.upNextToastEndSec)
+  const fullPlayerVisualizer = useTweakStore(s => s.tweak.fullPlayerVisualizer)
+  const setTweak = useTweakStore(s => s.setTweak)
   const trackActions = useTrackActions()
   const artworkPath = track?.artworkPath ?? album?.artworkPath ?? null
   const [artworkTint, setArtworkTint] = useState<string | null>(null)
@@ -80,7 +84,7 @@ export function NowPlayingFull({ onCollapse }: NowPlayingFullProps) {
   }
 
   const trackIdentity = (
-    <div className="np-track-meta">
+    <div className="np-track-meta" key={track.id}>
       <h2>{track.t}</h2>
       <p>{track.artist}{track.albumTitle ? ` · ${track.albumTitle}` : ''}</p>
       <div className="pp-quality-chip">
@@ -95,7 +99,7 @@ export function NowPlayingFull({ onCollapse }: NowPlayingFullProps) {
   }
   const artwork = (
     <div className="np-stage-art">
-      <Artwork album={artworkSource} radius={0} objectFit="cover" />
+      <CrossfadeArtwork album={artworkSource} radius={0} objectFit="cover" />
       <div className="np-art-action-overlay">
         <button
           type="button"
@@ -151,10 +155,23 @@ export function NowPlayingFull({ onCollapse }: NowPlayingFullProps) {
         <div className="np-bg-blob np-bg-blob-d" />
       </div>
       <div className="np-stage-scrim" aria-hidden="true" />
+      {fullPlayerVisualizer && (
+        <div className="np-spectrum" aria-hidden="true">
+          <SpectrumVisualizer mode="full" active={playing} />
+        </div>
+      )}
 
       <div className="np-full-head">
         <div className="np-head-spacer" />
         <div className="np-full-head-actions">
+          <button
+            className={`np-head-btn${fullPlayerVisualizer ? ' active' : ''}`}
+            onClick={() => setTweak('fullPlayerVisualizer', !fullPlayerVisualizer)}
+            title={fullPlayerVisualizer ? 'Ocultar visualizador' : 'Mostrar visualizador'}
+            aria-pressed={fullPlayerVisualizer}
+          >
+            <Icon name="visualizer" size={15} />
+          </button>
           <button
             className={`np-head-btn np-icon-swap-btn${queueVisible ? ' active showing-lyrics' : ''}`}
             onClick={() => setRightPanelMode(queueVisible ? 'lyrics' : 'queue')}
@@ -195,7 +212,7 @@ export function NowPlayingFull({ onCollapse }: NowPlayingFullProps) {
         <div className={`np-up-next-toast${showUpNext ? ' show' : ''}`} aria-hidden={!showUpNext}>
           <div className="art"><Artwork album={upNextAlbum} /></div>
           <div className="info">
-            <div className="label">Next</div>
+            <div className="label">A continuación</div>
             <div className="t">{upNext.t}</div>
             <div className="a">{upNext.artist}</div>
           </div>

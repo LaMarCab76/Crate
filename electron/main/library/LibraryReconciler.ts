@@ -5,8 +5,10 @@ import type { LibraryScanReason, LibraryScanRun } from '@shared/types/ipc-contra
 import { getRepos, type Repos } from '../db/repositories'
 import { broadcast } from '../ipc/events'
 import { getLyricsBackfillService } from '../lyrics/LyricsBackfillService'
+import { getLyricsIndexService } from '../lyrics/LyricsIndexService'
 import { getLyricsSettings } from '../lyrics/LyricsSettings'
 import { getLibraryBackup } from '../services/LibraryBackup'
+import { getLibraryWorkerClient } from '../workers/LibraryWorkerClient'
 import { parseArtistName } from './ArtistNameParser'
 import { buildTrackInsert, collectAudioFiles, collectLrcFiles, isAudioPath } from './ImportService'
 import { getLibraryScanSettings } from './LibraryScanSettings'
@@ -212,25 +214,83 @@ class LibraryReconciler {
         detail: 'File no longer exists',
       })))
       this.repos.tracks.deleteByIds(removed.map(track => track.id))
+      // Prune the per-folder lyrics index so entries for deleted tracks don't
+      // linger (otherwise they're only cleared on a forced rebuild).
+      const lyricsIndex = getLyricsIndexService()
+      for (const track of removed) lyricsIndex.removeEntryForTrack(track)
     }
 
-    let scanned = 0
+    // Phase 1: classify files into the ones that actually need a metadata read
+    // (new imports + changed files). Unchanged files do no work.
+    const toImport: string[] = []
+    const refreshByPath = new Map<string, DbTrack>()
     for (const file of files) {
       const existing = tracksByPath.get(file)
       if (!existing) {
-        await this.importNewTrack(folder.id, file, runId, counts)
+        if (isAudioPath(file)) toImport.push(file)
       } else if (trackNeedsRefresh(existing)) {
-        await this.refreshExistingTrack(existing, runId, counts)
+        refreshByPath.set(file, existing)
+      }
+    }
+    const importSet = new Set(toImport)
+    const work = [...toImport, ...refreshByPath.keys()]
+
+    // Unchanged files count as already scanned so progress still reaches total.
+    let scanned = total - work.length
+    const emitProgress = (): void => {
+      broadcast('library:import:progress', {
+        folderId: folder.id,
+        scanned,
+        imported: counts.added,
+        total,
+        phase: 'scanning',
+      })
+    }
+    emitProgress()
+
+    // Phase 2: parse metadata in the library worker (off the main thread) and
+    // apply each result to the DB here in main as it streams back. The DB stays
+    // single-owner; only the heavy readTrackMetadata + artwork save move off-thread.
+    const applyItem = (path: string, md: TrackMetadata | null, error?: string): void => {
+      try {
+        if (error || !md) {
+          const existing = refreshByPath.get(path)
+          if (existing) this.recordRefreshSkip(existing, runId, counts, error ?? 'metadata read failed')
+          else if (importSet.has(path)) this.recordImportSkip(folder.id, path, runId, counts, error ?? 'metadata read failed')
+        } else if (importSet.has(path)) {
+          this.applyImportedMetadata(folder.id, path, md, runId, counts)
+        } else {
+          const existing = refreshByPath.get(path)
+          if (existing) this.applyRefreshedMetadata(existing, md, runId, counts)
+        }
+      } catch (err) {
+        // A DB write failure for one item must never abort the whole scan.
+        const existing = refreshByPath.get(path)
+        if (existing) this.recordRefreshSkip(existing, runId, counts, err)
+        else this.recordImportSkip(folder.id, path, runId, counts, err)
       }
       scanned += 1
-      if (scanned === total || scanned % 50 === 0) {
-        broadcast('library:import:progress', {
-          folderId: folder.id,
-          scanned,
-          imported: counts.added,
-          total,
-          phase: 'scanning',
-        })
+      if (scanned === total || scanned % 50 === 0) emitProgress()
+    }
+
+    try {
+      await getLibraryWorkerClient().parseMetadata(work, applyItem)
+    } catch (err) {
+      // Worker unavailable / crashed: fall back to the original in-main serial
+      // loop so the scan still completes (slower, but correct).
+      console.warn(
+        `[library-scan] worker parse failed for folder ${folder.id}, using in-main path: ${err instanceof Error ? err.message : String(err)}`,
+      )
+      // Reset progress so a partial worker stream before the crash doesn't make
+      // `scanned` overshoot total as the in-main loop re-walks every work item.
+      // applyImportedMetadata's getByPath guard makes the re-walk safe.
+      scanned = total - work.length
+      for (const file of work) {
+        const existing = refreshByPath.get(file)
+        if (existing) await this.refreshExistingTrack(existing, runId, counts)
+        else await this.importNewTrack(folder.id, file, runId, counts)
+        scanned += 1
+        if (scanned === total || scanned % 50 === 0) emitProgress()
       }
     }
 
@@ -296,65 +356,95 @@ class LibraryReconciler {
     }
   }
 
+  // In-main fallback: read metadata then apply. The worker path calls
+  // applyImportedMetadata directly with worker-provided metadata.
   private async importNewTrack(folderId: number, filePath: string, runId: number, counts: ScanCounts): Promise<void> {
     if (!isAudioPath(filePath)) return
     try {
       const md = await readTrackMetadata(filePath)
-      const parsedArtist = parseArtistName(md.artist)
-      const artist = this.repos.artists.getOrCreate(parsedArtist.primary || md.artist)
-      const album = this.repos.albums.getOrCreate(md.album, md.albumArtist ?? null, md.year || null)
-      const genre = md.genre ? this.repos.genres.getOrCreate(md.genre) : null
-      const row = buildTrackInsert(md, filePath, folderId, album.id, artist.id, genre?.id ?? null)
-      const trackId = this.repos.tracks.insert(row)
-      counts.added += 1
-      // Kick off a background lyrics fetch for the freshly-added track. No-op
-      // unless the user enabled background fetch; never blocks the scan.
-      if (trackId > 0) {
-        try { getLyricsBackfillService().enqueue(trackId) } catch { /* best-effort */ }
-      }
-      this.repos.libraryScanLog.addEvent({
-        runId,
-        folderId,
-        type: 'added',
-        path: filePath,
-        title: md.title,
-      })
+      this.applyImportedMetadata(folderId, filePath, md, runId, counts)
     } catch (err) {
-      counts.skipped += 1
-      this.repos.libraryScanLog.addEvent({
-        runId,
-        folderId,
-        type: 'skipped',
-        path: filePath,
-        title: basename(filePath),
-        detail: err instanceof Error ? err.message : String(err),
-      })
+      this.recordImportSkip(folderId, filePath, runId, counts, err)
     }
+  }
+
+  // DB write for a newly-imported track (synchronous; main-process only). May
+  // throw — callers wrap in try/catch and record a skip.
+  private applyImportedMetadata(
+    folderId: number,
+    filePath: string,
+    md: TrackMetadata,
+    runId: number,
+    counts: ScanCounts,
+  ): void {
+    // Idempotency guard: if the worker crashes mid-stream the in-main fallback
+    // re-processes the whole work list, including files it already imported.
+    // Never insert the same (UNIQUE) path twice.
+    if (this.repos.tracks.getByPath(filePath)) return
+    const parsedArtist = parseArtistName(md.artist)
+    const artist = this.repos.artists.getOrCreate(parsedArtist.primary || md.artist)
+    const album = this.repos.albums.getOrCreate(md.album, md.albumArtist ?? null, md.year || null)
+    const genre = md.genre ? this.repos.genres.getOrCreate(md.genre) : null
+    const row = buildTrackInsert(md, filePath, folderId, album.id, artist.id, genre?.id ?? null)
+    const trackId = this.repos.tracks.insert(row)
+    counts.added += 1
+    // Kick off a background lyrics fetch for the freshly-added track. No-op
+    // unless the user enabled background fetch; never blocks the scan.
+    if (trackId > 0) {
+      try { getLyricsBackfillService().enqueue(trackId) } catch { /* best-effort */ }
+    }
+    this.repos.libraryScanLog.addEvent({
+      runId,
+      folderId,
+      type: 'added',
+      path: filePath,
+      title: md.title,
+    })
+  }
+
+  private recordImportSkip(folderId: number, filePath: string, runId: number, counts: ScanCounts, err: unknown): void {
+    counts.skipped += 1
+    this.repos.libraryScanLog.addEvent({
+      runId,
+      folderId,
+      type: 'skipped',
+      path: filePath,
+      title: basename(filePath),
+      detail: err instanceof Error ? err.message : String(err),
+    })
   }
 
   private async refreshExistingTrack(track: DbTrack, runId: number, counts: ScanCounts): Promise<void> {
     try {
       const md = await readTrackMetadata(track.path)
-      this.updateTrackMetadata(track, md)
-      counts.updated += 1
-      this.repos.libraryScanLog.addEvent({
-        runId,
-        folderId: track.folder_id,
-        type: 'updated',
-        path: track.path,
-        title: md.title,
-      })
+      this.applyRefreshedMetadata(track, md, runId, counts)
     } catch (err) {
-      counts.skipped += 1
-      this.repos.libraryScanLog.addEvent({
-        runId,
-        folderId: track.folder_id,
-        type: 'skipped',
-        path: track.path,
-        title: track.title,
-        detail: err instanceof Error ? err.message : String(err),
-      })
+      this.recordRefreshSkip(track, runId, counts, err)
     }
+  }
+
+  private applyRefreshedMetadata(track: DbTrack, md: TrackMetadata, runId: number, counts: ScanCounts): void {
+    this.updateTrackMetadata(track, md)
+    counts.updated += 1
+    this.repos.libraryScanLog.addEvent({
+      runId,
+      folderId: track.folder_id,
+      type: 'updated',
+      path: track.path,
+      title: md.title,
+    })
+  }
+
+  private recordRefreshSkip(track: DbTrack, runId: number, counts: ScanCounts, err: unknown): void {
+    counts.skipped += 1
+    this.repos.libraryScanLog.addEvent({
+      runId,
+      folderId: track.folder_id,
+      type: 'skipped',
+      path: track.path,
+      title: track.title,
+      detail: err instanceof Error ? err.message : String(err),
+    })
   }
 
   private updateTrackMetadata(track: DbTrack, md: TrackMetadata): void {

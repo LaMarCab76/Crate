@@ -1,5 +1,6 @@
 import { type CSSProperties, Fragment, type MouseEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { Artwork } from './Artwork'
+import { CrossfadeArtwork } from './CrossfadeArtwork'
 import { CodecStrip } from './CodecStrip'
 import { Icon } from './Icon'
 import { LyricsPanel } from './LyricsPanel'
@@ -19,6 +20,13 @@ import {
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
 import { useQueueHistory, useQueueStore, useQueueUpNext } from '@renderer/stores/queueStore'
 import { useTweakStore } from '@renderer/stores/settingsStore'
+import { useLevelerStore } from '@renderer/stores/levelerStore'
+import {
+  LEVELER_TARGET_MIN,
+  LEVELER_TARGET_MAX,
+  LEVELER_TARGET_STEP,
+  formatLevelerGain,
+} from '@shared/constants/leveler'
 import { extractDominantColor } from '@renderer/utils/colorExtract'
 import { vivify } from '@renderer/utils/colorAdjust'
 import type { AudioOutputDevice, ExclusiveModeState } from '@shared/types/ipc-contract'
@@ -353,11 +361,11 @@ export function PlayerPane({
               <div className="pp-player">
                 <div className="pp-player-top">
                   <div className="art" onClick={onExpand} role="button" tabIndex={0}>
-                    <Artwork album={displayAlbum} radius={8} objectFit="contain" />
+                    <CrossfadeArtwork album={displayAlbum} radius={8} objectFit="contain" />
                     <TrackLoadingOverlay />
                   </div>
 
-                  <div className="info">
+                  <div className="info" key={track.id}>
                     <div className="title-row">
                       {canOpenAlbum ? (
                         <button
@@ -505,6 +513,7 @@ export function PlayerPane({
                               )}
                             </Fragment>
                           ))}
+                          {!deviceError && <LevelerMenuSection />}
                         </div>
                       )}
                     </div>
@@ -632,6 +641,66 @@ function QueueItem({ track, dim }: { track: Track; dim?: boolean }) {
         <div className="a">{track.artist}</div>
       </div>
       <span className="dur">{fmtTime(track.d)}</span>
+    </div>
+  )
+}
+
+// Volume leveler (Sound Check) controls inside the Audio Output popover. Shares
+// the levelerStore with the Preferences panel, so toggling here updates both.
+function LevelerMenuSection() {
+  const enabled = useLevelerStore(s => s.enabled)
+  const targetLufs = useLevelerStore(s => s.targetLufs)
+  const preventClipping = useLevelerStore(s => s.preventClipping)
+  const currentGainDb = useLevelerStore(s => s.currentGainDb)
+  const setEnabled = useLevelerStore(s => s.setEnabled)
+  const setTargetLufs = useLevelerStore(s => s.setTargetLufs)
+  const setPreventClipping = useLevelerStore(s => s.setPreventClipping)
+
+  return (
+    <div className="leveler-menu-section">
+      <div className="leveler-menu-title">Nivelador de volumen</div>
+      <button
+        type="button"
+        className={`exclusive-toggle ${enabled ? 'on' : ''}`}
+        aria-pressed={enabled}
+        onClick={() => { void setEnabled(!enabled) }}
+      >
+        <div className="exclusive-toggle-text">
+          <div className="exclusive-toggle-title">Sound Check</div>
+          <div className="exclusive-toggle-sub">
+            {enabled ? `Ganancia: ${formatLevelerGain(currentGainDb)}` : 'Volumen constante entre canciones'}
+          </div>
+        </div>
+        <span className={`exclusive-toggle-switch ${enabled ? 'on' : ''}`} aria-hidden="true">
+          <span className="exclusive-toggle-knob" />
+        </span>
+      </button>
+      {enabled && (
+        <>
+          <label className="leveler-menu-target">
+            <span className="leveler-menu-target-label">Nivel objetivo</span>
+            <input
+              type="range"
+              min={LEVELER_TARGET_MIN}
+              max={LEVELER_TARGET_MAX}
+              step={LEVELER_TARGET_STEP}
+              value={targetLufs}
+              onChange={e => { void setTargetLufs(Number(e.target.value)) }}
+              aria-label="Nivel objetivo de normalización en LUFS"
+            />
+            <span className="leveler-menu-target-value">{targetLufs} LUFS</span>
+          </label>
+          <button
+            type="button"
+            className={`leveler-menu-clip ${preventClipping ? 'on' : ''}`}
+            aria-pressed={preventClipping}
+            onClick={() => { void setPreventClipping(!preventClipping) }}
+          >
+            <Icon name={preventClipping ? 'check' : 'speaker'} size={12} />
+            <span>Evitar saturación</span>
+          </button>
+        </>
+      )}
     </div>
   )
 }

@@ -10,6 +10,7 @@ import { readTrackMetadata } from '../library/MetadataExtractor'
 import { getMetadataCompletionService } from '../library/MetadataCompletionService'
 import { writeTrackMetadata } from '../library/MetadataWriter'
 import { getLibraryBackup } from '../services/LibraryBackup'
+import { sidecarPathFor } from '../lyrics/providers/SidecarLrcProvider'
 import { broadcast } from './events'
 import { assertId, assertNonEmptyString, sanitizeIds } from './validation'
 import type { DbTrack } from '@shared/types/db'
@@ -328,6 +329,17 @@ export function registerLibraryChannel(): void {
         repos.tracks.deleteById(track.id)
         trashedTrackIds.push(track.id)
         affectedFolderIds.add(track.folder_id)
+        // Send the .lrc sidecar to the trash alongside the audio so lyrics
+        // don't linger as orphans. Best-effort: a missing or unremovable
+        // sidecar must not fail the track deletion that already succeeded.
+        const lrcPath = sidecarPathFor(resolve(track.path))
+        if (existsSync(lrcPath)) {
+          try {
+            await shell.trashItem(lrcPath)
+          } catch (lrcErr) {
+            console.warn(`[track-trash] failed to trash sidecar ${lrcPath}:`, (lrcErr as Error).message)
+          }
+        }
       } catch (err) {
         failed.push({
           id: track.id,

@@ -42,7 +42,19 @@ test('updates section exposes GitHub release controls', () => {
   assert.ok(settingsSource.includes('window.api.updates.checkNow'), 'Updates section should allow manual checks')
   assert.ok(settingsSource.includes('window.api.updates.download'), 'Updates section should allow downloads')
   assert.ok(settingsSource.includes('window.api.updates.install'), 'Updates section should allow install restart')
-  assert.ok(css.includes('.update-card'), 'Updates section should be styled')
+  assert.ok(css.includes('.update-status-badge'), 'Updates section should be styled')
+})
+
+test('playback cache panel tolerates browser renderer without audio preload', () => {
+  const panel = settingsSource.slice(
+    settingsSource.indexOf('function PlaybackCachePanel'),
+    settingsSource.indexOf('function EqPanel'),
+  )
+
+  assert.ok(panel.includes("window.api?.audio"), 'Playback cache panel should guard the audio channel')
+  assert.ok(panel.includes('Cache disponible solo en la app de escritorio'), 'Unavailable audio channel should surface a status')
+  assert.ok(!panel.includes('window.api.audio'), 'Playback cache panel must not dereference window.api.audio directly')
+  assert.ok(panel.includes('disabled={busy || unavailable}'), 'Cache actions should be disabled without the audio channel')
 })
 
 test('sidebar and activity center route users to the new homes', () => {

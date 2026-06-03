@@ -8,54 +8,62 @@ function deferred() {
   return { promise, resolve }
 }
 
-test('does not delete tracks until the visual deletion phase finishes', async () => {
+test('settles the UI before the disk deletion finishes', async () => {
   const events = []
   const visual = deferred()
+  const disk = deferred()
 
-  const lifecycle = runTrackDeletionLifecycle({
-    visualDelayMs: 240,
+  const { settled, completed } = runTrackDeletionLifecycle({
+    visualDelayMs: 304,
     wait: async ms => {
       events.push(`wait:${ms}`)
       await visual.promise
       events.push('visual:done')
     },
+    settleUi: () => {
+      events.push('settle')
+    },
     deleteTracks: async () => {
-      events.push('delete')
+      events.push('delete:start')
+      await disk.promise
+      events.push('delete:end')
       return { trashedTrackIds: [10], failed: [] }
     },
     afterDelete: result => {
       events.push(`prune:${result.trashedTrackIds.join(',')}`)
     },
-    refresh: async () => {
-      events.push('refresh')
-    },
-    cleanup: () => {
-      events.push('cleanup')
+    reconcile: async () => {
+      events.push('reconcile')
     },
   })
 
   await Promise.resolve()
-  assert.deepEqual(events, ['wait:240'])
+  assert.deepEqual(events, ['wait:304'])
 
   visual.resolve()
-  const result = await lifecycle
+  await settled
+  // The UI has settled while the disk deletion is still in flight (the `disk`
+  // promise is unresolved) — proving the visual phase does not wait on the drive.
+  assert.deepEqual(events, ['wait:304', 'visual:done', 'settle', 'delete:start'])
 
-  assert.deepEqual(result.trashedTrackIds, [10])
+  disk.resolve()
+  await completed
   assert.deepEqual(events, [
-    'wait:240',
+    'wait:304',
     'visual:done',
-    'delete',
+    'settle',
+    'delete:start',
+    'delete:end',
     'prune:10',
-    'refresh',
-    'cleanup',
+    'reconcile',
   ])
 })
 
-test('waits for playback shutdown before deleting the current track without a next item', async () => {
+test('runs playback shutdown before settling and deleting', async () => {
   const events = []
 
-  await runTrackDeletionLifecycle({
-    visualDelayMs: 240,
+  const { completed } = runTrackDeletionLifecycle({
+    visualDelayMs: 304,
     wait: async ms => {
       events.push(`wait:${ms}`)
     },
@@ -65,49 +73,52 @@ test('waits for playback shutdown before deleting the current track without a ne
       events.push('clear-next')
       events.push('player-close')
     },
+    settleUi: () => {
+      events.push('settle')
+    },
     deleteTracks: async () => {
       events.push('delete')
       return { trashedTrackIds: [11], failed: [] }
     },
-    refresh: async () => {
-      events.push('refresh')
-    },
-    cleanup: () => {
-      events.push('cleanup')
+    reconcile: async () => {
+      events.push('reconcile')
     },
   })
 
+  await completed
+
+  const settleIndex = events.indexOf('settle')
   const deleteIndex = events.indexOf('delete')
-  assert.ok(deleteIndex > events.indexOf('wait:240'))
-  assert.ok(deleteIndex > events.indexOf('fade'))
-  assert.ok(deleteIndex > events.indexOf('stop'))
-  assert.ok(deleteIndex > events.indexOf('clear-next'))
-  assert.ok(deleteIndex > events.indexOf('player-close'))
-  assert.deepEqual(events.slice(deleteIndex), ['delete', 'refresh', 'cleanup'])
+  assert.ok(settleIndex > events.indexOf('wait:304'))
+  assert.ok(settleIndex > events.indexOf('fade'))
+  assert.ok(settleIndex > events.indexOf('player-close'))
+  assert.ok(deleteIndex > settleIndex)
+  assert.deepEqual(events.slice(deleteIndex), ['delete', 'reconcile'])
 })
 
-test('refreshes and cleans up when deletion fails', async () => {
+test('reconciles without rejecting when the disk deletion fails', async () => {
   const events = []
 
-  await assert.rejects(
-    runTrackDeletionLifecycle({
-      visualDelayMs: 0,
-      wait: async ms => {
-        events.push(`wait:${ms}`)
-      },
-      deleteTracks: async () => {
-        events.push('delete')
-        throw new Error('trash failed')
-      },
-      refresh: async () => {
-        events.push('refresh')
-      },
-      cleanup: () => {
-        events.push('cleanup')
-      },
-    }),
-    /trash failed/,
-  )
+  const { settled, completed } = runTrackDeletionLifecycle({
+    visualDelayMs: 0,
+    wait: async ms => {
+      events.push(`wait:${ms}`)
+    },
+    settleUi: () => {
+      events.push('settle')
+    },
+    deleteTracks: async () => {
+      events.push('delete')
+      throw new Error('trash failed')
+    },
+    reconcile: async () => {
+      events.push('reconcile')
+    },
+  })
 
-  assert.deepEqual(events, ['delete', 'refresh', 'cleanup'])
+  await settled
+  // `completed` must resolve (not reject) even though deleteTracks threw.
+  await completed
+
+  assert.deepEqual(events, ['settle', 'delete', 'reconcile'])
 })

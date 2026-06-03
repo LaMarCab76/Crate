@@ -25,7 +25,9 @@ import { DownloadsView } from './views/DownloadsView'
 import { DevicesView, type DeviceDashboardTab } from './views/DevicesView'
 import { DeviceSyncView, type DeviceSyncTab } from './views/DeviceSyncView'
 import { DeviceLibraryView, type DeviceLibrarySection } from './views/DeviceLibraryView'
+import { MetadataFixView } from './views/MetadataFixView'
 import { useTweaks, useListPrefsStore } from './stores/settingsStore'
+import { useMetadataFixIntent, useNavIntentStore } from './stores/navIntentStore'
 import { useAlbumByUiId, useFavoriteTracks, useLibraryStore } from './stores/libraryStore'
 import { usePlaybackStore } from './stores/playbackStore'
 import { useDeviceStore } from './stores/deviceStore'
@@ -36,7 +38,7 @@ import {
   type ActivityItem,
 } from './stores/activityCenterStore'
 import { installAutoHideScrollbars } from './utils/autoHideScrollbars'
-import { extractDominantColor } from './utils/colorExtract'
+import { extractDominantColor, extractPalette } from './utils/colorExtract'
 import { vivify } from './utils/colorAdjust'
 
 export type View =
@@ -55,11 +57,15 @@ export type View =
   | { kind: 'artist'; artist: Artist }
   | { kind: 'playlist'; playlist: Playlist }
   | { kind: 'favoriteTracks' }
+  | { kind: 'metadataFix'; trackIds: number[]; title?: string; missingCount?: number }
 
 const SIDEBAR_WIDTH_STORAGE_KEY = 'crate.layout.sidebarWidth.v1'
 const PLAYER_PANE_OPEN_STORAGE_KEY = 'crate.layout.playerPaneOpen.v1'
 const PLAYER_PANE_EXIT_MS = 280
-const PB_PLAYER_EXIT_MS = 190
+// Matches the .player-dock grid-template-rows collapse transition (globals.css)
+// so the docked bar finishes animating its height before it unmounts. Kept in
+// sync with PLAYER_PANE_EXIT_MS so the horizontal↔lateral swap feels coordinated.
+const PB_PLAYER_EXIT_MS = 280
 const LYRICS_SIDE_PANE_EXIT_MS = 340
 
 const SIDEBAR_WIDTH_DEFAULT = 240
@@ -312,9 +318,13 @@ export default function App() {
   const [lyricsSidePaneClosing, setLyricsSidePaneClosing] = useState(false)
   const [bottomPlayerVisible, setBottomPlayerVisible] = useState(false)
   const [bottomPlayerClosing, setBottomPlayerClosing] = useState(false)
+  const [bottomPlayerEntering, setBottomPlayerEntering] = useState(false) // crecimiento (lateral → horizontal) en curso
+  const [bottomPlayerPriming, setBottomPlayerPriming] = useState(false)   // primer frame del crecimiento: arranca colapsado
   const isBottomPlayerClosing = bottomPlayerVisible && !showBottomPlayer
   const [playingTint, setPlayingTint] = useState<string | null>(null)
+  const [playingPalette, setPlayingPalette] = useState<string[] | null>(null)
   const [albumTint, setAlbumTint] = useState<string | null>(null)
+  const [albumPalette, setAlbumPalette] = useState<string[] | null>(null)
   const [connectTarget, setConnectTarget] = useState<DeviceConnectTarget | null>(null)
   const playingArtworkPath = nowAlbum?.artworkPath ?? nowTrack?.artworkPath ?? null
   const isPlaying = playbackStatus === 'playing'
@@ -366,7 +376,13 @@ export default function App() {
 
   useEffect(() => {
     if (showBottomPlayer) {
-      setBottomPlayerVisible(true)
+      if (!bottomPlayerVisible) {
+        // Montaje fresco (lateral → horizontal): animar el crecimiento.
+        setBottomPlayerVisible(true)
+        setBottomPlayerEntering(true)
+        setBottomPlayerPriming(true)
+      }
+      // Reabrir durante el cierre: revierte el colapso sin re-disparar el crecimiento.
       setBottomPlayerClosing(false)
       return
     }
@@ -381,6 +397,28 @@ export default function App() {
 
     return () => window.clearTimeout(timeout)
   }, [showBottomPlayer, bottomPlayerVisible])
+
+  // Quita 'priming' tras pintar el frame colapsado (doble rAF) → dispara la
+  // transición 0fr → 1fr y el fade/slide de entrada de la barra.
+  useEffect(() => {
+    if (!bottomPlayerPriming) return
+    const inner = { id: 0 }
+    const outer = requestAnimationFrame(() => {
+      inner.id = requestAnimationFrame(() => setBottomPlayerPriming(false))
+    })
+    return () => {
+      cancelAnimationFrame(outer)
+      if (inner.id) cancelAnimationFrame(inner.id)
+    }
+  }, [bottomPlayerPriming])
+
+  // Limpia 'entering' cuando el crecimiento terminó, devolviendo overflow visible
+  // (para que los tiempos del hover de progreso no queden recortados en reposo).
+  useEffect(() => {
+    if (!bottomPlayerEntering) return
+    const timeout = window.setTimeout(() => setBottomPlayerEntering(false), PB_PLAYER_EXIT_MS + 60)
+    return () => window.clearTimeout(timeout)
+  }, [bottomPlayerEntering])
 
   useEffect(() => {
     if (isPlayerPaneOpen) {
@@ -462,6 +500,22 @@ export default function App() {
     saveCurrentScroll()
     setIdx(idx - 1)
   }
+
+  // Deeply nested triggers (metadata banners, track/album context menus) route to
+  // the metadata-fix view by writing an intent here; consume it once and navigate.
+  const metadataFixIntent = useMetadataFixIntent()
+  const clearMetadataFix = useNavIntentStore(s => s.clearMetadataFix)
+  useEffect(() => {
+    if (!metadataFixIntent) return
+    navigate({
+      kind: 'metadataFix',
+      trackIds: metadataFixIntent.trackIds,
+      title: metadataFixIntent.title,
+      missingCount: metadataFixIntent.missingCount,
+    })
+    clearMetadataFix()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [metadataFixIntent])
 
   const goForward = () => {
     if (idx >= history.length - 1) return
@@ -586,11 +640,14 @@ export default function App() {
   // track artwork as fallback). Vivified so quiet covers still produce a
   // visibly saturated tint.
   useEffect(() => {
-    if (!playingArtworkPath) { setPlayingTint(null); return }
+    if (!playingArtworkPath) { setPlayingTint(null); setPlayingPalette(null); return }
     let cancelled = false
     const src = `crate://artwork/${encodeURIComponent(playingArtworkPath)}`
     void extractDominantColor(src).then(hex => {
       if (!cancelled) setPlayingTint(vivify(hex))
+    })
+    void extractPalette(src, 3).then(palette => {
+      if (!cancelled) setPlayingPalette(palette)
     })
     return () => { cancelled = true }
   }, [playingArtworkPath])
@@ -608,10 +665,38 @@ export default function App() {
     const next = viewedTint ?? (nowTrack ? playerCurrentTint : null) ?? (isPlaying ? playingTint : null)
     if (next) {
       root.style.setProperty('--bg-tint', next)
+      root.style.setProperty('--bg-control-tint', next)
     } else {
       root.style.removeProperty('--bg-tint')
+      root.style.removeProperty('--bg-control-tint')
     }
   }, [viewAlbum, albumTint, viewAlbumFallbackTint, playerCurrentTint, nowTrack, playingTint, isPlaying])
+
+  // Propagate the content-area palette (--bg-pal-0/1/2) to :root so .content can
+  // render a 3-color gradient instead of the flat single-color wash. Source
+  // priority mirrors --bg-tint (viewed album → playing track), and each var
+  // falls back to --bg-tint in CSS, so when this is cleared the content backdrop
+  // gracefully degrades to the original single-color look.
+  useEffect(() => {
+    const root = document.documentElement
+    const palette =
+      viewAlbum
+        ? (albumPalette ?? viewAlbum.palette.map(c => vivify(c) ?? c))
+      : (nowTrack && tweak.playerTintSource === 'artwork' && playingPalette)
+        ? playingPalette.map(c => vivify(c) ?? c)
+      : playerCurrentTint
+        ? [playerCurrentTint, playerCurrentTint, playerCurrentTint]
+      : null
+    if (palette) {
+      root.style.setProperty('--bg-pal-0', palette[0])
+      root.style.setProperty('--bg-pal-1', palette[1] ?? palette[0])
+      root.style.setProperty('--bg-pal-2', palette[2] ?? palette[1] ?? palette[0])
+    } else {
+      root.style.removeProperty('--bg-pal-0')
+      root.style.removeProperty('--bg-pal-1')
+      root.style.removeProperty('--bg-pal-2')
+    }
+  }, [viewAlbum, albumPalette, nowTrack, tweak.playerTintSource, playingPalette, playerCurrentTint])
 
   // Propagate --np-tint to :root so both the player pane and the lyrics side
   // pane share the same artwork-based tint. PlayerPane's own inline style
@@ -625,6 +710,30 @@ export default function App() {
       root.style.removeProperty('--np-tint')
     }
   }, [playerCurrentTint])
+
+  // Propagate the artwork palette (--np-pal-0/1/2) to :root so the immersive
+  // player pane and lyrics side pane render the same animated color blobs as
+  // the fullscreen player. Mirrors --np-tint's source logic: artwork → the
+  // extracted 3-color palette; preset/custom → the single chosen color across
+  // all blobs; default/none → cleared (blobs fall back to the transparent
+  // :root defaults).
+  useEffect(() => {
+    const root = document.documentElement
+    const palette =
+      tweak.playerTintSource === 'artwork' && playingPalette
+        ? playingPalette.map(c => vivify(c) ?? c)
+      : playerCurrentTint ? [playerCurrentTint, playerCurrentTint, playerCurrentTint]
+      : null
+    if (palette) {
+      root.style.setProperty('--np-pal-0', palette[0])
+      root.style.setProperty('--np-pal-1', palette[1] ?? palette[0])
+      root.style.setProperty('--np-pal-2', palette[2] ?? palette[1] ?? palette[0])
+    } else {
+      root.style.removeProperty('--np-pal-0')
+      root.style.removeProperty('--np-pal-1')
+      root.style.removeProperty('--np-pal-2')
+    }
+  }, [tweak.playerTintSource, playingPalette, playerCurrentTint])
 
   // If the open album becomes empty after deletion, return to previous view.
   useEffect(() => {
@@ -647,6 +756,7 @@ export default function App() {
   useEffect(() => {
     if (!viewAlbum) {
       setAlbumTint(null)
+      setAlbumPalette(null)
       return
     }
 
@@ -659,6 +769,9 @@ export default function App() {
       ? vivify(viewAlbumFallbackTint)
       : ((nowTrack ? playerCurrentTint : null) ?? vivify(viewAlbumFallbackTint))
     setAlbumTint(fallback)
+    // Synthetic palette placeholder (final value when there's no artwork); the
+    // extracted palette overwrites it below once it resolves.
+    setAlbumPalette(viewAlbum.palette.map(c => vivify(c) ?? c))
 
     if (!viewAlbumArtworkPath) return
 
@@ -667,6 +780,9 @@ export default function App() {
     void extractDominantColor(src).then(hex => {
       const tint = vivify(hex)
       if (!cancelled && tint) setAlbumTint(tint)
+    })
+    void extractPalette(src, 3).then(pal => {
+      if (!cancelled && pal) setAlbumPalette(pal.map(c => vivify(c) ?? c))
     })
 
     return () => {
@@ -828,6 +944,8 @@ export default function App() {
         return <DeviceLibraryView deviceId={view.deviceId} section={view.section} />
       case 'genres':
         return <GenresView onSelectAlbum={al => navigate({ kind: 'album', album: al })} />
+      case 'metadataFix':
+        return <MetadataFixView trackIds={view.trackIds} missingCount={view.missingCount} onDone={goBack} />
       default:
         return <LibraryView />
     }
@@ -864,7 +982,7 @@ export default function App() {
             />
           )}
 
-          <div className={`main-area ${sidebarOpen ? 'with-sidebar' : 'without-sidebar'} ${bottomPlayerVisible ? 'with-floating-player' : ''}`}>
+          <div className={`main-area ${sidebarOpen ? 'with-sidebar' : 'without-sidebar'}`}>
             <Toolbar
               view={view}
               history={history}
@@ -950,57 +1068,75 @@ export default function App() {
             </div>
           </div>
 
-          {playerPaneVisible && (
-            <PlayerPane
-              isOpen={isPlayerPaneOpen}
-              onExpand={() => {
-                setLyricsSidePaneOpen(false)
-                setExpanded(true)
-              }}
-              onCollapse={() => {
-                setPlayerPaneOpen(false)
-              }}
-              lyricsSidePaneOpen={lyricsSidePaneOpen && canShowPlayerPane}
-              onToggleLyricsSidePane={() => setLyricsSidePaneOpen(open => !open)}
-              onOpenAlbum={album => navigate({ kind: 'album', album })}
-              onOpenArtist={artist => navigate({ kind: 'artist', artist })}
-            />
+          {(playerPaneVisible || lyricsSidePaneVisible) && (
+            <div className="np-dock-lateral">
+              <div className="pane-bg-canvas" aria-hidden="true">
+                <div className="np-bg-blob np-bg-blob-a" />
+                <div className="np-bg-blob np-bg-blob-b" />
+                <div className="np-bg-blob np-bg-blob-c" />
+                <div className="np-bg-blob np-bg-blob-d" />
+              </div>
+              <div className="pane-bg-scrim" aria-hidden="true" />
+
+              {playerPaneVisible && (
+                <PlayerPane
+                  isOpen={isPlayerPaneOpen}
+                  onExpand={() => {
+                    setLyricsSidePaneOpen(false)
+                    setExpanded(true)
+                  }}
+                  onCollapse={() => {
+                    setPlayerPaneOpen(false)
+                  }}
+                  lyricsSidePaneOpen={lyricsSidePaneOpen && canShowPlayerPane}
+                  onToggleLyricsSidePane={() => setLyricsSidePaneOpen(open => !open)}
+                  onOpenAlbum={album => navigate({ kind: 'album', album })}
+                  onOpenArtist={artist => navigate({ kind: 'artist', artist })}
+                />
+              )}
+
+              {lyricsSidePaneVisible && (
+                <div
+                  className={`layout-resize-handle lyrics-side-resize-handle ${isResizingLyricsSide ? 'active' : ''}`}
+                  style={{ right: `${lyricsSideWidth}px` }}
+                  onPointerDown={beginLyricsSideResize}
+                  aria-hidden
+                />
+              )}
+
+              {lyricsSidePaneVisible && (
+                <LyricsSidePane
+                  closing={lyricsSidePaneClosing || !showLyricsSidePane}
+                  width={lyricsSideWidth}
+                  onClose={() => setLyricsSidePaneOpen(false)}
+                />
+              )}
+            </div>
           )}
 
-          {showLyricsSidePane && playerPaneVisible && (
-            <div
-              className={`layout-resize-handle lyrics-side-resize-handle ${isResizingLyricsSide ? 'active' : ''}`}
-              style={{ right: `${lyricsSideWidth}px` }}
-              onPointerDown={beginLyricsSideResize}
-              aria-hidden
-            />
-          )}
-
-          {lyricsSidePaneVisible && (
-            <LyricsSidePane
-              closing={lyricsSidePaneClosing || !showLyricsSidePane}
-              width={lyricsSideWidth}
-              onClose={() => setLyricsSidePaneOpen(false)}
-            />
-          )}
-
-          {!expanded && bottomPlayerVisible && !isBottomPlayerClosing && <UpNextToast variant="bottom" />}
-
-          {bottomPlayerVisible && (
-            <PlayerBottomBar
-              closing={isBottomPlayerClosing || bottomPlayerClosing}
-              onExpand={() => {
-                setLyricsSidePaneOpen(false)
-                setExpanded(true)
-              }}
-              onShowPanel={() => setPlayerPaneOpen(true)}
-              lyricsSidePaneOpen={lyricsSidePaneOpen && canShowPlayerPane}
-              onToggleLyricsSidePane={() => setLyricsSidePaneOpen(open => !open)}
-              onOpenAlbum={album => navigate({ kind: 'album', album })}
-              onOpenArtist={artist => navigate({ kind: 'artist', artist })}
-            />
-          )}
         </div>
+
+        {bottomPlayerVisible && (
+          <div className={`player-dock ${
+            (isBottomPlayerClosing || bottomPlayerClosing) ? 'collapsed' : bottomPlayerPriming ? 'priming' : 'open'
+          } ${bottomPlayerEntering && !(isBottomPlayerClosing || bottomPlayerClosing) ? 'entering' : ''}`}>
+            {!expanded && !isBottomPlayerClosing && !bottomPlayerClosing && <UpNextToast variant="bottom" />}
+            <div className="player-dock-inner">
+              <PlayerBottomBar
+                closing={isBottomPlayerClosing || bottomPlayerClosing}
+                onExpand={() => {
+                  setLyricsSidePaneOpen(false)
+                  setExpanded(true)
+                }}
+                onShowPanel={() => setPlayerPaneOpen(true)}
+                lyricsSidePaneOpen={lyricsSidePaneOpen && canShowPlayerPane}
+                onToggleLyricsSidePane={() => setLyricsSidePaneOpen(open => !open)}
+                onOpenAlbum={album => navigate({ kind: 'album', album })}
+                onOpenArtist={artist => navigate({ kind: 'artist', artist })}
+              />
+            </div>
+          </div>
+        )}
 
         {expanded && nowTrack && (
           <NowPlayingFull onCollapse={() => setExpanded(false)} />

@@ -1,6 +1,6 @@
 {
   "name": "crate",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "Audiophile music library and player",
   "main": "out/main/index.js",
   "author": "Lautaro Caballero",
@@ -26,12 +26,12 @@
     "@types/node": "^22.7.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "@vitejs/plugin-react": "^4.3.3",
-    "electron": "^33.0.0",
-    "electron-builder": "^25.1.8",
-    "electron-vite": "^2.3.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^40.10.2",
+    "electron-builder": "^26.8.1",
+    "electron-vite": "^5.0.0",
     "typescript": "^5.6.3",
-    "vite": "^5.4.10"
+    "vite": "^7.3.5"
   },
   "dependencies": {
     "better-sqlite3": "^12.10.0",
@@ -45,5 +45,8 @@
     "react-dom": "^18.3.1",
     "yaml": "^2.9.0",
     "zustand": "^5.0.13"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }

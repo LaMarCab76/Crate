@@ -8,7 +8,13 @@ export default defineConfig({
     build: {
       outDir: 'out/main',
       rollupOptions: {
-        input: resolve(__dirname, 'electron/main/index.ts'),
+        // Two main-process entries: the app entry and the library worker, which
+        // is forked as a utilityProcess. Rollup uses the object keys as the
+        // output [name], so this emits out/main/index.js + out/main/library-worker.js.
+        input: {
+          index: resolve(__dirname, 'electron/main/index.ts'),
+          'library-worker': resolve(__dirname, 'electron/main/workers/library-worker.ts'),
+        },
       },
     },
     resolve: {

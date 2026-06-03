@@ -4,6 +4,7 @@ import { setLyricsPanelVisible, useLyricsStore } from '@renderer/stores/lyricsSt
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
 import { useQueueStore } from '@renderer/stores/queueStore'
 import { useTweakStore } from '@renderer/stores/settingsStore'
+import { lyricsAutoScrollDecision, pauseLyricsAutoScroll } from '@renderer/utils/lyricsAutoScroll'
 import { Icon } from './Icon'
 import { ModalShell } from './ModalShell'
 
@@ -58,6 +59,10 @@ const FLOW_SPRING_EASE = 'cubic-bezier(0.18, 0.9, 0.22, 1.02)'
 const FLOW_TONE_DURATION_MS = 620
 const FLOW_EXIT_TONE_DURATION_MS = 440
 const LYRICS_WAIT_GAP_THRESHOLD_SEC = 1
+// How far the first wrapped row may outgrow the second (as a fraction of the
+// available width) before we stop favouring a fuller top line. Higher = fills
+// the first row more greedily; 0 = perfectly balanced split.
+const LYRICS_SPLIT_BALANCE_TOLERANCE = 0.4
 const FLOW_INSTANT_VISUAL_TRANSITION = [
   `opacity var(--lyr-flow-tone-duration, ${FLOW_TONE_DURATION_MS}ms) ease var(--lyr-flow-tone-delay, 0ms)`,
   `color var(--lyr-flow-tone-duration, ${FLOW_TONE_DURATION_MS}ms) ease var(--lyr-flow-tone-delay, 0ms)`,
@@ -199,6 +204,14 @@ function measureLyricsText(node: HTMLLIElement, text: string): number {
   return node.getBoundingClientRect().width
 }
 
+type LyricsLineSplitCandidate = {
+  split: LyricsLineSplit
+  firstWidth: number
+  secondWidth: number
+  overflow: number
+  balance: number
+}
+
 function splitLyricsLineForWidth(text: string, availableWidth: number, measureNode: HTMLLIElement): LyricsLineSplit | null {
   const normalized = text.trim().replace(/\s+/g, ' ')
   if (!normalized || availableWidth <= 0) return null
@@ -207,22 +220,43 @@ function splitLyricsLineForWidth(text: string, availableWidth: number, measureNo
   const words = normalized.split(' ')
   if (words.length < 2) return null
 
-  let best: { split: LyricsLineSplit; overflow: number; balance: number } | null = null
+  const candidates: LyricsLineSplitCandidate[] = []
   for (let index = 1; index < words.length; index += 1) {
     const first = words.slice(0, index).join(' ')
     const second = words.slice(index).join(' ')
     const firstWidth = measureLyricsText(measureNode, first)
     const secondWidth = measureLyricsText(measureNode, second)
     const widest = Math.max(firstWidth, secondWidth)
-    const overflow = Math.max(0, widest - availableWidth)
-    const balance = Math.abs(firstWidth - secondWidth)
-
-    if (!best || overflow < best.overflow || (overflow === best.overflow && balance < best.balance)) {
-      best = { split: { first, second }, overflow, balance }
-    }
+    candidates.push({
+      split: { first, second },
+      firstWidth,
+      secondWidth,
+      overflow: Math.max(0, widest - availableWidth),
+      balance: Math.abs(firstWidth - secondWidth),
+    })
   }
+  if (candidates.length === 0) return null
 
-  return best?.split ?? null
+  const mostBalanced = (pool: LyricsLineSplitCandidate[]) =>
+    pool.reduce((best, c) =>
+      c.overflow < best.overflow || (c.overflow === best.overflow && c.balance < best.balance) ? c : best,
+    )
+
+  // When even the best two-row cut overflows (a line longer than two rows),
+  // there's no slack to spend on aesthetics — take the least-overflowing,
+  // most-balanced split and let the browser wrap whatever is left.
+  const minOverflow = Math.min(...candidates.map(c => c.overflow))
+  if (minOverflow > 0) return mostBalanced(candidates).split
+
+  // Both rows fit. Favour the fullest first line so we actually use the width
+  // available, but only while the top row doesn't outgrow the bottom one by
+  // more than the tolerance — that keeps a near-full line from leaving an
+  // orphan on the second row. Tolerance 0 collapses back to a balanced split.
+  const fitting = candidates.filter(c => c.overflow === 0)
+  const tolerance = availableWidth * LYRICS_SPLIT_BALANCE_TOLERANCE
+  const relaxed = fitting.filter(c => c.firstWidth - c.secondWidth <= tolerance)
+  if (relaxed.length === 0) return mostBalanced(fitting).split
+  return relaxed.reduce((best, c) => (c.firstWidth > best.firstWidth ? c : best)).split
 }
 
 function lyricsLineAvailableWidth(listNode: HTMLOListElement, measureNode: HTMLLIElement): number {
@@ -298,7 +332,7 @@ function LyricsPanelContent({
   const pendingFlowResetRef = useRef(false)
   const flowFrameRef = useRef<number | null>(null)
   const flowCleanupTimersRef = useRef<number[]>([])
-  const lastUserScrollRef = useRef(0)
+  const autoScrollPausedAtLineRef = useRef<number | null>(null)
   const reducedMotionRef = useRef(false)
   const syncedWindow: SyncedWindow = variant === 'side' && focusedFlow ? 'flow' : windowForVariant(variant)
   const animatedLyricsWindow = syncedWindow === 'flow' || syncedWindow === 'preview'
@@ -376,16 +410,24 @@ function LyricsPanelContent({
     previousFlowSnapshotRef.current = null
     playheadSnapshotRef.current = null
     pendingFlowResetRef.current = true
+    autoScrollPausedAtLineRef.current = null
   }, [currentTrack?.dbId, parsed])
 
-  // Autoscroll the active line into view, unless the user scrolled recently.
+  const pauseAutoScrollForUserNavigation = useCallback(() => {
+    if (syncedWindow !== 'all') return
+    autoScrollPausedAtLineRef.current = pauseLyricsAutoScroll(displayLineIndex)
+  }, [displayLineIndex, syncedWindow])
+
+  // Autoscroll the active line into view, unless the user is browsing lyrics.
   useEffect(() => {
     const el = activeLineRef.current
     if (!el || syncedWindow !== 'all') return
-    if (Date.now() - lastUserScrollRef.current < 1200) return
+    const decision = lyricsAutoScrollDecision(autoScrollPausedAtLineRef.current, displayLineIndex)
+    autoScrollPausedAtLineRef.current = decision.pausedAtLineIndex
+    if (!decision.shouldScroll) return
     const scrollTarget = (el.previousElementSibling as HTMLElement | null) ?? el
     scrollTarget.scrollIntoView({ block: 'start', behavior: reducedMotionRef.current ? 'auto' : 'smooth' })
-  }, [currentLineIndex, syncedWindow])
+  }, [displayLineIndex, syncedWindow])
 
   useLayoutEffect(() => {
     if (!animatedLyricsWindow) {
@@ -711,7 +753,8 @@ function LyricsPanelContent({
           <ol
             ref={setSyncedListRef}
             className={`lyr-list ${syncedWindow === 'all' ? '' : 'lyr-list-window'} ${animatedLyricsWindow ? 'lyr-list-flow' : ''}`}
-            onWheel={() => { lastUserScrollRef.current = Date.now() }}
+            onTouchMove={pauseAutoScrollForUserNavigation}
+            onWheel={pauseAutoScrollForUserNavigation}
           >
             <li
               ref={activeMeasureRef}

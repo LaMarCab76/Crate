@@ -1,9 +1,19 @@
-import { existsSync } from 'node:fs'
-import { lstat, readdir, readFile, stat } from 'node:fs/promises'
+import { access, lstat, readdir, readFile, stat } from 'node:fs/promises'
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { RockboxThemePreview } from '@shared/types/device-sync'
 import { parseRockboxThemePreview } from './RockboxThemePreview.ts'
 import { isRockboxIgnoredEntryName } from './rockboxIgnoredFiles.ts'
+
+// Async existence check so theme scans don't block the main event loop on a
+// slow/sleeping device drive (see DeviceSyncService.pathExists for the rationale).
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await access(p)
+    return true
+  } catch {
+    return false
+  }
+}
 
 const ROCKBOX_DIR = '.rockbox'
 const THEME_CONFIG_EXTENSION = '.cfg'
@@ -96,7 +106,7 @@ function themeConfigValues(config: string): Record<string, string> {
   return out
 }
 
-function themeConfigPath(rockboxRoot: string, config: string, key: string, fallback: string | null): string | null {
+async function themeConfigPath(rockboxRoot: string, config: string, key: string, fallback: string | null): Promise<string | null> {
   const raw = themeConfigValue(config, key)
   const candidates = [
     raw ? normalizeRockboxConfigPath(raw) : null,
@@ -105,24 +115,24 @@ function themeConfigPath(rockboxRoot: string, config: string, key: string, fallb
 
   for (const relPath of candidates) {
     const absolute = fromPosix(rockboxRoot, relPath)
-    if (isInside(rockboxRoot, resolve(absolute)) && existsSync(absolute)) return relPath
+    if (isInside(rockboxRoot, resolve(absolute)) && (await pathExists(absolute))) return relPath
   }
 
   return raw && key === 'font' ? normalizeRockboxConfigPath(raw) : null
 }
 
-function themeConfigPathWithMissing(
+async function themeConfigPathWithMissing(
   rockboxRoot: string,
   config: string,
   key: string,
   fallback: string | null,
   missing: Set<string>,
-): string | null {
-  const resolvedPath = themeConfigPath(rockboxRoot, config, key, fallback)
+): Promise<string | null> {
+  const resolvedPath = await themeConfigPath(rockboxRoot, config, key, fallback)
   const raw = themeConfigValue(config, key)
   if (resolvedPath) {
     const absolute = fromPosix(rockboxRoot, resolvedPath)
-    if (!existsSync(absolute)) missing.add(resolvedPath)
+    if (!(await pathExists(absolute))) missing.add(resolvedPath)
   } else if (raw) {
     missing.add(normalizeRockboxConfigPath(raw))
   }
@@ -260,13 +270,13 @@ export async function scanRockboxThemes(deviceRoot: string): Promise<RockboxThem
     const configStat = await stat(configPath).catch(() => null)
     const missingFiles = new Set<string>()
     const configValues = themeConfigValues(config)
-    const wpsPath = themeConfigPathWithMissing(rockboxRoot, config, 'wps', `wps/${name}.wps`, missingFiles)
-    const sbsPath = themeConfigPathWithMissing(rockboxRoot, config, 'sbs', `wps/${name}.sbs`, missingFiles)
-    const fmsPath = themeConfigPathWithMissing(rockboxRoot, config, 'fms', `wps/${name}.fms`, missingFiles)
-    const font = themeConfigPathWithMissing(rockboxRoot, config, 'font', null, missingFiles)
-    const backdropPath = themeConfigPathWithMissing(rockboxRoot, config, 'backdrop', null, missingFiles)
-    const iconsetPath = themeConfigPathWithMissing(rockboxRoot, config, 'iconset', null, missingFiles)
-    const viewerIconsetPath = themeConfigPathWithMissing(rockboxRoot, config, 'viewers iconset', null, missingFiles)
+    const wpsPath = await themeConfigPathWithMissing(rockboxRoot, config, 'wps', `wps/${name}.wps`, missingFiles)
+    const sbsPath = await themeConfigPathWithMissing(rockboxRoot, config, 'sbs', `wps/${name}.sbs`, missingFiles)
+    const fmsPath = await themeConfigPathWithMissing(rockboxRoot, config, 'fms', `wps/${name}.fms`, missingFiles)
+    const font = await themeConfigPathWithMissing(rockboxRoot, config, 'font', null, missingFiles)
+    const backdropPath = await themeConfigPathWithMissing(rockboxRoot, config, 'backdrop', null, missingFiles)
+    const iconsetPath = await themeConfigPathWithMissing(rockboxRoot, config, 'iconset', null, missingFiles)
+    const viewerIconsetPath = await themeConfigPathWithMissing(rockboxRoot, config, 'viewers iconset', null, missingFiles)
     const referencedFiles = new Set(
       [
         `themes/${entry.name}`,
@@ -292,14 +302,14 @@ export async function scanRockboxThemes(deviceRoot: string): Promise<RockboxThem
         const normalized = normalizeRockboxConfigPath(value)
         if (normalized && !referencedFiles.has(normalized)) {
           const absolute = fromPosix(rockboxRoot, normalized)
-          if (isInside(rockboxRoot, resolve(absolute)) && existsSync(absolute)) referencedFiles.add(normalized)
+          if (isInside(rockboxRoot, resolve(absolute)) && (await pathExists(absolute))) referencedFiles.add(normalized)
         }
       }
     }
     const previewResult = await parseRockboxThemePreview(rockboxRoot, name, wpsPath, configValues)
     for (const previewPath of previewResult.referencedPaths) {
       const absolute = fromPosix(rockboxRoot, previewPath)
-      if (isInside(rockboxRoot, resolve(absolute)) && existsSync(absolute)) referencedFiles.add(previewPath)
+      if (isInside(rockboxRoot, resolve(absolute)) && (await pathExists(absolute))) referencedFiles.add(previewPath)
     }
     themes.push({
       id: idForValue(name),
