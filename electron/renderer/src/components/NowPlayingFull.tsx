@@ -11,9 +11,10 @@ import { SpectrumVisualizer } from './SpectrumVisualizer'
 import { TrackLoadingOverlay } from './TrackLoadingOverlay'
 import { toggleTrackFavorite, useAlbumByUiId } from '@renderer/stores/libraryStore'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
-import { useQueueUpNext } from '@renderer/stores/queueStore'
+import { useQueueStore, useQueueUpNext } from '@renderer/stores/queueStore'
 import { useTweakStore } from '@renderer/stores/settingsStore'
 import { extractDominantColor, extractPalette } from '@renderer/utils/colorExtract'
+import { formatFeatured, splitArtist } from '@renderer/utils/format'
 import { shouldShowUpNextToast } from '@renderer/utils/upNextToast'
 
 interface NowPlayingFullProps {
@@ -63,6 +64,7 @@ export function NowPlayingFull({ onCollapse }: NowPlayingFullProps) {
 
   if (!track) return null
 
+  const { primary: artistPrimary, featured: artistFeatured } = splitArtist(track.artist)
   const playing = status === 'playing'
   const remainingSec = Math.max(0, durationSec - positionSec)
   const queueVisible = rightPanelMode === 'queue'
@@ -86,7 +88,8 @@ export function NowPlayingFull({ onCollapse }: NowPlayingFullProps) {
   const trackIdentity = (
     <div className="np-track-meta" key={track.id}>
       <h2>{track.t}</h2>
-      <p>{track.artist}{track.albumTitle ? ` · ${track.albumTitle}` : ''}</p>
+      <p>{artistPrimary}{track.albumTitle ? ` · ${track.albumTitle}` : ''}</p>
+      {artistFeatured.length > 0 && <p className="np-feat">{formatFeatured(artistFeatured)}</p>}
       <div className="pp-quality-chip">
         <CodecStrip track={track} compact />
       </div>

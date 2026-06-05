@@ -9,6 +9,7 @@ import {
 import type {
   DeviceConnectPayload,
   DeviceArtworkOptimizationSelection,
+  DeviceLibraryOptions,
   DeviceSettingsUpdate,
   DeviceSyncApplySelection,
   DeviceSyncActionKind,
@@ -74,10 +75,23 @@ function assertConnectPayload(value: unknown): DeviceConnectPayload {
 function assertPlanRequest(value: unknown): DeviceSyncPlanRequest {
   if (!value || typeof value !== 'object') throw new Error('Invalid sync request')
   const payload = value as DeviceSyncPlanRequest
+  if (payload.fullSync !== undefined && typeof payload.fullSync !== 'boolean') {
+    throw new Error('Invalid fullSync flag')
+  }
   return {
     ...payload,
     deviceId: assertNonEmptyString(payload.deviceId, 'device id'),
   }
+}
+
+function assertDeviceLibraryOptions(value: unknown): DeviceLibraryOptions {
+  if (value === undefined || value === null) return {}
+  if (!value || typeof value !== 'object') throw new Error('Invalid device library options')
+  const payload = value as DeviceLibraryOptions
+  if (payload.progress !== undefined && typeof payload.progress !== 'boolean') {
+    throw new Error('Invalid device library progress flag')
+  }
+  return { progress: payload.progress }
 }
 
 function assertSettingsUpdate(value: unknown): DeviceSettingsUpdate {
@@ -215,8 +229,11 @@ export function registerDevicesChannel(): void {
   ipcMain.handle('devices:scan', (_, deviceId: unknown) =>
     service.scan(assertNonEmptyString(deviceId, 'device id')),
   )
-  ipcMain.handle('devices:library', (_, deviceId: unknown) =>
-    service.deviceLibrary(assertNonEmptyString(deviceId, 'device id')),
+  ipcMain.handle('devices:library', (_, deviceId: unknown, options: unknown) =>
+    service.deviceLibrary(
+      assertNonEmptyString(deviceId, 'device id'),
+      assertDeviceLibraryOptions(options),
+    ),
   )
   ipcMain.handle('devices:analyzeArtwork', (_, deviceId: unknown) =>
     service.analyzeDeviceArtwork(assertNonEmptyString(deviceId, 'device id')),

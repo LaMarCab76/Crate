@@ -4,7 +4,7 @@ Audiophile music library and player for **macOS, Windows and Linux**, built as a
 Electron + Vite + React + TypeScript desktop app on top of the
 [BASS](https://www.un4seen.com/bass.html) audio library.
 
-> Current release: **v0.4.6** — installers and release notes live in
+> Current release: **v0.5.0** — installers and release notes live in
 > [`docs/releases/`](docs/releases/).
 
 ## Quick start
@@ -36,12 +36,12 @@ final install step.
 electron/
   main/         Electron main process (Node) — DB, audio, devices, downloads, IPC
     audio/        BASS FFI bindings, AudioEngine, GaplessController, EQ, CoreAudio hog mode
-    db/           better-sqlite3 connection, migrator + 17 SQL migrations, repositories
+    db/           better-sqlite3 connection, migrator + 24 SQL migrations, repositories
     devices/      DAP detection, sync planner/journal, Rockbox theme scanner, artwork optimizer
     downloads/    Qobuz + Tidal providers, HAR credential extractor, job manager
     library/      Folder watchers, reconciler, metadata extractor/writer, artwork cache
     lyrics/       LRClib + sidecar + embedded providers, .lrc sidecar writer
-    ipc/          5 typed channels (library, audio, lyrics, devices, downloads)
+    ipc/          typed channels for library, audio, lyrics, devices, downloads and updates
     services/     LibraryBackup (portable JSON mirror of the SQLite library)
   preload/      contextBridge that exposes the typed `window.api` to the renderer
   renderer/     React UI
@@ -96,10 +96,14 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
 - `MetadataCompletionService` applies rule-based fill-ins (artist / album
   cleanup, sort fields, primary-artist parsing) with an in-app review modal
   before writing tags back via `MetadataWriter`.
+- Single-track **Move to album** actions validate the destination against
+  MusicBrainz, reuse sibling artwork from an existing local album track, move
+  the audio plus `.lrc` sidecar, rename it as the destination slot, and update
+  the same SQLite row without replacing an already-local album track.
 - `ArtworkCache` extracts and resizes embedded art on first sight and exposes
   it under a privileged `crate://` protocol scheme so the renderer can render
   thousands of covers without round-tripping through IPC for the bytes.
-- **SQLite** schema (17 migrations) with **FTS5** search and triggers that keep
+- **SQLite** schema (23 migrations) with **FTS5** search and triggers that keep
   the index fresh as tracks change, plus repositories per entity
   (tracks, albums, artists, genres, playlists, queues, folders, scan log,
   playback analysis, download jobs, lyrics).
@@ -137,9 +141,8 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
   **sidecars** — coordinated by `LyricsMatcher` with candidate selection in
   `LyricsCandidates` when multiple matches show up.
 - Write pipeline writes mandatory **`.lrc` sidecars** next to the audio file
-  (`SidecarLrcWriter`) — sidecars are what gets copied during device sync, so
-  lyrics travel with the library. A `FlacVorbisLyricsWriter` plus
-  `stripFlacLyrics` handle legacy embedded cases.
+  (`SidecarLrcWriter`) for local library/playback use. A
+  `FlacVorbisLyricsWriter` plus `stripFlacLyrics` handle legacy embedded cases.
 - Online lookups are globally queued at **one song per minute**. Local sidecars
   and embedded lyrics resolve immediately and do not consume a lookup slot.
 - Synced display with **global** and **per-track** timing offsets
@@ -168,9 +171,13 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
   on-device tracks can still be optimized during sync.
 - `RockboxThemeScanner` lists installed themes and accepts **drag-and-drop
   `.zip` theme installs** straight into the device's `/.rockbox/themes/`.
-- Device sync copies only lyrics already present locally (`.lrc` sidecars or
-  embedded tags). It no longer downloads missing lyrics online during MP3/DAP
-  sync.
+- Device sync no longer propagates lyrics: it does not copy/import `.lrc`
+  sidecars and does not read embedded lyrics to decide sync actions. Lyrics stay
+  local to the PC library/player workflow.
+- Local track album moves are journaled per track and, on PC-to-device or safe
+  bidirectional sync, become a delete of the old device path plus a copy or
+  replace at the new album path. Device-to-PC plans warn about pending local
+  moves instead of forcing them from the device side.
 
 ### Downloads
 - `DownloadManager` with provider plugins: **Qobuz** and **TIDAL**.

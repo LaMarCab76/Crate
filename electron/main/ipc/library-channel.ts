@@ -8,6 +8,7 @@ import { getLibraryReconciler } from '../library/LibraryReconciler'
 import { parseArtistName } from '../library/ArtistNameParser'
 import { readTrackMetadata } from '../library/MetadataExtractor'
 import { getMetadataCompletionService } from '../library/MetadataCompletionService'
+import { getTrackAlbumMoveService } from '../library/TrackAlbumMoveService'
 import { writeTrackMetadata } from '../library/MetadataWriter'
 import { getLibraryBackup } from '../services/LibraryBackup'
 import { sidecarPathFor } from '../lyrics/providers/SidecarLrcProvider'
@@ -136,6 +137,7 @@ export function registerLibraryChannel(): void {
   const watcher = getFolderWatcher()
   const reconciler = getLibraryReconciler()
   const metadataCompletion = getMetadataCompletionService()
+  const albumMove = getTrackAlbumMoveService()
 
   ipcMain.handle('library:tracks', (_, opts: ListTracksOpts = {}) => repos.tracks.getAll(opts))
   ipcMain.handle('library:track:byId', (_, id: number) => repos.tracks.getById(id) ?? null)
@@ -303,6 +305,23 @@ export function registerLibraryChannel(): void {
         : [],
     })
     if (result.applied > 0) broadcast('library:changed', { reason: 'metadata-completion' })
+    return result
+  })
+
+  ipcMain.handle('track:albumMove:preview', async (_, payload: { trackId: number; targetAlbumId: number; trackNumber?: number | null }) => {
+    const trackNumber = Number.isInteger(payload?.trackNumber) && (payload!.trackNumber as number) > 0
+      ? (payload!.trackNumber as number)
+      : null
+    return albumMove.preview(
+      assertId(payload?.trackId, 'trackId'),
+      assertId(payload?.targetAlbumId, 'targetAlbumId'),
+      trackNumber,
+    )
+  })
+
+  ipcMain.handle('track:albumMove:apply', async (_, payload: { previewId: string }) => {
+    const result = await albumMove.apply(assertNonEmptyString(payload?.previewId, 'previewId'))
+    broadcast('library:changed', { reason: 'track-album-move' })
     return result
   })
 

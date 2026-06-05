@@ -1,4 +1,4 @@
-import { type CSSProperties, Fragment, type MouseEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { type CSSProperties, Fragment, type DragEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { Artwork } from './Artwork'
 import { CrossfadeArtwork } from './CrossfadeArtwork'
 import { CodecStrip } from './CodecStrip'
@@ -8,7 +8,8 @@ import { EQBars } from './EQBars'
 import { SpectrumVisualizer } from './SpectrumVisualizer'
 import { UpNextToast } from './UpNextToast'
 import { TrackLoadingOverlay } from './TrackLoadingOverlay'
-import { fmtTime } from '@renderer/utils/format'
+import { ContextMenu } from './ContextMenu'
+import { fmtTime, formatFeatured, formatPlaybackTimePair, splitArtist } from '@renderer/utils/format'
 import {
   TRACK_DELETE_ROW_EASE,
   TRACK_DELETE_ROW_MS,
@@ -18,7 +19,7 @@ import {
   useDeletingTrackIds,
 } from '@renderer/stores/libraryStore'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
-import { useQueueHistory, useQueueStore, useQueueUpNext } from '@renderer/stores/queueStore'
+import { useQueueHistory, useQueueIndex, useQueueReorderMode, useQueueStore, useQueueTracks, useQueueUpNext } from '@renderer/stores/queueStore'
 import { useTweakStore } from '@renderer/stores/settingsStore'
 import { useLevelerStore } from '@renderer/stores/levelerStore'
 import {
@@ -67,13 +68,21 @@ export function PlayerPane({
   const durationSec = usePlaybackStore(s => s.durationSec)
   const volume = usePlaybackStore(s => s.volume)
   const queueNext = useQueueUpNext()
+  const queueTracks = useQueueTracks()
   const queueHistory = useQueueHistory()
+  const currentQueueIndex = useQueueIndex()
+  const jumpTo = useQueueStore(s => s.jumpTo)
+  const moveQueueTrack = useQueueStore(s => s.moveQueueTrack)
+  const moveTrackToNext = useQueueStore(s => s.moveTrackToNext)
+  const moveTrackToEnd = useQueueStore(s => s.moveTrackToEnd)
   const togglePlay = useQueueStore(s => s.togglePlay)
   const seek = useQueueStore(s => s.seek)
   const next = useQueueStore(s => s.next)
   const previous = useQueueStore(s => s.previous)
   const setVolume = useQueueStore(s => s.setVolume)
   const isTrackTransitioning = useQueueStore(s => s.isTrackTransitioning)
+  const shuffle = useQueueStore(s => s.shuffle)
+  const toggleShuffle = useQueueStore(s => s.toggleShuffle)
   const album = useAlbumByUiId(track?.albumId)
   const artist = useArtistByUiId(track?.artistId)
   const [lastAlbum, setLastAlbum] = useState<Album | null>(null)
@@ -96,7 +105,16 @@ export function PlayerPane({
   const [exclusiveState, setExclusiveState] = useState<ExclusiveModeState>({ enabled: false, deviceId: null })
   const [exclusiveBusy, setExclusiveBusy] = useState(false)
   const [exclusiveError, setExclusiveError] = useState<string | null>(null)
+  const [queueMenuOpen, setQueueMenuOpen] = useState(false)
+  const [queueContextMenu, setQueueContextMenu] = useState<{ x: number; y: number; index: number } | null>(null)
+  const [draggingQueueIndex, setDraggingQueueIndex] = useState<number | null>(null)
+  const [dragOverQueueIndex, setDragOverQueueIndex] = useState<number | null>(null)
   const deviceMenuRef = useRef<HTMLDivElement>(null)
+  const queueMenuRef = useRef<HTMLDivElement>(null)
+  const queueReorderMode = useQueueReorderMode()
+  const setQueueReorderMode = useQueueStore(s => s.setQueueReorderMode)
+  const queueLength = queueTracks.length
+  const queueMinMoveIndex = Math.max(currentQueueIndex + 1, 0)
 
   useEffect(() => {
     if (currentTrack) setLastTrack(currentTrack)
@@ -105,6 +123,30 @@ export function PlayerPane({
   useEffect(() => {
     if (album) setLastAlbum(album)
   }, [album])
+
+  useEffect(() => {
+    setQueueMenuOpen(false)
+    setQueueContextMenu(null)
+  }, [track?.dbId])
+
+  useEffect(() => {
+    if (!queueReorderMode) {
+      setDraggingQueueIndex(null)
+      setDragOverQueueIndex(null)
+    }
+  }, [queueReorderMode])
+
+  useEffect(() => {
+    if (!queueReorderMode || draggingQueueIndex == null) return
+
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') clearQueueDragState()
+    }
+    window.addEventListener('keydown', onEscape)
+    return () => {
+      window.removeEventListener('keydown', onEscape)
+    }
+  }, [queueReorderMode, draggingQueueIndex])
 
   useEffect(() => {
     if (showVisualizer) {
@@ -145,9 +187,128 @@ export function PlayerPane({
     '--track-delete-row-ease': TRACK_DELETE_ROW_EASE,
   } as CSSProperties
 
+  const confirmQueueReorder = (action: () => void) => {
+    action()
+  }
+
+  const queueMoveToNext = (index: number) => {
+    confirmQueueReorder(() => {
+      moveTrackToNext(index)
+    })
+    setQueueContextMenu(null)
+  }
+
+  const queueMoveToEnd = (index: number) => {
+    confirmQueueReorder(() => {
+      moveTrackToEnd(index)
+    })
+    setQueueContextMenu(null)
+  }
+
+  const clampQueueDropIndex = (value: number): number => {
+    const maxIndex = Math.max(0, queueLength)
+    return Number.isFinite(value)
+      ? Math.max(queueMinMoveIndex, Math.min(maxIndex, value))
+      : queueMinMoveIndex
+  }
+
+  const normalizedDropIndex = (fromIndex: number, targetIndex: number): number => {
+    return targetIndex > fromIndex ? targetIndex - 1 : targetIndex
+  }
+
+  const clearQueueDragState = () => {
+    setDraggingQueueIndex(null)
+    setDragOverQueueIndex(null)
+  }
+
+  const queueShouldPushDown = (index: number): boolean => {
+    if (draggingQueueIndex == null || dragOverQueueIndex == null) return false
+
+    const normalizedTarget = normalizedDropIndex(draggingQueueIndex, dragOverQueueIndex)
+    if (normalizedTarget === draggingQueueIndex) return false
+
+    if (draggingQueueIndex < normalizedTarget) {
+      return index > draggingQueueIndex && index <= normalizedTarget
+    }
+
+    return index >= normalizedTarget && index < draggingQueueIndex
+  }
+
+  const commitQueueMove = (fromIndex: number, overIndex: number | null) => {
+    const clampedTarget = clampQueueDropIndex(overIndex ?? fromIndex)
+    const normalized = normalizedDropIndex(fromIndex, clampedTarget)
+
+    if (normalized === fromIndex || normalized < queueMinMoveIndex || normalized >= queueLength) {
+      clearQueueDragState()
+      return
+    }
+
+    moveQueueTrack(fromIndex, normalized)
+    clearQueueDragState()
+  }
+
+  const handleQueueDragStart = (event: DragEvent<HTMLButtonElement>, index: number) => {
+    if (!queueReorderMode) return
+    if (index <= currentQueueIndex) return
+
+    setDraggingQueueIndex(index)
+    setDragOverQueueIndex(clampQueueDropIndex(index))
+    event.dataTransfer.setData('text/queue-item', String(index))
+    event.dataTransfer.effectAllowed = 'move'
+  }
+
+  const handleQueueDragOver = (event: DragEvent<HTMLDivElement>, index: number) => {
+    if (!queueReorderMode || draggingQueueIndex == null) return
+    event.preventDefault()
+    const rect = event.currentTarget.getBoundingClientRect()
+    const isAfter = event.clientY > rect.top + (rect.height / 2)
+    setDragOverQueueIndex(clampQueueDropIndex(index + (isAfter ? 1 : 0)))
+  }
+
+  const handleQueueDrop = (event: DragEvent<HTMLDivElement>, index: number) => {
+    event.preventDefault()
+    if (draggingQueueIndex == null) return
+    commitQueueMove(draggingQueueIndex, dragOverQueueIndex ?? index)
+  }
+
+  const handleQueueDragEnd = () => {
+    clearQueueDragState()
+  }
+
+  const handleQueueListDragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (!queueReorderMode || draggingQueueIndex == null) return
+    event.preventDefault()
+    if (event.currentTarget === event.target) {
+      setDragOverQueueIndex(queueLength)
+    }
+  }
+
+  const handleQueueListDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    if (event.currentTarget !== event.target) return
+    if (!queueReorderMode || draggingQueueIndex == null) return
+    clearQueueDragState()
+  }
+
+  const handleQueueListDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    if (draggingQueueIndex == null) return
+    commitQueueMove(draggingQueueIndex, dragOverQueueIndex ?? queueLength)
+  }
+
+  const openQueueContextMenu = (event: MouseEvent<HTMLDivElement>, index: number) => {
+    event.preventDefault()
+    setQueueContextMenu({ x: event.clientX, y: event.clientY, index })
+  }
+
+  const toggleQueueShuffle = () => {
+    toggleShuffle()
+    setQueueMenuOpen(false)
+  }
+
   useEffect(() => {
     if (!isOpen) {
       setDeviceMenuOpen(false)
+      setQueueMenuOpen(false)
       setActiveTab('nowPlaying')
     }
   }, [isOpen])
@@ -200,12 +361,37 @@ export function PlayerPane({
     }
   }, [deviceMenuOpen])
 
+  useEffect(() => {
+    if (!queueMenuOpen) return
+
+    const closeOnOutside = (event: PointerEvent) => {
+      const target = event.target
+      if (target instanceof Node && !queueMenuRef.current?.contains(target)) {
+        setQueueMenuOpen(false)
+      }
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setQueueMenuOpen(false)
+      }
+    }
+
+    window.addEventListener('pointerdown', closeOnOutside)
+    window.addEventListener('keydown', closeOnEscape)
+    return () => {
+      window.removeEventListener('pointerdown', closeOnOutside)
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [queueMenuOpen])
+
   if (!track) return null
 
+  const { primary: artistPrimary, featured: artistFeatured } = splitArtist(track.artist)
   const playing = status === 'playing'
   const progress = durationSec > 0 ? positionSec / durationSec : 0
   const displayProgress = dragProgress ?? progress
   const displayPositionSec = dragProgress !== null ? dragProgress * durationSec : positionSec
+  const displayTimes = formatPlaybackTimePair(displayPositionSec, durationSec)
 
   const onProgressMouseDown = (e: MouseEvent<HTMLDivElement>) => {
     if (durationSec <= 0) return
@@ -405,10 +591,10 @@ export function PlayerPane({
                           }}
                           title="Abrir artista"
                         >
-                          {track.artist}
+                          {artistPrimary}
                         </button>
                       ) : (
-                        track.artist
+                        artistPrimary
                       )}
                       {' · '}
                       {canOpenAlbum ? (
@@ -427,6 +613,9 @@ export function PlayerPane({
                         track.albumTitle
                       )}
                     </div>
+                    {artistFeatured.length > 0 && (
+                      <div className="pp-feat">{formatFeatured(artistFeatured)}</div>
+                    )}
                     <div className="pp-quality-chip">
                       <CodecStrip track={track} compact />
                     </div>
@@ -442,8 +631,8 @@ export function PlayerPane({
                       <div className="dot" aria-hidden="true" />
                     </div>
                     <div className="times">
-                      <span>{fmtTime(displayPositionSec)}</span>
-                      <span>-{fmtTime(Math.max(0, durationSec - displayPositionSec))}</span>
+                      <span>{displayTimes.elapsedText}</span>
+                      <span>-{displayTimes.remainingText}</span>
                     </div>
                   </div>
 
@@ -594,14 +783,88 @@ export function PlayerPane({
                     <h3>Up Next</h3>
                     <div className="queue-remaining">{totalQueueRemainingText} remaining</div>
                   </div>
+                  {track && (
+                    <>
+                      <div className="queue-options" ref={queueMenuRef}>
+                        <button
+                          type="button"
+                          className={`queue-options-trigger${queueMenuOpen ? ' active' : ''}`}
+                          title="Opciones de Up Next"
+                          aria-label="Opciones de Up Next"
+                          aria-expanded={queueMenuOpen}
+                          onClick={() => setQueueMenuOpen(open => !open)}
+                        >
+                          <Icon name="ellipsis" size={14} />
+                        </button>
+                        {queueMenuOpen && (
+                          <div className="queue-options-menu" role="menu" aria-label="Opciones de Up Next">
+                            <button
+                              type="button"
+                              className={`queue-options-item${queueReorderMode ? ' active' : ''}`}
+                              role="menuitem"
+                              aria-pressed={queueReorderMode}
+                              onClick={() => {
+                                setQueueReorderMode(!queueReorderMode)
+                                setQueueMenuOpen(false)
+                              }}
+                            >
+                              <Icon name="sortAZ" size={14} />
+                              <span>Reordenar cola</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={`queue-options-item${shuffle ? ' active' : ''}`}
+                              role="menuitem"
+                              aria-pressed={shuffle}
+                              onClick={toggleQueueShuffle}
+                            >
+                              <Icon name="shuffle" size={14} />
+                              <span>Aleatorio</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      {queueContextMenu && (
+                        <ContextMenu
+                          x={queueContextMenu.x}
+                          y={queueContextMenu.y}
+                          items={[
+                            {
+                              id: 'move-next',
+                              label: 'Mover como siguiente',
+                              icon: 'chevD',
+                              onSelect: () => queueMoveToNext(queueContextMenu.index),
+                            },
+                            {
+                              id: 'move-end',
+                              label: 'Mover al final',
+                              icon: 'chevR',
+                              onSelect: () => queueMoveToEnd(queueContextMenu.index),
+                            },
+                          ]}
+                          onClose={() => setQueueContextMenu(null)}
+                        />
+                      )}
+                    </>
+                  )}
                 </div>
-                <div className="queue-list" style={queueDeleteStyle}>
+                <div
+                  className={`queue-list${queueReorderMode ? ' reorder-mode' : ''}`}
+                  style={queueDeleteStyle}
+                  onDragOver={handleQueueListDragOver}
+                  onDrop={handleQueueListDrop}
+                  onDragEnd={handleQueueDragEnd}
+                  onDragLeave={handleQueueListDragLeave}
+                >
                   <div className="queue-section-label">Playing from · {displayAlbum?.title ?? '—'}</div>
                   <div className="queue-item now">
                     <div className="art"><Artwork album={displayAlbum} /></div>
                     <div>
                       <div className="t">{track.t}</div>
-                      <div className="a">{track.artist}</div>
+                      <div className="a">{artistPrimary}</div>
+                      {artistFeatured.length > 0 && (
+                        <div className="pp-feat">{formatFeatured(artistFeatured)}</div>
+                      )}
                     </div>
                     <EQBars
                       active={isOpen && activeTab === 'upNext'}
@@ -613,7 +876,24 @@ export function PlayerPane({
                       Queue is empty
                     </div>
                   )}
-                  {queueNext.map(t => <QueueItem key={t.id} track={t} />)}
+                  {queueNext.map((t, offset) => {
+                    const queueIndex = currentQueueIndex + 1 + offset
+                    return (
+                      <QueueItem
+                        key={t.id}
+                        track={t}
+                        reorderMode={queueReorderMode}
+                        dragging={queueIndex === draggingQueueIndex}
+                        pushDown={queueShouldPushDown(queueIndex)}
+                        onDoubleClick={() => { void jumpTo(queueIndex) }}
+                        onContextMenu={event => openQueueContextMenu(event, queueIndex)}
+                        onDragStart={event => handleQueueDragStart(event, queueIndex)}
+                        onDragOver={event => handleQueueDragOver(event, queueIndex)}
+                        onDrop={event => handleQueueDrop(event, queueIndex)}
+                        onDragEnd={handleQueueDragEnd}
+                      />
+                    )
+                  })}
                   {queueHistory.length > 0 && <div className="queue-section-label">History</div>}
                   {queueHistory.slice().reverse().map(t => <QueueItem key={`h-${t.id}`} track={t} dim />)}
                 </div>
@@ -626,19 +906,67 @@ export function PlayerPane({
   )
 }
 
-function QueueItem({ track, dim }: { track: Track; dim?: boolean }) {
+function QueueItem({
+  track,
+  dim,
+  reorderMode,
+  dragging,
+  pushDown,
+  onDoubleClick,
+  onContextMenu,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
+}: {
+  track: Track
+  dim?: boolean
+  reorderMode?: boolean
+  dragging?: boolean
+  pushDown?: boolean
+  onDoubleClick?: () => void
+  onContextMenu?: (event: MouseEvent<HTMLDivElement>) => void
+  onDragStart?: (event: DragEvent<HTMLButtonElement>) => void
+  onDragOver?: (event: DragEvent<HTMLDivElement>) => void
+  onDrop?: (event: DragEvent<HTMLDivElement>) => void
+  onDragEnd?: () => void
+}) {
   const album = useAlbumByUiId(track.albumId)
   const deletingIds = useDeletingTrackIds()
   const isDeleting = track.dbId != null && deletingIds.has(track.dbId)
+  const { primary: artistPrimary, featured: artistFeatured } = splitArtist(track.artist)
   return (
     <div
-      className={`queue-item${isDeleting ? ' deleting' : ''}`}
+      className={`queue-item${isDeleting ? ' deleting' : ''}${reorderMode ? ' reorder-mode' : ''}${dragging ? ' queue-item-dragging' : ''}${pushDown ? ' queue-item-push-down' : ''}`}
+      onDoubleClick={onDoubleClick}
+      onContextMenu={onContextMenu}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      onDragEnd={onDragEnd}
       style={dim && !isDeleting ? { opacity: 0.55 } : undefined}
     >
+      {reorderMode && (
+        <button
+          type="button"
+          className="queue-drag-handle"
+          title="Reordenar"
+          draggable
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+          onMouseDown={event => {
+            event.stopPropagation()
+          }}
+        >
+          <Icon name="list" size={12} />
+        </button>
+      )}
       <div className="art"><Artwork album={album} /></div>
       <div>
         <div className="t">{track.t}</div>
-        <div className="a">{track.artist}</div>
+        <div className="a">{artistPrimary}</div>
+        {artistFeatured.length > 0 && (
+          <div className="pp-feat">{formatFeatured(artistFeatured)}</div>
+        )}
       </div>
       <span className="dur">{fmtTime(track.d)}</span>
     </div>

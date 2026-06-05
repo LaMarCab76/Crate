@@ -7,6 +7,7 @@ import type {
   DeviceArtworkOptimizationSummary,
   DeviceCandidate,
   DeviceConnectPayload,
+  DeviceLibraryOptions,
   DeviceLibraryResult,
   DevicePendingJournal,
   DeviceOverviewResult,
@@ -52,14 +53,17 @@ interface DeviceState {
   connect(payload: DeviceConnectPayload): Promise<DeviceRecord>
   updateSettings(deviceId: string, settings: DeviceSettingsUpdate): Promise<DeviceRecord>
   loadDeviceOverview(deviceId: string, force?: boolean): Promise<DeviceOverviewResult>
-  loadDeviceLibrary(deviceId: string, force?: boolean): Promise<DeviceLibraryResult>
+  loadDeviceLibrary(
+    deviceId: string,
+    options?: boolean | LoadDeviceLibraryOptions,
+  ): Promise<DeviceLibraryResult>
   loadRockboxThemes(deviceId: string, force?: boolean): Promise<RockboxThemeLibraryResult>
   installRockboxThemes(deviceId: string, files: unknown[]): Promise<RockboxThemeInstallResult>
   deleteRockboxTheme(deviceId: string, themeId: string): Promise<RockboxThemeDeleteResult>
   selectDevice(id: string): void
   scan(deviceId?: string): Promise<void>
   analyzeArtwork(deviceId?: string): Promise<DeviceArtworkAnalysisResult>
-  planSync(mode: DeviceSyncMode, pcTargetPath?: string): Promise<DeviceSyncPlan>
+  planSync(mode: DeviceSyncMode, pcTargetPath?: string, fullSync?: boolean): Promise<DeviceSyncPlan>
   applyPlan(planId: string, selection?: DeviceSyncApplySelection): Promise<DeviceSyncApplyResult>
   optimizeArtwork(
     deviceId?: string,
@@ -68,6 +72,11 @@ interface DeviceState {
   resumeJournal(journalId: string): Promise<DeviceSyncApplyResult>
   discardJournal(journalId: string): Promise<void>
   clearPlan(): void
+}
+
+interface LoadDeviceLibraryOptions extends DeviceLibraryOptions {
+  force?: boolean
+  background?: boolean
 }
 
 function currentDeviceId(state: DeviceState, explicit?: string): string {
@@ -112,6 +121,28 @@ function overviewFromStorage(
 
 function overviewFromScan(scanResult: DeviceScanResult): DeviceOverviewResult {
   return overviewFromStorage(scanResult.device, scanResult.storage)
+}
+
+function scanResultFromLibrary(library: DeviceLibraryResult): DeviceScanResult {
+  return {
+    device: library.device,
+    tracks: library.tracks,
+    summary: library.scanSummary,
+    storage: library.storage,
+  }
+}
+
+function normalizeLoadDeviceLibraryOptions(
+  options: boolean | LoadDeviceLibraryOptions | undefined,
+): Required<Pick<LoadDeviceLibraryOptions, 'force' | 'background' | 'progress'>> {
+  if (typeof options === 'boolean') {
+    return { force: options, background: false, progress: false }
+  }
+  return {
+    force: options?.force ?? false,
+    background: options?.background ?? false,
+    progress: options?.progress ?? false,
+  }
 }
 
 function activeArtworkOptimizationPlan(progress: DeviceSyncProgressEvent | null, deviceId: string): string | null {
@@ -244,10 +275,9 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     set({ loading: true, error: null })
     try {
       const device = await window.api.devices.connect(payload)
-      const [devices, pendingJournals, library] = await Promise.all([
+      const [devices, pendingJournals] = await Promise.all([
         window.api.devices.list(),
         window.api.devices.listPendingJournals(),
-        window.api.devices.library(device.id).catch(() => null),
       ])
       set(state => ({
         devices,
@@ -256,16 +286,10 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
         loading: false,
         unknownVolumes: state.unknownVolumes.filter(volume => volume.rootPath !== device.rootPath),
         candidates: state.candidates.filter(candidate => candidate.rootPath !== device.rootPath),
-        deviceLibraries: library
-          ? { ...state.deviceLibraries, [device.id]: library }
-          : state.deviceLibraries,
-        deviceOverviews: library
-          ? { ...state.deviceOverviews, [device.id]: overviewFromStorage(library.device, library.storage) }
-          : state.deviceOverviews,
-        rockboxThemeLibraries: library
-          ? { ...state.rockboxThemeLibraries, [device.id]: rockboxThemesFromLibrary(library) }
-          : state.rockboxThemeLibraries,
       }))
+      void get()
+        .loadDeviceLibrary(device.id, { force: true, background: true, progress: true })
+        .catch(() => undefined)
       return device
     } catch (err) {
       set({ loading: false, error: (err as Error).message })
@@ -321,14 +345,16 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     }
   },
 
-  async loadDeviceLibrary(deviceId, force = false) {
+  async loadDeviceLibrary(deviceId, options = false) {
+    const { force, background, progress } = normalizeLoadDeviceLibraryOptions(options)
     const state = get()
     const cached = state.deviceLibraries[deviceId]
     const device = state.devices.find(item => item.id === deviceId) ?? cached?.device
     if (cached && !force && canReuseDeviceLibrary(cached, device)) return cached
-    set({ loading: true, error: null })
+    if (background) set({ error: null })
+    else set({ loading: true, error: null })
     try {
-      const library = await window.api.devices.library(deviceId)
+      const library = await window.api.devices.library(deviceId, { progress })
       set(state => ({
         devices: mergeDeviceRecord(state.devices, library.device),
         deviceLibraries: { ...state.deviceLibraries, [deviceId]: library },
@@ -341,11 +367,14 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
           [deviceId]: rockboxThemesFromLibrary(library),
         },
         selectedDeviceId: deviceId,
-        loading: false,
+        loading: background ? state.loading : false,
       }))
       return library
     } catch (err) {
-      set({ loading: false, error: (err as Error).message })
+      set(state => ({
+        loading: background ? state.loading : false,
+        error: (err as Error).message,
+      }))
       throw err
     }
   },
@@ -482,26 +511,18 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     const id = currentDeviceId(get(), deviceId)
     set({ loading: true, error: null, scanResult: null })
     try {
-      const scanResult = await window.api.devices.scan(id)
-      const [devices, library] = await Promise.all([
-        window.api.devices.list(),
-        window.api.devices.library(id).catch(() => null),
-      ])
+      const library = await window.api.devices.library(id, { progress: true })
+      const scanResult = scanResultFromLibrary(library)
+      const devices = await window.api.devices.list()
       set(state => ({
-        devices: library
-          ? mergeDeviceRecord(mergeDeviceRecord(devices, scanResult.device), library.device)
-          : mergeDeviceRecord(devices, scanResult.device),
+        devices: mergeDeviceRecord(mergeDeviceRecord(devices, scanResult.device), library.device),
         scanResult,
         selectedDeviceId: id,
         loading: false,
         scanProgress: null,
         deviceOverviews: { ...state.deviceOverviews, [id]: overviewFromScan(scanResult) },
-        deviceLibraries: library
-          ? { ...state.deviceLibraries, [id]: library }
-          : state.deviceLibraries,
-        rockboxThemeLibraries: library
-          ? { ...state.rockboxThemeLibraries, [id]: rockboxThemesFromLibrary(library) }
-          : state.rockboxThemeLibraries,
+        deviceLibraries: { ...state.deviceLibraries, [id]: library },
+        rockboxThemeLibraries: { ...state.rockboxThemeLibraries, [id]: rockboxThemesFromLibrary(library) },
       }))
     } catch (err) {
       set({ loading: false, error: (err as Error).message, scanProgress: null })
@@ -526,11 +547,16 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     }
   },
 
-  async planSync(mode, pcTargetPath) {
+  planSync: async (mode, pcTargetPath, fullSync) => {
     const deviceId = currentDeviceId(get())
     set({ loading: true, error: null, plan: null })
     try {
-      const plan = await window.api.devices.planSync({ deviceId, mode, pcTargetPath })
+      const plan = await window.api.devices.planSync({
+        deviceId,
+        mode,
+        pcTargetPath,
+        fullSync,
+      })
       set({ plan, loading: false })
       return plan
     } catch (err) {

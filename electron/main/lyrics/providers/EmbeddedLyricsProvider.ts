@@ -1,7 +1,7 @@
 import { extname } from 'node:path'
 import { File, FlacTag } from 'node-taglib-sharp'
 import type { LyricsResult } from '@shared/types/lyrics'
-import { isSyncedLrc } from '@shared/lyrics/lrc'
+import { isSyncedLrc } from '../../../../shared/lyrics/lrc.ts'
 
 function firstNonEmpty(...values: Array<string | undefined | null>): string | null {
   for (const v of values) {

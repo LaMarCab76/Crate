@@ -33,6 +33,7 @@ export class TrackRepo {
   private stmtSetFavorite: Statement
   private stmtByFolderWithAlbum: Statement
   private stmtUpdateMetadata: Statement
+  private stmtMoveAndUpdateMetadata: Statement
   private stmtInsert: Statement
   private listStmtCache = new Map<string, Statement>()
 
@@ -92,6 +93,42 @@ export class TrackRepo {
         date_modified = @dateModified,
         artwork_path = @artworkPath,
         filename = @filename,
+        artist_id = @artistId,
+        album_id = @albumId,
+        genre_id = @genreId,
+        state_updated_at = @stateUpdatedAt
+      WHERE id = @id
+    `)
+    this.stmtMoveAndUpdateMetadata = db.prepare(`
+      UPDATE tracks
+      SET
+        path = @path,
+        filename = @filename,
+        folder_id = @folderId,
+        title = @title,
+        artist = @artist,
+        album = @album,
+        album_artist = @albumArtist,
+        composer = @composer,
+        genre = @genre,
+        year = @year,
+        track_number = @trackNumber,
+        total_tracks = @totalTracks,
+        disc_number = @discNumber,
+        total_discs = @totalDiscs,
+        compilation = @compilation,
+        duration = @duration,
+        format = @format,
+        codec = @codec,
+        bitrate = @bitrate,
+        sample_rate = @sampleRate,
+        channels = @channels,
+        bit_depth = @bitDepth,
+        file_size = @fileSize,
+        bpm = @bpm,
+        musical_key = @musicalKey,
+        date_modified = @dateModified,
+        artwork_path = @artworkPath,
         artist_id = @artistId,
         album_id = @albumId,
         genre_id = @genreId,
@@ -230,6 +267,75 @@ export class TrackRepo {
       dateModified: args.dateModified,
       artworkPath: args.artworkPath,
       filename: args.filename,
+      artistId: args.artistId,
+      albumId: args.albumId,
+      genreId: args.genreId,
+      stateUpdatedAt: Date.now(),
+    })
+  }
+
+  moveAndUpdateMetadata(args: {
+    id: number
+    path: string
+    filename: string
+    folderId: number
+    title: string
+    artist: string
+    album: string
+    albumArtist: string | null
+    composer: string
+    genre: string
+    year: string
+    trackNumber: number | null
+    totalTracks: number | null
+    discNumber: number | null
+    totalDiscs: number | null
+    compilation: number
+    duration: number
+    format: string
+    codec: string | null
+    bitrate: number | null
+    sampleRate: number | null
+    channels: number | null
+    bitDepth: number | null
+    fileSize: number | null
+    bpm: number | null
+    musicalKey: string | null
+    dateModified: string | null
+    artworkPath: string | null
+    artistId: number | null
+    albumId: number | null
+    genreId: number | null
+  }): void {
+    this.stmtMoveAndUpdateMetadata.run({
+      id: args.id,
+      path: args.path,
+      filename: args.filename,
+      folderId: args.folderId,
+      title: args.title,
+      artist: args.artist,
+      album: args.album,
+      albumArtist: args.albumArtist,
+      composer: args.composer,
+      genre: args.genre,
+      year: args.year,
+      trackNumber: args.trackNumber,
+      totalTracks: args.totalTracks,
+      discNumber: args.discNumber,
+      totalDiscs: args.totalDiscs,
+      compilation: args.compilation,
+      duration: args.duration,
+      format: args.format,
+      codec: args.codec,
+      bitrate: args.bitrate,
+      sampleRate: args.sampleRate,
+      channels: args.channels,
+      bitDepth: args.bitDepth,
+      fileSize: args.fileSize,
+      bpm: args.bpm,
+      musicalKey: args.musicalKey,
+      dateModified: args.dateModified,
+      artworkPath: args.artworkPath,
       artistId: args.artistId,
       albumId: args.albumId,
       genreId: args.genreId,

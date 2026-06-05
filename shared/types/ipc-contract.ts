@@ -18,6 +18,7 @@ import type {
   DeviceArtworkOptimizationSelection,
   DeviceArtworkOptimizationSummary,
   DeviceConnectPayload,
+  DeviceLibraryOptions,
   DeviceLibraryResult,
   DeviceMusicRootPickResult,
   DeviceOverviewResult,
@@ -240,6 +241,119 @@ export interface MetadataCompletionApplyResult {
   applied: number
   failed: number
   results: MetadataCompletionApplyTrackResult[]
+}
+
+export interface TrackAlbumMoveEndpoint {
+  id: number
+  title: string
+  artist: string
+  album: string
+  albumArtist: string | null
+  year: string
+  path: string
+  artworkPath: string | null
+}
+
+export interface TrackAlbumMoveProposal {
+  title: string
+  artist: string
+  album: string
+  albumArtist: string | null
+  genre: string
+  year: string
+  trackNumber: number
+  totalTracks: number | null
+  discNumber: number | null
+  totalDiscs: number | null
+  filename: string
+  destinationPath: string
+  destinationDirectory: string
+  artworkPath: string
+  musicBrainzConfidence: number
+}
+
+export interface TrackAlbumMoveDuplicate {
+  trackId: number
+  title: string
+  path: string
+  reason: 'slot' | 'title'
+}
+
+export interface TrackAlbumMoveQuality {
+  format: string
+  lossless: boolean
+  sampleRate: number | null
+  bitDepth: number | null
+}
+
+// One row in the destination album's track-number layout, used to render the
+// slot picker. `occupiedBy` is null for a free slot.
+export interface TrackAlbumMoveSlot {
+  trackNumber: number
+  occupiedBy: { trackId: number; title: string; quality: TrackAlbumMoveQuality } | null
+}
+
+// Present when the chosen slot (or a same-title track) is already taken. The
+// move only proceeds when `incomingIsBetter` is true, in which case the existing
+// track is sent to the trash and replaced.
+export interface TrackAlbumMoveReplacement {
+  trackId: number
+  title: string
+  path: string
+  incoming: TrackAlbumMoveQuality
+  existing: TrackAlbumMoveQuality
+  incomingIsBetter: boolean
+}
+
+export interface TrackAlbumMovePreview {
+  previewId: string
+  createdAt: number
+  status: 'ready' | 'blocked'
+  source: TrackAlbumMoveEndpoint
+  targetAlbum: {
+    id: number
+    title: string
+    artist: string
+    year: string | null
+    artworkPath: string | null
+    trackCount: number
+  }
+  proposal: TrackAlbumMoveProposal | null
+  duplicate: TrackAlbumMoveDuplicate | null
+  // Track-number layout of the destination album/disc for the slot picker.
+  slots: TrackAlbumMoveSlot[]
+  discNumber: number
+  totalTracks: number | null
+  // The slot the proposal currently targets, and the recommended free slot.
+  selectedTrackNumber: number | null
+  suggestedTrackNumber: number | null
+  // False when MusicBrainz found the album but not the track number (we then
+  // recommend a slot instead of blocking).
+  trackNumberFromMusicBrainz: boolean
+  replacement: TrackAlbumMoveReplacement | null
+  errors: string[]
+  warnings: string[]
+}
+
+export interface TrackAlbumMovePreviewRequest {
+  trackId: number
+  targetAlbumId: number
+  // Optional user-chosen destination slot. Overrides the MusicBrainz/recommended
+  // track number when provided.
+  trackNumber?: number | null
+}
+
+export interface TrackAlbumMoveApplyRequest {
+  previewId: string
+}
+
+export interface TrackAlbumMoveApplyResult {
+  trackId: number
+  previousPath: string
+  path: string
+  title: string
+  artist: string
+  album: string
 }
 
 export interface TrashTrackFailure {
@@ -568,6 +682,8 @@ export interface TracksApi {
   findMetadataCompletionTargets(folderId?: number, limit?: number): Promise<MetadataCompletionTargetsPayload>
   previewMetadataCompletion(trackIds: number[]): Promise<MetadataCompletionPreview>
   applyMetadataCompletions(payload: MetadataCompletionApplyRequest): Promise<MetadataCompletionApplyResult>
+  previewAlbumMove(payload: TrackAlbumMovePreviewRequest): Promise<TrackAlbumMovePreview>
+  applyAlbumMove(payload: TrackAlbumMoveApplyRequest): Promise<TrackAlbumMoveApplyResult>
   trash(trackIds: number[]): Promise<TrashTracksResult>
 }
 
@@ -622,7 +738,7 @@ export interface DevicesApi {
   list(): Promise<DeviceRecord[]>
   overview(deviceId: string): Promise<DeviceOverviewResult>
   scan(deviceId: string): Promise<DeviceScanResult>
-  library(deviceId: string): Promise<DeviceLibraryResult>
+  library(deviceId: string, options?: DeviceLibraryOptions): Promise<DeviceLibraryResult>
   rockboxThemes(deviceId: string): Promise<RockboxThemeLibraryResult>
   planSync(payload: DeviceSyncPlanRequest): Promise<DeviceSyncPlan>
   applySync(planId: string, selection?: DeviceSyncApplySelection): Promise<DeviceSyncApplyResult>

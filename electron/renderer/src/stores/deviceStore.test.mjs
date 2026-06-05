@@ -85,3 +85,44 @@ test('optimizeArtwork resolves the matching activity center artwork entry', () =
     'optimizeArtwork failures should stop the running artwork activity',
   )
 })
+
+test('device connect returns before the background library refresh completes', () => {
+  assert.ok(
+    deviceStoreSource.includes("const [devices, pendingJournals] = await Promise.all(["),
+    'connect should only wait for device list and pending journals',
+  )
+  assert.ok(
+    deviceStoreSource.includes(".loadDeviceLibrary(device.id, { force: true, background: true, progress: true })"),
+    'connect should kick off a background library refresh with device scan progress',
+  )
+  assert.ok(
+    !deviceStoreSource.includes('window.api.devices.library(device.id).catch(() => null)'),
+    'connect should not block on devices.library after registering the device',
+  )
+})
+
+test('manual device scan uses one library call instead of scan plus library', () => {
+  assert.ok(
+    deviceStoreSource.includes("const library = await window.api.devices.library(id, { progress: true })"),
+    'manual scan should request a single library refresh with progress',
+  )
+  assert.ok(
+    deviceStoreSource.includes('const scanResult = scanResultFromLibrary(library)'),
+    'manual scan should derive the scan result from the library payload',
+  )
+  assert.ok(
+    !deviceStoreSource.includes('const scanResult = await window.api.devices.scan(id)'),
+    'manual scan should not call devices.scan and then fetch devices.library',
+  )
+})
+
+test('planSync passes fullSync into the renderer API payload', () => {
+  assert.ok(
+    deviceStoreSource.includes('planSync: async (mode, pcTargetPath, fullSync) => {'),
+    'store planSync signature should accept fullSync as third argument',
+  )
+  assert.ok(
+    deviceStoreSource.includes('fullSync,'),
+    'store should include fullSync in planSync payload',
+  )
+})

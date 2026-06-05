@@ -197,3 +197,11 @@ test('artwork optimization progress is owned by the optimize panel to avoid a du
     'The page header should hide progress already rendered by the optimize panel',
   )
 })
+
+test('device sync shows last-sync mode indicators and full sync action hooks', () => {
+  assert.ok(syncSource.includes("activeSyncModeLabel = selectedDevice?.lastSyncAt && !planRequestedFullSync"), 'DeviceSyncView should model incremental/full mode for labels')
+  assert.ok(syncSource.includes("Última sync:"), 'DeviceSyncView should display last sync label in header')
+  assert.ok(syncSource.includes('Resync completo'), 'DeviceSyncView should expose full-sync button label')
+  assert.ok(syncSource.includes('buildPlan(true)'), 'Resync button should pass fullSync=true to plan generation')
+  assert.ok(syncSource.includes('buildPlan(false)'), 'Recalcular should pass fullSync=false path')
+})

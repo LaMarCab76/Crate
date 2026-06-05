@@ -1,14 +1,17 @@
-import { type FormEvent, type MouseEvent, type ReactNode, useMemo, useState } from 'react'
+import { type FormEvent, type MouseEvent, type ReactNode, useEffect, useMemo, useState } from 'react'
 import type { Album, Playlist, Track } from '@shared/types/library'
-import type { TrackMetadataUpdatePayload } from '@shared/types/ipc-contract'
+import type { TrackAlbumMovePreview, TrackAlbumMoveQuality, TrackMetadataUpdatePayload } from '@shared/types/ipc-contract'
 import { fmtTime, fmtTotal } from '@renderer/utils/format'
 import {
   addTracksToPlaylist,
+  applyTrackAlbumMove,
   createPlaylistWithTracks,
+  previewTrackAlbumMove,
   toggleTrackFavorite,
   trashTracksWithAnimation,
   updateTrackMetadata,
   updateTracksMetadata,
+  useAlbums,
   usePlaylists,
 } from '@renderer/stores/libraryStore'
 import { useQueueStore } from '@renderer/stores/queueStore'
@@ -20,6 +23,7 @@ type TrackDialog =
   | { kind: 'playlist'; tracks: Track[] }
   | { kind: 'details'; track: Track }
   | { kind: 'edit'; track: Track }
+  | { kind: 'moveAlbum'; track: Track }
   | { kind: 'trash'; tracks: Track[] }
 
 type AlbumDialog =
@@ -39,6 +43,11 @@ function trackDbIds(tracks: Track[]): number[] {
 
 function playlistDbId(playlist: Playlist): number | null {
   const match = /^p(\d+)$/.exec(playlist.id)
+  return match ? Number.parseInt(match[1], 10) : null
+}
+
+function albumDbId(album: Album): number | null {
+  const match = /^a(\d+)$/.exec(album.id)
   return match ? Number.parseInt(match[1], 10) : null
 }
 
@@ -234,6 +243,385 @@ function TrackMetadataEditor({ track, onClose }: { track: Track; onClose: () => 
         </div>
         {error && <div className="modal-error">{error}</div>}
       </form>
+    </ModalShell>
+  )
+}
+
+function formatTrackPosition(preview: TrackAlbumMovePreview | null): string {
+  const p = preview?.proposal
+  if (!p) return '-'
+  const disc = p.discNumber && p.totalDiscs && p.totalDiscs > 1 ? `D${p.discNumber} · ` : ''
+  return `${disc}${p.trackNumber}${p.totalTracks ? `/${p.totalTracks}` : ''}`
+}
+
+function normalizeAlbumSuggestionText(value: string | null | undefined): string {
+  return (value ?? '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function wordsForAlbumSuggestion(value: string): string[] {
+  return normalizeAlbumSuggestionText(value)
+    .split(' ')
+    .map(word => word.trim())
+    .filter(word => word.length > 1)
+}
+
+function wordMatchScore(left: string, right: string): number {
+  const leftWords = wordsForAlbumSuggestion(left)
+  const rightWords = new Set(wordsForAlbumSuggestion(right))
+  if (leftWords.length === 0 || rightWords.size === 0) return 0
+  let rawScore = 0
+
+  for (const word of leftWords) {
+    if (rightWords.has(word)) {
+      rawScore += 18
+      continue
+    }
+
+    for (const candidate of rightWords) {
+      if (candidate.includes(word) || word.includes(candidate)) {
+        rawScore += 6
+        break
+      }
+    }
+  }
+
+  const maxScore = leftWords.length * 20
+  const normalized = rawScore / maxScore
+  return Math.round(Math.min(0.6, Math.max(0, normalized)) * 45)
+}
+
+function albumMoveSuggestionLabel(score: number): string {
+  if (score >= 150) return 'Sugerencia'
+  if (score >= 110) return 'Muy probable'
+  if (score >= 70) return 'Posible'
+  return 'Relacionado'
+}
+
+// Map the heuristic match score onto a 0–99% confidence band, aligned with the
+// qualitative tiers in albumMoveSuggestionLabel so the shown percentage tracks
+// the same thresholds (>=150 ≈ 95%+, >=110 ≈ 80%+, >=70 ≈ 60%+).
+function albumMoveSuggestionPercent(score: number): number {
+  let pct: number
+  if (score >= 150) pct = 95 + (score - 150) / 12
+  else if (score >= 110) pct = 80 + ((score - 110) / 40) * 15
+  else if (score >= 70) pct = 60 + ((score - 70) / 40) * 20
+  else pct = (score / 70) * 60
+  return Math.max(1, Math.min(99, Math.round(pct)))
+}
+
+// Compact quality label for the replacement comparison, e.g. "FLAC · Lossless · 96 kHz · 24 bit".
+function albumMoveQualityLabel(quality: TrackAlbumMoveQuality): string {
+  const parts = [
+    quality.format ? quality.format.toUpperCase() : null,
+    quality.lossless ? 'Lossless' : 'Lossy',
+    quality.sampleRate ? `${+(quality.sampleRate / 1000).toFixed(1)} kHz` : null,
+    quality.bitDepth ? `${quality.bitDepth} bit` : null,
+  ]
+  return parts.filter(Boolean).join(' · ')
+}
+
+function bestAlbumTrackTitleScore(trackTitle: string, album: Album): number {
+  let best = 0
+  const maxTitleScore = 24
+
+  for (const candidate of album.tracks.slice(0, 24)) {
+    if (!candidate.t) continue
+    const candidateScore = wordMatchScore(trackTitle, candidate.t)
+    if (candidateScore > best) {
+      best = candidateScore
+      if (best >= maxTitleScore) break
+    }
+  }
+
+  return Math.min(best, maxTitleScore)
+}
+
+function albumMoveSuggestionScore(args: { track: Track; album: Album }): number {
+  const trackArtist = normalizeAlbumSuggestionText(args.track.artist)
+  const trackAlbumArtist = normalizeAlbumSuggestionText(args.track.albumArtist)
+  const trackGenre = normalizeAlbumSuggestionText(args.track.genre)
+  const trackTitle = normalizeAlbumSuggestionText(args.track.t)
+  const trackYear = String(args.track.year)
+
+  const albumArtist = normalizeAlbumSuggestionText(args.album.artist)
+  const albumGenre = normalizeAlbumSuggestionText(args.album.genre)
+  const albumTitle = normalizeAlbumSuggestionText(args.album.title)
+  const albumYear = String(args.album.year)
+
+  let score = 0
+
+  if (trackAlbumArtist && isAlbumSuggestionTextEqual(albumArtist, trackAlbumArtist)) {
+    score += 70
+  } else if (trackAlbumArtist && isAlbumSuggestionTextIncluded(albumArtist, trackAlbumArtist)) {
+    score += 40
+  }
+
+  if (trackArtist) {
+    if (isAlbumSuggestionTextEqual(albumArtist, trackArtist)) {
+      score += 50
+    } else if (isAlbumSuggestionTextIncluded(albumArtist, trackArtist) || isAlbumSuggestionTextIncluded(trackArtist, albumArtist)) {
+      score += 28
+    }
+  }
+
+  if (albumYear === trackYear) {
+    score += 28
+  }
+
+  if (trackGenre) {
+    if (isAlbumSuggestionTextEqual(albumGenre, trackGenre)) {
+      score += 22
+    } else if (isAlbumSuggestionTextIncluded(albumGenre, trackGenre) || isAlbumSuggestionTextIncluded(trackGenre, albumGenre)) {
+      score += 12
+    }
+  }
+
+  score += wordMatchScore(trackTitle, albumTitle)
+
+  const trackTitleInAlbum = bestAlbumTrackTitleScore(trackTitle, args.album)
+  score += trackTitleInAlbum
+
+  return score
+}
+
+function isAlbumSuggestionTextEqual(left: string, right: string): boolean {
+  return normalizeAlbumSuggestionText(left) === normalizeAlbumSuggestionText(right)
+}
+
+function isAlbumSuggestionTextIncluded(haystack: string, needle: string): boolean {
+  const normalizedHaystack = normalizeAlbumSuggestionText(haystack)
+  const normalizedNeedle = normalizeAlbumSuggestionText(needle)
+  return !!(normalizedHaystack && normalizedNeedle && normalizedHaystack.includes(normalizedNeedle))
+}
+
+  type AlbumSuggestion = {
+  album: Album
+  score: number
+}
+
+function TrackAlbumMoveModal({ track, onClose }: { track: Track; onClose: () => void }) {
+  const albums = useAlbums()
+  const [query, setQuery] = useState('')
+  const candidates = useMemo<AlbumSuggestion[]>(() => {
+    const q = normalizeAlbumSuggestionText(query)
+    const bySource = albums
+      .filter(album => albumDbId(album) != null && album.id !== track.albumId)
+      .filter(album => {
+        if (!q) return true
+        return isAlbumSuggestionTextIncluded(`${album.title} ${album.artist} ${album.genre} ${album.year}`, q)
+      })
+      .map(album => ({ album, score: albumMoveSuggestionScore({ track, album }) }))
+
+    bySource.sort((a, b) => {
+      const scoreDelta = b.score - a.score
+      if (scoreDelta !== 0) return scoreDelta
+      const title = a.album.title.localeCompare(b.album.title)
+      if (title !== 0) return title
+      return a.album.artist.localeCompare(b.album.artist)
+    })
+
+    return bySource.slice(0, 12)
+  }, [albums, query, track.albumId, track.artist, track.albumArtist, track.genre, track.t, track.year])
+  const firstAlbumId = candidates.map(candidate => albumDbId(candidate.album)).find((id): id is number => id != null)
+  const [targetAlbumId, setTargetAlbumId] = useState<number | null>(firstAlbumId ?? null)
+  // User-chosen destination slot. Reset whenever the target album changes so each
+  // album starts from its own MusicBrainz/recommended slot.
+  const [trackNumberOverride, setTrackNumberOverride] = useState<number | null>(null)
+  const [preview, setPreview] = useState<TrackAlbumMovePreview | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [applying, setApplying] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (targetAlbumId != null && candidates.some(candidate => albumDbId(candidate.album) === targetAlbumId)) return
+    setTargetAlbumId(firstAlbumId ?? null)
+  }, [candidates, firstAlbumId, targetAlbumId])
+
+  useEffect(() => {
+    setTrackNumberOverride(null)
+  }, [targetAlbumId])
+
+  useEffect(() => {
+    if (track.dbId == null || targetAlbumId == null) {
+      setPreview(null)
+      return
+    }
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    setPreview(null)
+    void previewTrackAlbumMove({ trackId: track.dbId, targetAlbumId, trackNumber: trackNumberOverride })
+      .then(next => {
+        if (!cancelled) setPreview(next)
+      })
+      .catch(err => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err))
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [targetAlbumId, track.dbId, trackNumberOverride])
+
+  const selectedAlbum = candidates.find(candidate => albumDbId(candidate.album) === targetAlbumId)?.album ?? null
+  const canApply = preview?.status === 'ready' && !loading && !applying
+
+  const apply = async () => {
+    if (!preview || preview.status !== 'ready') return
+    setApplying(true)
+    setError(null)
+    try {
+      await applyTrackAlbumMove(preview)
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  return (
+    <ModalShell
+      title="Mover a álbum"
+      onClose={onClose}
+      footer={(
+        <>
+          <button type="button" className="btn" onClick={onClose} disabled={applying}>Cancelar</button>
+          <button type="button" className="btn primary" disabled={!canApply} onClick={() => { void apply() }}>
+            {applying
+              ? (preview?.replacement?.incomingIsBetter ? 'Reemplazando...' : 'Moviendo...')
+              : (preview?.replacement?.incomingIsBetter ? 'Reemplazar' : 'Mover')}
+          </button>
+        </>
+      )}
+    >
+      <div className="album-move-modal">
+        <div className="album-move-search">
+          <Icon name="search" size={14} />
+          <input
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+            placeholder="Buscar álbum"
+            autoFocus
+          />
+        </div>
+
+        <div className="album-move-picker" role="listbox" aria-label="Álbum destino">
+          {candidates.map(({ album, score }) => {
+            const id = albumDbId(album)
+            if (id == null) return null
+            return (
+              <button
+                key={album.id}
+                type="button"
+                className={id === targetAlbumId ? 'selected' : ''}
+                onClick={() => setTargetAlbumId(id)}
+              >
+                <span className="album-move-pick-text">
+                  <strong>{album.title}</strong>
+                  <em>{album.artist} · {album.year || '-'} · {album.tracks.length}</em>
+                </span>
+                <span className="album-move-percent" title={albumMoveSuggestionLabel(score)}>
+                  {albumMoveSuggestionPercent(score)}%
+                </span>
+              </button>
+            )
+          })}
+          {candidates.length === 0 && <div className="album-move-empty">No hay álbumes locales coincidentes.</div>}
+        </div>
+
+        {preview && preview.slots.length > 0 && (
+          <div className="album-move-slotpick">
+            <div className="album-move-slotpick-head">
+              <span>Pista</span>
+              {!preview.trackNumberFromMusicBrainz && (
+                <em>MusicBrainz no devolvió el número — elegí la pista (se recomienda la libre).</em>
+              )}
+            </div>
+            <div className="album-move-slots" role="listbox" aria-label="Número de pista destino">
+              {preview.slots.map(slot => {
+                const isSelected = slot.trackNumber === preview.selectedTrackNumber
+                const isSuggested = slot.trackNumber === preview.suggestedTrackNumber && !slot.occupiedBy
+                const className = [
+                  'album-move-slot',
+                  slot.occupiedBy ? 'occupied' : 'free',
+                  isSelected ? 'selected' : '',
+                  isSuggested ? 'suggested' : '',
+                ].filter(Boolean).join(' ')
+                const hint = slot.occupiedBy
+                  ? `Ocupada: ${slot.occupiedBy.title} (${albumMoveQualityLabel(slot.occupiedBy.quality)})`
+                  : 'Libre'
+                return (
+                  <button
+                    key={slot.trackNumber}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    className={className}
+                    title={hint}
+                    onClick={() => setTrackNumberOverride(slot.trackNumber)}
+                  >
+                    {slot.trackNumber}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {preview?.replacement && (
+          <div className={`album-move-replace ${preview.replacement.incomingIsBetter ? 'ok' : 'blocked'}`}>
+            <span>{preview.replacement.incomingIsBetter ? 'Reemplazo por mejor calidad' : 'No se reemplaza'}</span>
+            <div className="album-move-replace-grid">
+              <div>
+                <small title={preview.replacement.title}>Existente · {preview.replacement.title}</small>
+                <strong>{albumMoveQualityLabel(preview.replacement.existing)}</strong>
+              </div>
+              <span className="album-move-replace-arrow" aria-hidden="true">→</span>
+              <div>
+                <small>Entrante</small>
+                <strong>{albumMoveQualityLabel(preview.replacement.incoming)}</strong>
+              </div>
+            </div>
+            <em>
+              {preview.replacement.incomingIsBetter
+                ? 'La pista existente irá a la papelera (recuperable).'
+                : 'La pista existente tiene calidad igual o superior; elegí otra pista.'}
+            </em>
+          </div>
+        )}
+
+        <div className="album-move-preview">
+          <div>
+            <span>Actual</span>
+            <strong>{track.t}</strong>
+            <em>{track.artist} · {track.albumTitle}</em>
+            <small title={track.path}>{track.path}</small>
+          </div>
+          <div>
+            <span>Destino</span>
+            <strong>{preview?.proposal?.title ?? track.t}</strong>
+            <em>{selectedAlbum ? `${selectedAlbum.artist} · ${selectedAlbum.title}` : '-'}</em>
+            <small title={preview?.proposal?.destinationPath}>{preview?.proposal?.destinationPath ?? '-'}</small>
+          </div>
+        </div>
+
+        <div className="album-move-facts">
+          <div><span>Track</span><strong>{formatTrackPosition(preview)}</strong></div>
+          <div><span>Archivo</span><strong>{preview?.proposal?.filename ?? '-'}</strong></div>
+          <div><span>Confianza</span><strong>{preview?.proposal ? (preview.proposal.musicBrainzConfidence > 0 ? `${Math.round(preview.proposal.musicBrainzConfidence * 100)}%` : 'Sin confirmar') : '-'}</strong></div>
+        </div>
+
+        {loading && <div className="modal-muted">Validando en MusicBrainz...</div>}
+        {preview?.errors.map(item => <div className="modal-error" key={item}>{item}</div>)}
+        {preview?.warnings.map(item => <div className="modal-muted" key={item}>{item}</div>)}
+        {error && <div className="modal-error">{error}</div>}
+      </div>
     </ModalShell>
   )
 }
@@ -493,6 +881,13 @@ export function useTrackActions() {
         onSelect: () => setDialog({ kind: 'edit', track }),
       },
       {
+        id: 'move-album',
+        label: 'Mover a álbum...',
+        icon: 'album',
+        disabled,
+        onSelect: () => setDialog({ kind: 'moveAlbum', track }),
+      },
+      {
         id: 'complete-metadata',
         label: 'Completar metadatos...',
         icon: 'sparkle',
@@ -524,6 +919,7 @@ export function useTrackActions() {
       {dialog?.kind === 'playlist' && <PlaylistPickerModal tracks={dialog.tracks} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'details' && <TrackDetailsModal track={dialog.track} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'edit' && <TrackMetadataEditor track={dialog.track} onClose={() => setDialog(null)} />}
+      {dialog?.kind === 'moveAlbum' && <TrackAlbumMoveModal track={dialog.track} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'trash' && (
         <ConfirmTrashModal
           title="Mover archivo a Papelera"

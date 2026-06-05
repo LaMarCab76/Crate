@@ -6,7 +6,6 @@ export type DeviceSyncBase = 'pc' | 'device' | 'review'
 
 export type DeviceScanPhase = 'discovering' | 'reading' | 'complete'
 export type DeviceSyncPhase =
-  | 'fetching_lyrics'
   | 'copying'
   | 'deleting'
   | 'refreshing'
@@ -107,8 +106,7 @@ export interface DeviceRecord {
   syncBase: DeviceSyncBase
   pcTargetPath: string
   artworkMaxEdge: number
-  // Legacy persisted flag. Device sync now copies only local lyrics and does not
-  // fetch missing lyrics online.
+  // Legacy persisted flag. Device sync no longer propagates or fetches lyrics.
   fetchMissingLyrics: boolean
   // When true, the sync run also downscales oversized embedded artwork on the device.
   optimizeArtworkOnSync: boolean
@@ -152,6 +150,7 @@ export interface DeviceTrack {
 }
 
 export interface PcTrack extends DeviceTrack {
+  trackId: number
   folderId: number
   folderName: string
   folderPath: string
@@ -327,6 +326,7 @@ export interface DeviceLibraryResult {
   rockboxThemes: RockboxThemeSummary[]
   rockboxThemeScan: RockboxThemeScanDiagnostic
   storage: DeviceStorageSummary
+  scanSummary: DeviceScanSummary
   summary: {
     trackCount: number
     albumCount: number
@@ -334,6 +334,10 @@ export interface DeviceLibraryResult {
     playlistCount: number
     rockboxThemeCount: number
   }
+}
+
+export interface DeviceLibraryOptions {
+  progress?: boolean
 }
 
 export interface RockboxThemeInstallSourceResult {
@@ -383,6 +387,8 @@ export interface DeviceConnectPayload {
   defaultMode?: DeviceSyncMode
   pcTargetPath?: string
   artworkMaxEdge?: number
+  // Legacy/no-op for device sync. Accepted so older callers and device YAML keep
+  // round-tripping, but lyrics are no longer propagated or fetched during sync.
   fetchMissingLyrics?: boolean
   optimizeArtworkOnSync?: boolean
   sourceLibraryIds?: number[]
@@ -390,6 +396,7 @@ export interface DeviceConnectPayload {
 
 export interface DeviceSettingsUpdate {
   artworkMaxEdge?: number
+  // Legacy/no-op for device sync; kept for compatibility with existing records.
   fetchMissingLyrics?: boolean
   optimizeArtworkOnSync?: boolean
   musicRoot?: string
@@ -443,6 +450,8 @@ export interface DeviceSyncPlanRequest {
   deviceId: string
   mode: DeviceSyncMode
   pcTargetPath?: string
+  // If true, forces a full library rebuild and ignores incremental baselines.
+  fullSync?: boolean
 }
 
 export interface DeviceSyncPlanSummary {
@@ -485,7 +494,7 @@ export interface DeviceSyncProgressEvent {
   currentPath?: string
   // Set during the copy/delete phase so the UI can show a readable line for the
   // item being processed ("Copiando a MP3 · Title") instead of just the path.
-  // Left undefined for phases without a single action (lyrics/artwork/refreshing).
+  // Left undefined for phases without a single action (artwork/refreshing).
   currentTitle?: string
   currentKind?: DeviceSyncActionKind
 }

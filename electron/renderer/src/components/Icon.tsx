@@ -35,6 +35,7 @@ const ICONS: Record<string, ReactNode> = {
   airplay: <g><path d="M5 13a6 6 0 010-6m10 0a6 6 0 010 6" /><path d="M7 11a4 4 0 010-4m6 0a4 4 0 010 4" /><path d="M10 11l3 5H7l3-5z" fill="currentColor" stroke="none" /></g>,
   speaker:<g><rect x="5" y="3" width="10" height="14" rx="1.5" /><circle cx="10" cy="12" r="2.5" /><circle cx="10" cy="6" r="0.8" fill="currentColor" stroke="none" /></g>,
   headphones: <g><path d="M4 12V10a6 6 0 0112 0v2" /><path d="M4 12a1.5 1.5 0 011.5-1.5h1V16h-1A1.5 1.5 0 014 14.5v-2.5z" /><path d="M16 12a1.5 1.5 0 00-1.5-1.5h-1V16h1A1.5 1.5 0 0016 14.5v-2.5z" /></g>,
+  dj: <g><circle cx="6" cy="13" r="3" /><circle cx="14" cy="13" r="3" /><circle cx="6" cy="13" r="0.8" fill="currentColor" stroke="none" /><circle cx="14" cy="13" r="0.8" fill="currentColor" stroke="none" /><path d="M4.5 8.5h11" strokeLinecap="round" /><path d="M7.5 5.5h5l1 3h-7l1-3z" /><path d="M10 9v5" strokeLinecap="round" /></g>,
   plus:   <g><path d="M10 4v12M4 10h12" strokeLinecap="round" /></g>,
   ellipsis: <g><circle cx="4.5" cy="10" r="1.2" fill="currentColor" stroke="none"/><circle cx="10" cy="10" r="1.2" fill="currentColor" stroke="none"/><circle cx="15.5" cy="10" r="1.2" fill="currentColor" stroke="none"/></g>,
   filter: <g><path d="M3 5h14M5.5 10h9M8.5 15h3" strokeLinecap="round" /></g>,

@@ -35,6 +35,10 @@ import type {
   QueueSnapshotPayload,
   RemoveFolderOptions,
   SearchResultsPayload,
+  TrackAlbumMoveApplyRequest,
+  TrackAlbumMoveApplyResult,
+  TrackAlbumMovePreview,
+  TrackAlbumMovePreviewRequest,
   TrackMetadataUpdatePayload,
   TrashTracksResult,
 } from '@shared/types/ipc-contract'
@@ -45,6 +49,7 @@ import type {
   DeviceArtworkOptimizationSummary,
   DeviceCandidate,
   DeviceConnectPayload,
+  DeviceLibraryOptions,
   DeviceLibraryResult,
   DeviceMusicRootPickResult,
   DeviceOverviewResult,
@@ -252,6 +257,10 @@ const api: Api = {
       ipcRenderer.invoke('track:metadataCompletion:preview', trackIds) as Promise<MetadataCompletionPreview>,
     applyMetadataCompletions: (payload: MetadataCompletionApplyRequest) =>
       ipcRenderer.invoke('track:metadataCompletion:apply', payload) as Promise<MetadataCompletionApplyResult>,
+    previewAlbumMove: (payload: TrackAlbumMovePreviewRequest) =>
+      ipcRenderer.invoke('track:albumMove:preview', payload) as Promise<TrackAlbumMovePreview>,
+    applyAlbumMove: (payload: TrackAlbumMoveApplyRequest) =>
+      ipcRenderer.invoke('track:albumMove:apply', payload) as Promise<TrackAlbumMoveApplyResult>,
     trash: (trackIds: number[]) =>
       ipcRenderer.invoke('track:trash', trackIds) as Promise<TrashTracksResult>,
   },
@@ -321,8 +330,8 @@ const api: Api = {
       ipcRenderer.invoke('devices:overview', deviceId) as Promise<DeviceOverviewResult>,
     scan: (deviceId: string) =>
       ipcRenderer.invoke('devices:scan', deviceId) as Promise<DeviceScanResult>,
-    library: (deviceId: string) =>
-      ipcRenderer.invoke('devices:library', deviceId) as Promise<DeviceLibraryResult>,
+    library: (deviceId: string, options?: DeviceLibraryOptions) =>
+      ipcRenderer.invoke('devices:library', deviceId, options) as Promise<DeviceLibraryResult>,
     analyzeArtwork: (deviceId: string) =>
       ipcRenderer.invoke('devices:analyzeArtwork', deviceId) as Promise<DeviceArtworkAnalysisResult>,
     rockboxThemes: (deviceId: string) =>

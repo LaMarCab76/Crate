@@ -13,6 +13,9 @@ import type {
   MetadataCompletionPreview,
   MetadataCompletionTargetsPayload,
   RemoveFolderOptions,
+  TrackAlbumMoveApplyResult,
+  TrackAlbumMovePreview,
+  TrackAlbumMovePreviewRequest,
   TrackMetadataUpdatePayload,
   TrashTracksResult,
 } from '@shared/types/ipc-contract'
@@ -253,6 +256,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       for (const album of dbAlbums) {
         const albumKey = `a${album.id}`
         const albumTracks = tracksByAlbumId.get(albumKey) ?? []
+        if (albumTracks.length === 0) continue
         const sortedTracks = [...albumTracks].sort(compareTrackNumberAsc)
         albumsById.set(albumKey, dbToUiAlbum(album, sortedTracks))
 
@@ -287,7 +291,10 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       }
 
       const albums = [
-        ...dbAlbums.map(a => albumsById.get(`a${a.id}`) ?? dbToUiAlbum(a, tracksByAlbumId.get(`a${a.id}`) ?? [])),
+        ...dbAlbums.flatMap(a => {
+          const album = albumsById.get(`a${a.id}`)
+          return album ? [album] : []
+        }),
         ...syntheticAlbums,
       ]
       const artists = dbArtists.map(ar => {
@@ -569,6 +576,19 @@ export async function applyMetadataCompletions(
   if (result.applied > 0) {
     useLibraryStore.setState({ metadataCompletionPrompt: null })
   }
+  return result
+}
+
+export async function previewTrackAlbumMove(
+  payload: TrackAlbumMovePreviewRequest,
+): Promise<TrackAlbumMovePreview> {
+  return window.api.tracks.previewAlbumMove(payload)
+}
+
+export async function applyTrackAlbumMove(preview: TrackAlbumMovePreview): Promise<TrackAlbumMoveApplyResult> {
+  await stopPlaybackIfCurrentTrack([preview.source.id])
+  const result = await window.api.tracks.applyAlbumMove({ previewId: preview.previewId })
+  await useLibraryStore.getState().refresh()
   return result
 }
 

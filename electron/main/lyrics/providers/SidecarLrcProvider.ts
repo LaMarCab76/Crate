@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, parse } from 'node:path'
 import type { LyricsResult } from '@shared/types/lyrics'
-import { isSyncedLrc } from '@shared/lyrics/lrc'
+import { isSyncedLrc } from '../../../../shared/lyrics/lrc.ts'
 
 // The conventional sidecar path: <dir>/<name>.lrc next to the audio file.
 export function sidecarPathFor(audioPath: string): string {

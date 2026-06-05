@@ -133,7 +133,6 @@ function SyncBaseSelector({
 const SYNC_PHASE_LABELS: Record<string, string> = {
   discovering: 'Buscando',
   reading: 'Leyendo',
-  fetching_lyrics: 'Buscando letras',
   copying: 'Copiando',
   deleting: 'Eliminando',
   refreshing: 'Actualizando',
@@ -1147,13 +1146,13 @@ export function DeviceSyncView({
   const [mode, setMode] = useState<DeviceSyncMode>('bidirectional_safe')
   const [musicRoot, setMusicRoot] = useState('')
   const [artworkMaxEdge, setArtworkMaxEdge] = useState('')
-  const [fetchMissingLyrics, setFetchMissingLyrics] = useState(true)
   const [optimizeArtworkOnSync, setOptimizeArtworkOnSync] = useState(true)
   const [sourceLibraryIds, setSourceLibraryIds] = useState<number[]>([])
   const [destinationFolderId, setDestinationFolderId] = useState<number | null>(null)
   const [libraryPickerOpen, setLibraryPickerOpen] = useState(false)
   const [pathError, setPathError] = useState<string | null>(null)
   const [applyResult, setApplyResult] = useState<DeviceSyncApplyResult | null>(null)
+  const [planRequestedFullSync, setPlanRequestedFullSync] = useState(false)
   // Per-action winning side the wizard mutates (global / artist / album / track).
   // The apply payload is derived from this via buildSelectionFromSides.
   const [actionSides, setActionSides] = useState<Record<string, DeviceSyncActionSide>>({})
@@ -1188,7 +1187,6 @@ export function DeviceSyncView({
     setMode(selectedDevice.defaultMode)
     setMusicRoot(selectedDevice.musicRoot)
     setArtworkMaxEdge(String(selectedDevice.artworkMaxEdge))
-    setFetchMissingLyrics(selectedDevice.fetchMissingLyrics)
     setOptimizeArtworkOnSync(selectedDevice.optimizeArtworkOnSync)
     const folderIds = new Set(folders.map(folder => folder.id))
     const nextSourceIds = selectedDevice.sourceLibraryIds.length > 0
@@ -1207,11 +1205,15 @@ export function DeviceSyncView({
     selectedDevice?.musicRoot,
     selectedDevice?.pcTargetPath,
     selectedDevice?.artworkMaxEdge,
-    selectedDevice?.fetchMissingLyrics,
     selectedDevice?.optimizeArtworkOnSync,
     selectedDevice?.sourceLibraryIds,
     folders,
   ])
+
+  useEffect(() => {
+    if (!selectedDevice?.id) return
+    setPlanRequestedFullSync(false)
+  }, [selectedDevice?.id])
 
   const devicePendingJournals = useMemo(
     () => selectedDevice ? pendingJournals.filter(journal => journal.deviceId === selectedDevice.id) : [],
@@ -1270,6 +1272,10 @@ export function DeviceSyncView({
     [selectedSourceFolders, destinationFolderId],
   )
   const planPcTargetPath = destinationFolder?.path ?? selectedDevice?.pcTargetPath ?? ''
+  const activeSyncModeLabel = selectedDevice?.lastSyncAt && !planRequestedFullSync
+    ? 'Sync incremental'
+    : 'Resync completo'
+  const lastSyncLabel = selectedDevice?.lastSyncAt ? formatDate(selectedDevice.lastSyncAt) : 'No registrado'
 
   // Keep the destination pointing at an included library.
   useEffect(() => {
@@ -1300,7 +1306,6 @@ export function DeviceSyncView({
     normalizedMusicRoot !== selectedDevice.musicRoot ||
     planPcTargetPath !== selectedDevice.pcTargetPath ||
     artworkMaxEdgeValue !== selectedDevice.artworkMaxEdge ||
-    fetchMissingLyrics !== selectedDevice.fetchMissingLyrics ||
     !sameNumberSet(sourceLibraryIds, originalLibraryIds)
   )
 
@@ -1346,15 +1351,15 @@ export function DeviceSyncView({
       musicRoot: normalizedMusicRoot,
       pcTargetPath: planPcTargetPath || selectedDevice.pcTargetPath,
       artworkMaxEdge: artworkMaxEdgeValue,
-      fetchMissingLyrics,
       sourceLibraryIds: selectedSourceFolders.map(folder => folder.id),
     })
-  }, [selectedDevice, configValid, updateSettings, mode, normalizedMusicRoot, planPcTargetPath, artworkMaxEdgeValue, fetchMissingLyrics, selectedSourceFolders])
+  }, [selectedDevice, configValid, updateSettings, mode, normalizedMusicRoot, planPcTargetPath, artworkMaxEdgeValue, selectedSourceFolders])
 
-  const buildPlan = useCallback(async () => {
+  const buildPlan = useCallback(async (fullSync = false) => {
     if (!selectedDevice || !configValid) return
     setApplyResult(null)
-    await planSync(mode, planPcTargetPath || selectedDevice.pcTargetPath)
+    setPlanRequestedFullSync(fullSync)
+    await planSync(mode, planPcTargetPath || selectedDevice.pcTargetPath, fullSync)
   }, [selectedDevice, configValid, planSync, mode, planPcTargetPath])
 
   // Persisted config signature: changing any of these auto-saves and (when the
@@ -1364,7 +1369,6 @@ export function DeviceSyncView({
     mode,
     normalizedMusicRoot,
     artworkMaxEdgeValue,
-    fetchMissingLyrics ? '1' : '0',
     [...sourceLibraryIds].sort((a, b) => a - b).join(','),
     planPcTargetPath,
   ].join('|')
@@ -1499,6 +1503,7 @@ export function DeviceSyncView({
           {selectedDevice.isAvailable ? 'Connected' : 'Offline'}
         </span>
         <p title={selectedDevice.rootPath}>{selectedDevice.rootPath} · {stats.trackCount.toLocaleString()} temas indexados</p>
+        <p>Última sync: {lastSyncLabel} · {activeSyncModeLabel}</p>
         {headerProgress && (
           <div className="device-sync-inline-progress">
             <span>{SYNC_PHASE_LABELS[headerProgress.phase] ?? headerProgress.phase} · {progressText(progressCompleted, progressTotal)}</span>
@@ -1685,7 +1690,7 @@ export function DeviceSyncView({
               />
             </label>
             <div className="device-library-note compact">
-              Las letras locales disponibles se copian con el MP3. La sincronización no descarga letras nuevas.
+              Las letras quedan locales a la biblioteca y al reproductor. Device Sync no copia ni descarga letras.
             </div>
           </div>
         </div>
@@ -1720,8 +1725,16 @@ export function DeviceSyncView({
                 <h2>Cambios a sincronizar</h2>
                 <span>Calculando las diferencias del dispositivo…</span>
               </div>
-              <button className="btn" type="button" disabled={loading || !selectedDevice.isAvailable} onClick={() => void buildPlan()}>
+              <button className="btn" type="button" disabled={loading || !selectedDevice.isAvailable} onClick={() => void buildPlan(false)}>
                 <Icon name="rotate" size={12} /> Recalcular
+              </button>
+              <button
+                className="btn ghost"
+                type="button"
+                disabled={loading || !selectedDevice.isAvailable}
+                onClick={() => void buildPlan(true)}
+              >
+                <Icon name="sync" size={12} /> Resync completo
               </button>
             </div>
             <div className="device-empty compact">{loading ? 'Calculando cambios…' : 'No hay cambios calculados todavía.'}</div>
@@ -1734,9 +1747,17 @@ export function DeviceSyncView({
                 className="btn ghost"
                 type="button"
                 disabled={loading || busy || !selectedDevice.isAvailable}
-                onClick={() => void buildPlan()}
+                onClick={() => void buildPlan(false)}
               >
                 <Icon name="rotate" size={12} /> Recalcular
+              </button>
+              <button
+                className="btn ghost"
+                type="button"
+                disabled={loading || busy || !selectedDevice.isAvailable}
+                onClick={() => void buildPlan(true)}
+              >
+                <Icon name="sync" size={12} /> Resync completo
               </button>
             </div>
 

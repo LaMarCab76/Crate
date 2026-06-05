@@ -123,7 +123,6 @@ const DEVICE_SCAN_PHASE_LABELS: Record<DeviceScanProgressEvent['phase'], string>
 }
 
 const DEVICE_SYNC_PHASE_LABELS: Record<DeviceSyncProgressEvent['phase'], string> = {
-  fetching_lyrics: 'Buscando letras',
   copying: 'Copiando',
   deleting: 'Eliminando',
   refreshing: 'Actualizando',
@@ -476,6 +475,7 @@ export function activityFromArtworkAnalysisProgress(event: DeviceArtworkAnalysis
     actionIds: ['open-device-sync'],
   }
 }
+
 
 export function activityFromUnknownVolume(volume: DeviceUnknownVolume): ActivityUpsert {
   return {

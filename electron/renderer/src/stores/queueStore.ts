@@ -28,11 +28,16 @@ interface QueueState {
   history: Track[]
   isTrackTransitioning: boolean
   transitionTarget: Track | null
+  queueReorderMode: boolean
 
   playNow(track: Track, context?: Track[]): Promise<void>
   next(opts?: { auto?: boolean }): Promise<void>
   previous(): Promise<void>
   jumpTo(index: number): Promise<void>
+  setQueueReorderMode(enabled: boolean): void
+  moveQueueTrack(fromIndex: number, toIndex: number): void
+  moveTrackToNext(index: number): void
+  moveTrackToEnd(index: number): void
   togglePlay(): Promise<void>
   seek(positionSec: number): Promise<void>
   setVolume(v: number): Promise<void>
@@ -61,6 +66,17 @@ function shouldApplyCrossfadeTransition(): boolean {
 function parseCrossfadeSeconds(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 0
   return Math.max(0, value)
+}
+
+function clearGaplessQueuePreloadState(): void {
+  gaplessPreloadFiredFor = null
+  gaplessPreloadRetryAtByPath.clear()
+  void window.api.audio.clearNext()
+}
+
+function clampQueueIndex(index: number, min: number, max: number): number {
+  if (!Number.isFinite(index)) return min
+  return Math.max(min, Math.min(max, index))
 }
 
 function getCrossfadeTimingsMs(): { fadeOutMs: number; fadeInMs: number } {
@@ -306,6 +322,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   history: [],
   isTrackTransitioning: false,
   transitionTarget: null,
+  queueReorderMode: false,
 
   async playNow(track: Track, context?: Track[]) {
     const tracks = context ?? [track]
@@ -313,7 +330,11 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     const fadeTransition = shouldApplyCrossfadeTransition()
     cancelTrackPreparation()
     const token = beginTrackPreparation(track, true, true)
-    set({ tracks, currentIndex: Math.max(0, currentIndex), history: [] })
+    set({
+      tracks,
+      currentIndex: Math.max(0, currentIndex),
+      history: [],
+    })
     gaplessPreloadFiredFor = null
     gaplessPreloadRetryAtByPath.clear()
     try {
@@ -393,7 +414,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       if (fadeTransition) {
         await crossfadeToTrack(prev, token, result => {
           applyStreamLoadResultForTrack(prev, result)
-        })
+        }, true)
       } else {
         await window.api.audio.clearNext()
         await loadAndPlay(prev)
@@ -428,7 +449,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       if (fadeTransition) {
         await crossfadeToTrack(target, token, result => {
           applyStreamLoadResultForTrack(target, result)
-        })
+        }, true)
       } else {
         await window.api.audio.clearNext()
         await loadAndPlay(target)
@@ -446,6 +467,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
   async seek(positionSec: number) {
     await window.api.audio.seek(positionSec)
+    clearGaplessQueuePreloadState()
     usePlaybackStore.setState({ positionSec })
   },
 
@@ -456,14 +478,65 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
   clear() {
     cancelTrackPreparation()
-    set({ tracks: [], currentIndex: -1, history: [] })
+    set({
+      tracks: [],
+      currentIndex: -1,
+      history: [],
+    })
     gaplessPreloadRetryAtByPath.clear()
     void window.api.audio.clearNext()
   },
 
   setRepeat(mode) { set({ repeat: mode }) },
   toggleShuffle() { set(s => ({ shuffle: !s.shuffle })) },
+
+  setQueueReorderMode(enabled) {
+    set({ queueReorderMode: enabled })
+  },
+
+  moveQueueTrack(fromIndex, toIndex) {
+    const { tracks, currentIndex } = get()
+    if (tracks.length === 0) return
+
+    const minIndex = 0
+    const maxIndex = tracks.length - 1
+    const from = clampQueueIndex(fromIndex, minIndex, maxIndex)
+    const to = clampQueueIndex(toIndex, minIndex, maxIndex)
+
+    if (from === to || from <= currentIndex || to <= currentIndex) return
+
+    const next = [...tracks]
+    const [moved] = next.splice(from, 1)
+    if (!moved) return
+
+    next.splice(to, 0, moved)
+
+    set({ tracks: next })
+    clearGaplessQueuePreloadState()
+  },
+
+  moveTrackToNext(index) {
+    const { tracks, currentIndex } = get()
+    if (tracks.length === 0) return
+    const from = clampQueueIndex(index, 0, tracks.length - 1)
+    if (from <= currentIndex) return
+    moveQueueTrackWithValidation(from, currentIndex + 1)
+  },
+
+  moveTrackToEnd(index) {
+    const { tracks, currentIndex } = get()
+    if (tracks.length === 0) return
+    const from = clampQueueIndex(index, 0, tracks.length - 1)
+    if (from <= currentIndex) return
+    moveQueueTrackWithValidation(from, tracks.length - 1)
+  },
 }))
+
+function moveQueueTrackWithValidation(fromIndex: number, toIndex: number): void {
+  const state = useQueueStore.getState()
+  const to = clampQueueIndex(toIndex, 0, Math.max(0, state.tracks.length - 1))
+  state.moveQueueTrack(fromIndex, to)
+}
 
 // ---------------- Main-process event wiring ----------------
 
@@ -529,6 +602,9 @@ export function useQueueIndex(): number {
 }
 export function useQueueHistory(): Track[] {
   return useQueueStore(s => s.history)
+}
+export function useQueueReorderMode(): boolean {
+  return useQueueStore(s => s.queueReorderMode)
 }
 export function useQueueUpNext(): Track[] {
   // useShallow compares element-wise so the returned array gets memoized and

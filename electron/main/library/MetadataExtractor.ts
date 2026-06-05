@@ -1,7 +1,11 @@
 import { parseFile } from 'music-metadata'
 import { basename, extname } from 'node:path'
 import { stat } from 'node:fs/promises'
-import { saveArtwork, type ArtworkSaveResult } from './ArtworkCache'
+import { saveArtwork, type ArtworkSaveResult } from './ArtworkCache.ts'
+
+export interface ReadTrackMetadataOptions {
+  artwork?: boolean
+}
 
 export interface TrackMetadata {
   title: string
@@ -59,16 +63,32 @@ function parseBpm(v: unknown): number | null {
   return Number.isFinite(bpm) && bpm > 0 ? Math.round(bpm) : null
 }
 
-export async function readTrackMetadata(filePath: string): Promise<TrackMetadata> {
+export function shouldReadEmbeddedArtwork(options: ReadTrackMetadataOptions = {}): boolean {
+  return options.artwork !== false
+}
+
+export function metadataParserOptions(options: ReadTrackMetadataOptions = {}): {
+  skipCovers: boolean
+  skipPostHeaders: boolean
+  includeChapters: boolean
+} {
+  return {
+    skipCovers: !shouldReadEmbeddedArtwork(options),
+    skipPostHeaders: false,
+    includeChapters: false,
+  }
+}
+
+export async function readTrackMetadata(
+  filePath: string,
+  options: ReadTrackMetadataOptions = {},
+): Promise<TrackMetadata> {
   const stats = await stat(filePath)
   const filename = basename(filePath)
   const fallbackTitle = filename.replace(/\.[^.]+$/, '')
+  const readArtwork = shouldReadEmbeddedArtwork(options)
 
-  const meta = await parseFile(filePath, {
-    skipCovers: false,
-    skipPostHeaders: false,
-    includeChapters: false,
-  })
+  const meta = await parseFile(filePath, metadataParserOptions(options))
 
   const common = meta.common
   const format = meta.format
@@ -88,7 +108,7 @@ export async function readTrackMetadata(filePath: string): Promise<TrackMetadata
 
   let artwork: ArtworkSaveResult | null = null
   const pictures = common.picture
-  if (pictures && pictures.length > 0) {
+  if (readArtwork && pictures && pictures.length > 0) {
     const p = pictures[0]
     try {
       artwork = saveArtwork(Buffer.from(p.data), p.format)

@@ -20,9 +20,15 @@ export class AlbumRepo {
         AND (year IS ? OR year = ?)
     `)
     this.stmtById = db.prepare<[number], DbAlbum>(`SELECT * FROM albums WHERE id = ?`)
-    this.stmtAll = db.prepare<unknown[], DbAlbum>(`SELECT * FROM albums ORDER BY sort_name COLLATE NOCASE ASC`)
+    this.stmtAll = db.prepare<unknown[], DbAlbum>(`
+      SELECT * FROM albums
+      WHERE track_count > 0
+      ORDER BY sort_name COLLATE NOCASE ASC
+    `)
     this.stmtByArtist = db.prepare<[string], DbAlbum>(`
-      SELECT * FROM albums WHERE album_artist = ? ORDER BY year DESC
+      SELECT * FROM albums
+      WHERE album_artist = ? AND track_count > 0
+      ORDER BY year DESC
     `)
     this.stmtInsert = db.prepare(`
       INSERT INTO albums (title, normalized_name, sort_name, album_artist, year, date_added)

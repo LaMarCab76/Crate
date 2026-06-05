@@ -3,7 +3,7 @@ import { Artwork } from './Artwork'
 import { CodecStrip } from './CodecStrip'
 import { Icon } from './Icon'
 import { TrackLoadingOverlay } from './TrackLoadingOverlay'
-import { fmtTime } from '@renderer/utils/format'
+import { formatPlaybackTimePair, splitArtist, titleWithFeatured } from '@renderer/utils/format'
 import {
   toggleTrackFavorite,
   useAlbumByUiId,
@@ -126,6 +126,8 @@ export function PlayerBottomBar({
 
   if (!track) return null
 
+  const { primary: artistPrimary, featured: artistFeatured } = splitArtist(track.artist)
+  const barTitle = titleWithFeatured(track.t, artistFeatured)
   const tint =
     playerTintSource === 'artwork' ? artworkTint
     : playerTintSource === 'preset' || playerTintSource === 'custom' ? playerTintColor
@@ -134,6 +136,7 @@ export function PlayerBottomBar({
   const progress = durationSec > 0 ? positionSec / durationSec : 0
   const displayProgress = dragProgress ?? progress
   const displayPositionSec = dragProgress !== null ? dragProgress * durationSec : positionSec
+  const displayTimes = formatPlaybackTimePair(displayPositionSec, durationSec)
   const canOpenAlbum = album != null && onOpenAlbum != null && !album.id.startsWith('a-unresolved-')
   const canOpenArtist = artist != null && onOpenArtist != null
   const showFallbackBadge = streamSource === 'file' && streamSourceState === 'promoting'
@@ -255,8 +258,8 @@ export function PlayerBottomBar({
           <div className="fill" style={{ width: `${displayProgress * 100}%` }} />
         </div>
         <div className="pb-progress-times" aria-hidden="true">
-          <span>{fmtTime(displayPositionSec)}</span>
-          <span>-{fmtTime(Math.max(0, durationSec - displayPositionSec))}</span>
+          <span>{displayTimes.elapsedText}</span>
+          <span>-{displayTimes.remainingText}</span>
         </div>
       </div>
 
@@ -277,10 +280,10 @@ export function PlayerBottomBar({
                 }}
                 title="Abrir álbum"
               >
-                {track.t}
+                {barTitle}
               </button>
             ) : (
-              <div className="t">{track.t}</div>
+              <div className="t">{barTitle}</div>
             )}
             <div className="pb-meta-line">
               <div className="a">
@@ -294,10 +297,10 @@ export function PlayerBottomBar({
                     }}
                     title="Abrir artista"
                   >
-                    {track.artist}
+                    {artistPrimary}
                   </button>
                 ) : (
-                  track.artist
+                  artistPrimary
                 )}
                 {' · '}
                 {canOpenAlbum ? (

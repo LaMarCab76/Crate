@@ -10,6 +10,7 @@ import { readTrackMetadata, type TrackMetadata } from './MetadataExtractor'
 import { artworkAbsolutePath } from './ArtworkCache'
 import { writeTrackMetadata, type MetadataArtworkPayload } from './MetadataWriter'
 import { getLibraryBackup } from '../services/LibraryBackup'
+import { getMusicBrainzMetadataClient } from './MusicBrainzMetadata'
 import type { DbTrack } from '@shared/types/db'
 import type {
   MetadataCompletionApplyRequest,
@@ -562,7 +563,7 @@ export class MetadataCompletionService {
     }
 
     try {
-      const result = await this.fetchMusicBrainz({
+      const result = await getMusicBrainzMetadataClient().lookupRecordingOnAlbum({
         title: queryTitle,
         artist: queryArtist,
         album: isMissingText(queryAlbum) ? null : queryAlbum,

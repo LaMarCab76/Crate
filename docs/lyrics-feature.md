@@ -5,8 +5,10 @@
 > Use this as the spec to rebuild it in Electron/TypeScript.
 >
 > Current Electron policy: lyrics are written as mandatory `.lrc` sidecars next to
-> the audio file and are copied with device sync. The app may read embedded lyrics
-> for compatibility, but does not expose writing lyrics into audio files.
+> the audio file for local library/playback use. Device Sync does not copy/import
+> `.lrc` sidecars or read embedded lyrics for propagation. The app may read
+> embedded lyrics for compatibility, but does not expose writing lyrics into
+> audio files.
 
 ## Overview
 

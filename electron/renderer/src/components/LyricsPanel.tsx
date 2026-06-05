@@ -259,16 +259,13 @@ function splitLyricsLineForWidth(text: string, availableWidth: number, measureNo
   return relaxed.reduce((best, c) => (c.firstWidth > best.firstWidth ? c : best)).split
 }
 
-function lyricsLineAvailableWidth(listNode: HTMLOListElement, measureNode: HTMLLIElement): number {
+function lyricsLineAvailableWidth(listNode: HTMLOListElement): number {
   const listStyle = window.getComputedStyle(listNode)
-  const measureStyle = window.getComputedStyle(measureNode)
   return Math.max(
     0,
     listNode.clientWidth -
       Number.parseFloat(listStyle.paddingLeft || '0') -
-      Number.parseFloat(listStyle.paddingRight || '0') -
-      Number.parseFloat(measureStyle.paddingLeft || '0') -
-      Number.parseFloat(measureStyle.paddingRight || '0'),
+      Number.parseFloat(listStyle.paddingRight || '0'),
   )
 }
 
@@ -596,7 +593,7 @@ function LyricsPanelContent({
     const measureNode = activeMeasureRef.current
     if (!listNode || !measureNode) return
 
-    const availableWidth = lyricsLineAvailableWidth(listNode, measureNode)
+    const availableWidth = lyricsLineAvailableWidth(listNode)
     const next = new Map<number, LyricsLineSplit>()
 
     for (const { line, index } of visibleLines) {

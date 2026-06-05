@@ -1,6 +1,6 @@
 import { type CSSProperties, type MouseEvent, useState } from 'react'
 import { Icon } from './Icon'
-import { fmtTime } from '@renderer/utils/format'
+import { formatPlaybackTimePair } from '@renderer/utils/format'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
 import { useQueueStore } from '@renderer/stores/queueStore'
 
@@ -29,6 +29,7 @@ export function PlayerStage() {
   const progress = durationSec > 0 ? positionSec / durationSec : 0
   const displayProgress = dragProgress ?? progress
   const displayPositionSec = dragProgress !== null ? dragProgress * durationSec : positionSec
+  const displayTimes = formatPlaybackTimePair(displayPositionSec, durationSec)
   const cycleRepeat = () => {
     setRepeat(repeat === 'off' ? 'all' : repeat === 'all' ? 'one' : 'off')
   }
@@ -91,11 +92,11 @@ export function PlayerStage() {
       </div>
 
       <div className="np-progress">
-        <span className="time">{fmtTime(displayPositionSec)}</span>
+        <span className="time">{displayTimes.elapsedText}</span>
         <div className="np-bar-track" onMouseDown={onProgressMouseDown} role="slider" tabIndex={0}>
           <div className="np-bar-fill" style={{ width: `${displayProgress * 100}%` }} />
         </div>
-        <span className="time">-{fmtTime(Math.max(0, durationSec - displayPositionSec))}</span>
+        <span className="time">-{displayTimes.remainingText}</span>
       </div>
 
       <div className="np-stage-volume pp-volume">
