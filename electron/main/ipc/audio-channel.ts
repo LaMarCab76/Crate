@@ -7,6 +7,7 @@ import { getExclusiveModeManager } from '../audio/ExclusiveModeManager'
 import { getPlaybackAnalysisService } from '../audio/PlaybackAnalysisService'
 import { broadcast } from './events'
 import { getRepos } from '../db/repositories'
+import { getOneDriveClient } from '../cloud/OneDriveClient'
 import { estimateLufsFromAnalysis, type LevelerLoudness } from '@shared/constants/leveler'
 import type { DbTrack } from '@shared/types/db'
 import type {
@@ -217,7 +218,7 @@ function requirePath(value: unknown): string {
   return value
 }
 
-function assertTrackPathMatches(path: string, trackId: unknown, channel: string): { duration: number } | null {
+function assertTrackPathMatches(path: string, trackId: unknown, channel: string): DbTrack | null {
   const normalizedTrackId = normalizeTrackId(trackId)
   if (normalizedTrackId == null) return null
 
@@ -225,7 +226,22 @@ function assertTrackPathMatches(path: string, trackId: unknown, channel: string)
   if (!track || track.path !== path) {
     throw new Error(`${channel}: path does not match the track record`)
   }
-  return { duration: track.duration }
+  return track
+}
+
+// Build the AudioEngine cloud options for a OneDrive-backed track. Resolves the
+// file size from the DB; falls back to a Graph lookup when the row has none.
+async function resolveCloudLoadOptions(
+  track: DbTrack,
+): Promise<{ cloudRef: { driveId: string; itemId: string }; cloudSizeBytes: number } | null> {
+  if (track.source !== 'onedrive' || !track.cloud_drive_id || !track.cloud_item_id) return null
+  const cloudRef = { driveId: track.cloud_drive_id, itemId: track.cloud_item_id }
+  let cloudSizeBytes = track.file_size ?? 0
+  if (!cloudSizeBytes || cloudSizeBytes <= 0) {
+    const info = await getOneDriveClient().getDownloadUrl(cloudRef.driveId, cloudRef.itemId)
+    cloudSizeBytes = info.size
+  }
+  return { cloudRef, cloudSizeBytes }
 }
 
 export function registerAudioChannel(): void {
@@ -244,11 +260,18 @@ export function registerAudioChannel(): void {
     // DB record, so a compromised renderer can't point the engine at an arbitrary file.
     const path = requirePath(payload?.path)
     const track = assertTrackPathMatches(path, payload?.trackId, 'audio:load')
-    const loadResult = await engine.load(path, { estimatedDurationSec: track?.duration ?? null })
+    const cloud = track ? await resolveCloudLoadOptions(track) : null
+    const loadResult = await engine.load(path, {
+      estimatedDurationSec: track?.duration ?? null,
+      cloudRef: cloud?.cloudRef,
+      cloudSizeBytes: cloud?.cloudSizeBytes ?? null,
+    })
     getGapless().bindCurrentTrackEnd()
     eq.reapply(engine.getCurrentStream())
     broadcastEqState()
     applyLevelerForCurrentTrack()
+    // Cloud tracks load straight into memory (no file source), so the disk→memory
+    // promotion only applies to local file streams.
     if (loadResult.source === 'file') promoteCurrentFileStreamToMemory(path, track?.duration ?? null)
     return serializeStreamLoadResult(loadResult)
   })
@@ -321,8 +344,9 @@ export function registerAudioChannel(): void {
 
   ipcMain.handle('audio:preloadNext', async (_, payload: { path: string; trackId?: number | null }) => {
     const path = requirePath(payload?.path)
-    assertTrackPathMatches(path, payload?.trackId, 'audio:preloadNext')
-    const result = await getGapless().preloadNext(path)
+    const track = assertTrackPathMatches(path, payload?.trackId, 'audio:preloadNext')
+    const cloud = track ? await resolveCloudLoadOptions(track) : null
+    const result = await getGapless().preloadNext(path, cloud ?? undefined)
     return result
   })
   ipcMain.handle('audio:clearNext', () => getGapless().clearNext())

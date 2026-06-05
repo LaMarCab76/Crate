@@ -91,6 +91,8 @@ class LibraryReconciler {
   async scanAll(reason: LibraryScanReason): Promise<LibraryScanRun[]> {
     const runs: LibraryScanRun[] = []
     for (const folder of this.repos.folders.list()) {
+      // Cloud folders are owned by the OneDrive delta poller, not the local reconciler.
+      if (folder.source === 'onedrive') continue
       runs.push(await this.scanFolder(folder.id, reason))
     }
     this.purgeOldLogs()
@@ -120,6 +122,14 @@ class LibraryReconciler {
   private async scanFolderNow(folderId: number, reason: LibraryScanReason): Promise<LibraryScanRun> {
     const folder = this.repos.folders.getById(folderId)
     if (!folder) throw new Error(`Folder ${folderId} no longer exists`)
+
+    // OneDrive folders are reconciled by the cloud delta poller, never here. Their
+    // path is onedrive://… so existsSync is always false — running the local
+    // reconciler would treat the root as "missing" and delete every cloud track.
+    if (folder.source === 'onedrive') {
+      const run = this.repos.libraryScanLog.startRun({ folderId: folder.id, reason })
+      return this.repos.libraryScanLog.finishRun({ id: run.id, status: 'completed', ...emptyCounts() })
+    }
 
     const run = this.repos.libraryScanLog.startRun({ folderId: folder.id, reason })
     const counts = emptyCounts()

@@ -99,6 +99,15 @@ import type {
   ProviderCredentialsPayload,
   ServiceTutorialState,
 } from '@shared/types/downloads'
+import type {
+  CloudAccountStatus,
+  CloudFolderRef,
+  CloudMoveProgressEvent,
+  CloudPrefs,
+  CloudSyncProgressEvent,
+  MoveToCloudRequest,
+  RemoteFolderEntry,
+} from '@shared/types/cloud'
 
 function subscribe<T>(channel: string, handler: (payload: T) => void): EventOff {
   const listener = (_event: IpcRendererEvent, payload: T) => handler(payload)
@@ -409,6 +418,31 @@ const api: Api = {
       ipcRenderer.invoke('downloads:retry', jobId) as Promise<DownloadJob | null>,
     onProgress: (h) => subscribe<DownloadProgressEvent>('downloads:progress', h),
     onJobsChanged: (h) => subscribe<DownloadJobsChangedEvent>('downloads:jobs-changed', h),
+  },
+  cloud: {
+    accountStatus: () =>
+      ipcRenderer.invoke('cloud:account:status') as Promise<CloudAccountStatus>,
+    connect: () =>
+      ipcRenderer.invoke('cloud:account:connect') as Promise<CloudAccountStatus>,
+    disconnect: () =>
+      ipcRenderer.invoke('cloud:account:disconnect') as Promise<CloudAccountStatus>,
+    setClientId: (clientId: string) =>
+      ipcRenderer.invoke('cloud:account:setClientId', clientId) as Promise<CloudAccountStatus>,
+    getPrefs: () =>
+      ipcRenderer.invoke('cloud:prefs:get') as Promise<CloudPrefs>,
+    setPrefs: (patch: Partial<CloudPrefs>) =>
+      ipcRenderer.invoke('cloud:prefs:set', patch) as Promise<CloudPrefs>,
+    listRemoteFolders: (driveId: string | null, itemId: string | null) =>
+      ipcRenderer.invoke('cloud:folders:listRemote', driveId, itemId) as Promise<RemoteFolderEntry[]>,
+    addFolder: (driveId: string, itemId: string, name: string) =>
+      ipcRenderer.invoke('cloud:folders:add', driveId, itemId, name) as Promise<CloudFolderRef>,
+    syncFolder: (folderId: number) =>
+      ipcRenderer.invoke('cloud:folders:sync', folderId) as Promise<void>,
+    moveToCloud: (req: MoveToCloudRequest) =>
+      ipcRenderer.invoke('cloud:track:moveToCloud', req) as Promise<void>,
+    onAccountChanged: (h) => subscribe<CloudAccountStatus>('cloud:account:changed', h),
+    onSyncProgress: (h) => subscribe<CloudSyncProgressEvent>('cloud:sync:progress', h),
+    onMoveProgress: (h) => subscribe<CloudMoveProgressEvent>('cloud:move:progress', h),
   },
   updates: {
     getState: () =>

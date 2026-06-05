@@ -1,4 +1,4 @@
-import { parseFile } from 'music-metadata'
+import { parseBuffer, parseFile, type IAudioMetadata } from 'music-metadata'
 import { basename, extname } from 'node:path'
 import { stat } from 'node:fs/promises'
 import { saveArtwork, type ArtworkSaveResult } from './ArtworkCache.ts'
@@ -79,41 +79,30 @@ export function metadataParserOptions(options: ReadTrackMetadataOptions = {}): {
   }
 }
 
-export async function readTrackMetadata(
-  filePath: string,
-  options: ReadTrackMetadataOptions = {},
-): Promise<TrackMetadata> {
-  const stats = await stat(filePath)
-  const filename = basename(filePath)
-  const fallbackTitle = filename.replace(/\.[^.]+$/, '')
-  const readArtwork = shouldReadEmbeddedArtwork(options)
-
-  const meta = await parseFile(filePath, metadataParserOptions(options))
-
+// Shared mapping from a parsed music-metadata result to our TrackMetadata. Used
+// by both the local-file (parseFile) and cloud-buffer (parseBuffer) readers; only
+// the byte source and the file stats (size/mtime) differ between them.
+function mapParsedMetadata(
+  meta: IAudioMetadata,
+  ctx: { nameForFormat: string; fileSize: number | null; dateModified: string | null; readArtwork: boolean },
+): TrackMetadata {
   const common = meta.common
   const format = meta.format
+  const fallbackTitle = basename(ctx.nameForFormat).replace(/\.[^.]+$/, '')
 
   const title = asString(common.title, fallbackTitle).trim() || fallbackTitle
   const artist = asString(common.artist || joinList(common.artists), 'Unknown Artist').trim()
   const album = asString(common.album, 'Unknown Album').trim()
   const albumArtist = common.albumartist ? String(common.albumartist).trim() : null
-  const composer = joinList(common.composer)
-  const genre = joinList(common.genre)
-  const year = common.year != null ? String(common.year) : asString(common.date).slice(0, 4)
-  const trackNumber = common.track?.no ?? null
-  const totalTracks = common.track?.of ?? null
-  const discNumber = common.disk?.no ?? null
-  const totalDiscs = common.disk?.of ?? null
-  const musicalKey = asString(common.key).trim() || null
 
   let artwork: ArtworkSaveResult | null = null
   const pictures = common.picture
-  if (readArtwork && pictures && pictures.length > 0) {
+  if (ctx.readArtwork && pictures && pictures.length > 0) {
     const p = pictures[0]
     try {
       artwork = saveArtwork(Buffer.from(p.data), p.format)
     } catch (err) {
-      console.warn(`[metadata] artwork save failed for ${filePath}:`, (err as Error).message)
+      console.warn(`[metadata] artwork save failed for ${ctx.nameForFormat}:`, (err as Error).message)
     }
   }
 
@@ -122,27 +111,69 @@ export async function readTrackMetadata(
     artist,
     album,
     albumArtist,
-    composer,
-    genre,
-    year,
-    trackNumber,
-    totalTracks,
-    discNumber,
-    totalDiscs,
+    composer: joinList(common.composer),
+    genre: joinList(common.genre),
+    year: common.year != null ? String(common.year) : asString(common.date).slice(0, 4),
+    trackNumber: common.track?.no ?? null,
+    totalTracks: common.track?.of ?? null,
+    discNumber: common.disk?.no ?? null,
+    totalDiscs: common.disk?.of ?? null,
     duration: format.duration ?? 0,
-    format: inferFormat(filePath, format.container ?? format.codec),
+    format: inferFormat(ctx.nameForFormat, format.container ?? format.codec),
     codec: format.codec ?? null,
     bitrate: format.bitrate ?? null,
     sampleRate: format.sampleRate ?? null,
     bitDepth: format.bitsPerSample ?? null,
     channels: format.numberOfChannels ?? null,
-    fileSize: stats.size,
+    fileSize: ctx.fileSize,
     bpm: parseBpm(common.bpm),
-    musicalKey,
-    dateModified: stats.mtime.toISOString(),
+    musicalKey: asString(common.key).trim() || null,
+    dateModified: ctx.dateModified,
     artwork,
     replayGainTrack: parseGainDb(common.replaygain_track_gain?.dB?.toString()),
     replayGainAlbum: parseGainDb(common.replaygain_album_gain?.dB?.toString()),
     isCompilation: Boolean(common.compilation),
   }
+}
+
+export async function readTrackMetadata(
+  filePath: string,
+  options: ReadTrackMetadataOptions = {},
+): Promise<TrackMetadata> {
+  const stats = await stat(filePath)
+  const meta = await parseFile(filePath, metadataParserOptions(options))
+  return mapParsedMetadata(meta, {
+    nameForFormat: filePath,
+    fileSize: stats.size,
+    dateModified: stats.mtime.toISOString(),
+    readArtwork: shouldReadEmbeddedArtwork(options),
+  })
+}
+
+// Parse metadata from an in-RAM buffer (e.g. a OneDrive header prefix or full
+// file fetched into memory). For containers whose tag atoms sit at the end of the
+// file (some M4A/MP4), a truncated prefix may parse incompletely — callers should
+// treat missing technical fields as "unknown" rather than authoritative.
+export async function readTrackMetadataFromBuffer(
+  buffer: Uint8Array,
+  opts: {
+    filename: string
+    mimeType?: string
+    fileSize?: number | null
+    dateModified?: string | null
+    options?: ReadTrackMetadataOptions
+  },
+): Promise<TrackMetadata> {
+  const options = opts.options ?? {}
+  const meta = await parseBuffer(
+    buffer,
+    { mimeType: opts.mimeType, path: opts.filename, size: opts.fileSize ?? undefined },
+    metadataParserOptions(options),
+  )
+  return mapParsedMetadata(meta, {
+    nameForFormat: opts.filename,
+    fileSize: opts.fileSize ?? null,
+    dateModified: opts.dateModified ?? null,
+    readArtwork: shouldReadEmbeddedArtwork(options),
+  })
 }

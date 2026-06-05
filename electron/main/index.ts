@@ -8,11 +8,13 @@ import { disposeGapless, registerAudioChannel } from './ipc/audio-channel'
 import { registerLyricsChannel } from './ipc/lyrics-channel'
 import { registerDevicesChannel } from './ipc/devices-channel'
 import { registerDownloadsChannel } from './ipc/downloads-channel'
+import { registerCloudChannel } from './ipc/cloud-channel'
 import { registerUpdatesChannel } from './ipc/updates-channel'
 import { registerProtocolHandlers, registerProtocolSchemes } from './protocol'
 import { getDeviceSyncService } from './devices/DeviceSyncService'
 import { getFolderWatcher } from './library/FolderWatcher'
 import { getLibraryReconciler } from './library/LibraryReconciler'
+import { getOneDriveLibraryService } from './cloud/OneDriveLibraryService'
 import { getLyricsBackfillService } from './lyrics/LyricsBackfillService'
 import { getLyricsIndexService } from './lyrics/LyricsIndexService'
 import { getLyricsSettings } from './lyrics/LyricsSettings'
@@ -140,6 +142,7 @@ app.whenReady().then(async () => {
   registerLyricsChannel()
   registerDevicesChannel()
   registerDownloadsChannel()
+  registerCloudChannel()
   registerUpdatesChannel()
   getDeviceSyncService().startVolumeMonitor()
 
@@ -154,6 +157,10 @@ app.whenReady().then(async () => {
   // without requiring a rescan.
   getFolderWatcher().startAll()
   reconciler.startBackgroundSweep()
+
+  // Cloud folders aren't watched by chokidar; poll them incrementally via the
+  // OneDrive delta API instead.
+  getOneDriveLibraryService().startPolling()
 
   // Background lyrics backfill. The initial sweep runs AFTER scanAll so the DB
   // already reflects the real library (new tracks imported, gone tracks removed).
@@ -180,6 +187,7 @@ app.on('will-quit', () => {
   try { getLibraryBackup().flushAll() } catch (err) { console.error('[backup] flush failed:', err) }
   try { getLyricsIndexService().flushAll() } catch (err) { console.error('[lyrics-index] flush failed:', err) }
   getFolderWatcher().stopAll()
+  try { getOneDriveLibraryService().stopPolling() } catch { /* service may not have initialized */ }
   try { getLibraryWorkerClient().dispose() } catch { /* worker may not have spawned */ }
   try { getLyricsBackfillService().stop() } catch { /* service may not have initialized */ }
   try { getLibraryReconciler().dispose() } catch { /* reconciler may not have initialized */ }

@@ -1,5 +1,9 @@
 export const PRELOAD_MEMORY_TIMEOUT_MS = 3000
 export const BACKGROUND_MEMORY_PROMOTION_TIMEOUT_MS = 120_000
+// Whole-file network download into RAM can take much longer than a local disk
+// read, and there is no disk fallback for cloud tracks — so the timeout is a
+// generous safety net to avoid hanging forever, not a fast bail-to-fallback.
+export const CLOUD_MEMORY_TIMEOUT_MS = 5 * 60_000
 export const PLAYBACK_MEMORY_READ_CHUNK_BYTES = 8 * 1024 * 1024
 export const PLAYBACK_MEMORY_RESERVE_BYTES = 512 * 1024 * 1024
 export const PLAYBACK_MEMORY_SMALL_TRACK_BYTES = 128 * 1024 * 1024

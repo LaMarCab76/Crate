@@ -51,6 +51,15 @@ import type {
   ProviderCredentialsPayload,
   ServiceTutorialState,
 } from './downloads'
+import type {
+  CloudAccountStatus,
+  CloudFolderRef,
+  CloudMoveProgressEvent,
+  CloudPrefs,
+  CloudSyncProgressEvent,
+  MoveToCloudRequest,
+  RemoteFolderEntry,
+} from './cloud'
 
 export interface ListTracksOpts {
   limit?: number
@@ -477,6 +486,9 @@ export type StreamLoadFailureReason =
   | 'progressive-stream-failed'
   | 'progressive-read-failed'
   | 'file-stream-failed'
+  | 'cloud-auth-required'
+  | 'cloud-unreachable'
+  | 'cloud-size-unknown'
 
 export type PreloadNextSource = StreamLoadSource
 export type PreloadNextFailureReason = StreamLoadFailureReason
@@ -779,6 +791,27 @@ export interface DownloadsApi {
   onJobsChanged(h: (e: DownloadJobsChangedEvent) => void): EventOff
 }
 
+export interface CloudApi {
+  // Account / auth
+  accountStatus(): Promise<CloudAccountStatus>
+  connect(): Promise<CloudAccountStatus>
+  disconnect(): Promise<CloudAccountStatus>
+  setClientId(clientId: string): Promise<CloudAccountStatus>
+  // Preferences (e.g. what to do with the local original after a move)
+  getPrefs(): Promise<CloudPrefs>
+  setPrefs(patch: Partial<CloudPrefs>): Promise<CloudPrefs>
+  // Cloud folders (indexing) — handlers land in a later phase
+  listRemoteFolders(driveId: string | null, itemId: string | null): Promise<RemoteFolderEntry[]>
+  addFolder(driveId: string, itemId: string, name: string): Promise<CloudFolderRef>
+  syncFolder(folderId: number): Promise<void>
+  // Move a local track up to OneDrive
+  moveToCloud(req: MoveToCloudRequest): Promise<void>
+
+  onAccountChanged(h: (e: CloudAccountStatus) => void): EventOff
+  onSyncProgress(h: (e: CloudSyncProgressEvent) => void): EventOff
+  onMoveProgress(h: (e: CloudMoveProgressEvent) => void): EventOff
+}
+
 export interface Api {
   meta: MetaApi
   library: LibraryApi
@@ -793,6 +826,7 @@ export interface Api {
   lyrics: LyricsApi
   devices: DevicesApi
   downloads: DownloadsApi
+  cloud: CloudApi
   updates: UpdatesApi
 }
 

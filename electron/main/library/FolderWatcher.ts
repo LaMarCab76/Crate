@@ -9,6 +9,9 @@ export class FolderWatcher {
   startAll(): void {
     const repos = getRepos()
     for (const folder of repos.folders.list()) {
+      // Cloud folders have synthetic onedrive:// paths that chokidar can't watch;
+      // the OneDrive delta poller handles their change detection instead.
+      if (folder.source === 'onedrive') continue
       this.start(folder.id, folder.path)
     }
   }

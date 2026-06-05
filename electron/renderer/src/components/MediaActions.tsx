@@ -12,11 +12,13 @@ import {
   updateTrackMetadata,
   updateTracksMetadata,
   useAlbums,
+  useFolders,
   usePlaylists,
 } from '@renderer/stores/libraryStore'
 import { useQueueStore } from '@renderer/stores/queueStore'
 import { ContextMenu, type ContextMenuItem } from './ContextMenu'
 import { Icon } from './Icon'
+import { MoveToCloudModal } from './MoveToCloudModal'
 import { useNavIntentStore } from '@renderer/stores/navIntentStore'
 
 type TrackDialog =
@@ -24,6 +26,7 @@ type TrackDialog =
   | { kind: 'details'; track: Track }
   | { kind: 'edit'; track: Track }
   | { kind: 'moveAlbum'; track: Track }
+  | { kind: 'moveToCloud'; track: Track }
   | { kind: 'trash'; tracks: Track[] }
 
 type AlbumDialog =
@@ -835,6 +838,7 @@ export function useTrackActions() {
   const [menu, setMenu] = useState<MenuState<Track> | null>(null)
   const [dialog, setDialog] = useState<TrackDialog | null>(null)
   const requestMetadataFix = useNavIntentStore(s => s.requestMetadataFix)
+  const hasCloudFolder = useFolders().some(f => f.source === 'onedrive')
 
   const openTrackMenu = (event: MouseEvent<HTMLElement>, track: Track) => {
     event.preventDefault()
@@ -887,6 +891,16 @@ export function useTrackActions() {
         disabled,
         onSelect: () => setDialog({ kind: 'moveAlbum', track }),
       },
+      // Only offered for local tracks once at least one OneDrive folder exists.
+      ...(track.source === 'local' && hasCloudFolder
+        ? [{
+            id: 'move-to-cloud',
+            label: 'Mover a OneDrive...',
+            icon: 'cloud' as const,
+            disabled,
+            onSelect: () => setDialog({ kind: 'moveToCloud', track }),
+          }]
+        : []),
       {
         id: 'complete-metadata',
         label: 'Completar metadatos...',
@@ -911,7 +925,7 @@ export function useTrackActions() {
         onSelect: () => setDialog({ kind: 'trash', tracks: [track] }),
       },
     ]
-  }, [menu, requestMetadataFix])
+  }, [menu, requestMetadataFix, hasCloudFolder])
 
   const elements = (
     <>
@@ -920,6 +934,7 @@ export function useTrackActions() {
       {dialog?.kind === 'details' && <TrackDetailsModal track={dialog.track} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'edit' && <TrackMetadataEditor track={dialog.track} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'moveAlbum' && <TrackAlbumMoveModal track={dialog.track} onClose={() => setDialog(null)} />}
+      {dialog?.kind === 'moveToCloud' && <MoveToCloudModal track={dialog.track} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'trash' && (
         <ConfirmTrashModal
           title="Mover archivo a Papelera"

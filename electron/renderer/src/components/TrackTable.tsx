@@ -357,6 +357,16 @@ export function TrackTable({
                 )}
                 <td className="title">
                   <span className="title-main">{t.t}</span>
+                  {t.source === 'onedrive' && (
+                    <span
+                      className="title-cloud"
+                      title="Streaming desde OneDrive"
+                      aria-label="OneDrive"
+                      style={{ marginLeft: 6, opacity: 0.55, display: 'inline-flex', verticalAlign: 'middle' }}
+                    >
+                      <Icon name="cloud" size={12} />
+                    </span>
+                  )}
                   {!showArt && showAlbum && <span className="title-sub">{t.artist}</span>}
                 </td>
                 {showAlbum && <td className="sec">{t.albumTitle}</td>}

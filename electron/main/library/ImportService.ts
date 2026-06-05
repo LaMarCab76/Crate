@@ -120,6 +120,12 @@ export function buildTrackInsert(
     // and get an estimate from the playback analysis at play time instead.
     r128_integrated_loudness: lufsFromReplayGain(md.replayGainTrack),
     state_updated_at: null,
+    // Local-disk track: no cloud reference.
+    source: 'local',
+    cloud_drive_id: null,
+    cloud_item_id: null,
+    cloud_etag: null,
+    cloud_remote_path: null,
   }
 }
 

@@ -40,6 +40,7 @@ import type {
 } from '@shared/types/ipc-contract'
 import {
   BACKGROUND_MEMORY_PROMOTION_TIMEOUT_MS,
+  CLOUD_MEMORY_TIMEOUT_MS,
   calculatePlaybackMemoryReserveBytes,
   decidePlaybackMemoryUse,
   estimateBufferedSeconds,
@@ -51,6 +52,14 @@ import {
   PLAYBACK_MEMORY_SMALL_TRACK_BYTES,
   type ProgressiveBufferTelemetry,
 } from './progressiveBuffering'
+import { getOneDriveClient } from '../cloud/OneDriveClient'
+import { CloudAuthError } from '../cloud/OneDriveAuth'
+
+// Reference to a OneDrive item whose bytes are streamed into RAM at play time.
+export interface CloudTrackRef {
+  driveId: string
+  itemId: string
+}
 
 // FFT2048 returns 1024 complex bins as magnitudes (0..1).
 const FFT_BINS_RAW = 1024
@@ -205,6 +214,11 @@ export interface StreamLoadResult {
 
 interface LoadOptions {
   estimatedDurationSec?: number | null
+  // When set, the track is streamed from OneDrive into RAM instead of read from
+  // a local file. `cloudSizeBytes` is the file size in bytes (from the DB or a
+  // Graph lookup) since there is no local file to stat.
+  cloudRef?: CloudTrackRef
+  cloudSizeBytes?: number | null
 }
 
 interface PromoteCurrentToMemoryOptions {
@@ -221,6 +235,9 @@ interface CreateStreamOptions {
   estimatedDurationSec?: number | null
   abortSignal?: AbortSignal
   onBufferProgress?: (telemetry: ProgressiveBufferTelemetry) => void
+  // Cloud source: stream from OneDrive into RAM. No disk read, no file fallback.
+  cloudRef?: CloudTrackRef
+  cloudSizeBytes?: number | null
 }
 
 let engine: AudioEngine | null = null
@@ -357,6 +374,8 @@ export class AudioEngine {
 
     const createdResult = await this.createStream(path, {
       estimatedDurationSec: options.estimatedDurationSec ?? null,
+      cloudRef: options.cloudRef,
+      cloudSizeBytes: options.cloudSizeBytes ?? null,
     })
     if (!createdResult.stream) {
       this.currentPath = path
@@ -873,6 +892,13 @@ export class AudioEngine {
   ): Promise<StreamCreateResult> {
     this.ensureInit()
     const start = Date.now()
+
+    // Cloud tracks have no local file: their bytes are fetched from OneDrive into
+    // RAM. There is no disk stat and no BASS file-stream fallback for them.
+    if (options.cloudRef) {
+      return this.createCloudStream(path, options.cloudRef, options, start)
+    }
+
     const fileStats = await this.getAudioFileStats(path, start)
     if (!fileStats.ok) return fileStats.result
 
@@ -938,6 +964,54 @@ export class AudioEngine {
       attemptedMemory: memoryResult.attemptedMemory,
       buffer: noBufferTelemetry(),
     }
+  }
+
+  // Cloud variant of createStream: fetch the whole file from OneDrive into RAM
+  // and hand it to BASS as an in-memory stream. RAM-only — no disk stat, no
+  // BASS file-stream fallback. Whatever createMemoryStream returns is final.
+  private async createCloudStream(
+    path: string,
+    cloudRef: CloudTrackRef,
+    options: CreateStreamOptions,
+    start: number,
+  ): Promise<StreamCreateResult> {
+    const sizeBytes = options.cloudSizeBytes ?? 0
+    if (!sizeBytes || sizeBytes <= 0) {
+      return {
+        stream: null,
+        source: 'none',
+        reason: 'cloud-size-unknown',
+        sizeBytes: null,
+        durationMs: Date.now() - start,
+        attemptedMemory: false,
+        buffer: noBufferTelemetry(),
+      }
+    }
+
+    // A gapless preload while the current track is already in memory is the
+    // "second track": relax the memory budget so both can stay resident.
+    const allowSecondTrack = !!options.isPreload && this.currentStreamSource === 'memory'
+
+    if (options.skipMemory) {
+      return {
+        stream: null,
+        source: 'none',
+        reason: 'memory-skipped',
+        sizeBytes,
+        durationMs: Date.now() - start,
+        attemptedMemory: false,
+        buffer: noBufferTelemetry(),
+      }
+    }
+
+    return this.createMemoryStream(path, sizeBytes, {
+      timeoutMs: options.memoryReadTimeoutMs ?? CLOUD_MEMORY_TIMEOUT_MS,
+      allowSecondTrack,
+      estimatedDurationSec: options.estimatedDurationSec ?? null,
+      abortSignal: options.abortSignal,
+      onBufferProgress: options.onBufferProgress,
+      cloudRef,
+    })
   }
 
   private async getAudioFileStats(path: string, start: number): Promise<
@@ -1038,12 +1112,76 @@ export class AudioEngine {
     }
   }
 
+  // Cloud sibling of readPlaybackFileIntoBuffer: fill a preallocated RAM buffer
+  // from OneDrive via ranged Graph downloads. Same timeout/abort/progress shape;
+  // the only difference is the byte source (network instead of fs.open).
+  private async readCloudTrackIntoBuffer(args: {
+    cloudRef: CloudTrackRef
+    sizeBytes: number
+    timeoutMs: number
+    estimatedDurationSec?: number | null
+    abortSignal?: AbortSignal
+    onBufferProgress?: (telemetry: ProgressiveBufferTelemetry) => void
+  }): Promise<{ buffer: Buffer | null; reason: StreamCreateFailureReason | null }> {
+    const timeoutController = new AbortController()
+    const timeoutId = setTimeout(() => timeoutController.abort(), args.timeoutMs)
+    let lastProgressAt = 0
+
+    const emitProgress = (bufferedBytes: number, force = false): void => {
+      if (!args.onBufferProgress) return
+      const now = Date.now()
+      if (!force && now - lastProgressAt < 250) return
+      lastProgressAt = now
+      args.onBufferProgress(this.makeBufferTelemetry(bufferedBytes, args.sizeBytes, args.estimatedDurationSec))
+    }
+
+    // Fold the read timeout and any external abort (track changed, preload
+    // cancelled) into one signal handed to the client.
+    const combined = new AbortController()
+    const onAbort = (): void => combined.abort()
+    timeoutController.signal.addEventListener('abort', onAbort, { once: true })
+    args.abortSignal?.addEventListener('abort', onAbort, { once: true })
+
+    try {
+      const buffer = Buffer.allocUnsafe(args.sizeBytes)
+      emitProgress(0, true)
+
+      await getOneDriveClient().fetchFullIntoBuffer({
+        driveId: args.cloudRef.driveId,
+        itemId: args.cloudRef.itemId,
+        sizeBytes: args.sizeBytes,
+        buffer,
+        signal: combined.signal,
+        onProgress: loaded => emitProgress(loaded),
+      })
+
+      if (timeoutController.signal.aborted) return { buffer: null, reason: 'memory-timeout' }
+      if (args.abortSignal?.aborted) return { buffer: null, reason: 'memory-read-failed' }
+      emitProgress(args.sizeBytes, true)
+      return { buffer, reason: null }
+    } catch (err) {
+      if (timeoutController.signal.aborted) return { buffer: null, reason: 'memory-timeout' }
+      if (args.abortSignal?.aborted) return { buffer: null, reason: 'memory-read-failed' }
+      if (err instanceof CloudAuthError) {
+        return { buffer: null, reason: 'cloud-auth-required' }
+      }
+      console.warn('[audio] cloud stream read failed:', (err as Error).message)
+      return { buffer: null, reason: 'cloud-unreachable' }
+    } finally {
+      clearTimeout(timeoutId)
+      timeoutController.signal.removeEventListener('abort', onAbort)
+      args.abortSignal?.removeEventListener('abort', onAbort)
+    }
+  }
+
   private async createMemoryStream(path: string, sizeBytes: number, options: {
     timeoutMs?: number
     allowSecondTrack?: boolean
     estimatedDurationSec?: number | null
     abortSignal?: AbortSignal
     onBufferProgress?: (telemetry: ProgressiveBufferTelemetry) => void
+    // When set, fill the buffer from OneDrive instead of a local file read.
+    cloudRef?: CloudTrackRef
   } = {}): Promise<StreamCreateResult> {
     const start = Date.now()
 
@@ -1087,14 +1225,23 @@ export class AudioEngine {
     }
 
     try {
-      const readResult = await this.readPlaybackFileIntoBuffer({
-        path,
-        sizeBytes,
-        timeoutMs: options.timeoutMs ?? PRELOAD_MEMORY_TIMEOUT_MS,
-        estimatedDurationSec: options.estimatedDurationSec,
-        abortSignal: options.abortSignal,
-        onBufferProgress: options.onBufferProgress,
-      })
+      const readResult = options.cloudRef
+        ? await this.readCloudTrackIntoBuffer({
+          cloudRef: options.cloudRef,
+          sizeBytes,
+          timeoutMs: options.timeoutMs ?? CLOUD_MEMORY_TIMEOUT_MS,
+          estimatedDurationSec: options.estimatedDurationSec,
+          abortSignal: options.abortSignal,
+          onBufferProgress: options.onBufferProgress,
+        })
+        : await this.readPlaybackFileIntoBuffer({
+          path,
+          sizeBytes,
+          timeoutMs: options.timeoutMs ?? PRELOAD_MEMORY_TIMEOUT_MS,
+          estimatedDurationSec: options.estimatedDurationSec,
+          abortSignal: options.abortSignal,
+          onBufferProgress: options.onBufferProgress,
+        })
       if (!readResult.buffer) {
         return {
           stream: null,

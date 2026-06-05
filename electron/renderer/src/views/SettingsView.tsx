@@ -11,6 +11,7 @@ import {
 } from '@shared/constants/leveler'
 import { Icon } from '@renderer/components/Icon'
 import { ModalShell } from '@renderer/components/ModalShell'
+import { CloudSettingsPanel } from '@renderer/components/CloudSettingsPanel'
 import { FolderRemovalConfirmModal } from '@renderer/components/FolderRemovalConfirmModal'
 import type { DeviceConnectTarget } from '@renderer/components/DeviceConnectModal'
 import { useDeviceStore } from '@renderer/stores/deviceStore'
@@ -1179,13 +1180,16 @@ export function SettingsView({ tweak, setTweak, activeTab, playbackSubTab, onCon
             )}
           </div>
         ) : activeTab === 'bibliotecas' ? (
-          <LibrariesSection
-            tweak={tweak}
-            setTweak={setTweak}
-            libraryLogOpen={libraryLogOpen}
-            setLibraryLogOpen={setLibraryLogOpen}
-            onConnectDevice={onConnectDevice}
-          />
+          <>
+            <LibrariesSection
+              tweak={tweak}
+              setTweak={setTweak}
+              libraryLogOpen={libraryLogOpen}
+              setLibraryLogOpen={setLibraryLogOpen}
+              onConnectDevice={onConnectDevice}
+            />
+            <CloudSettingsPanel />
+          </>
         ) : (
           <UpdatesSection />
         )}

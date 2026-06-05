@@ -16,9 +16,10 @@ const koffi = require('koffi') as typeof import('koffi')
 
 import { BASS_SYNC_END, BASS_SYNC_ONETIME } from './bass-constants'
 import { loadBass, SYNCPROC, type HSTREAM, type HSYNC } from './bass-ffi'
-import { PRELOAD_MEMORY_TIMEOUT_MS } from './progressiveBuffering'
+import { CLOUD_MEMORY_TIMEOUT_MS, PRELOAD_MEMORY_TIMEOUT_MS } from './progressiveBuffering'
 import type {
   AudioEngine,
+  CloudTrackRef,
   StreamCreateResult,
   StreamInfo,
 } from './AudioEngine'
@@ -207,7 +208,10 @@ export class GaplessController {
   // Preload a track. Idempotent for the same path. The end-of-stream sync is
   // attached to the CURRENT stream so that when it finishes we swap to the
   // preloaded one and start playback in the same audio thread tick.
-  async preloadNext(path: string): Promise<PreloadNextResult> {
+  async preloadNext(
+    path: string,
+    cloud?: { cloudRef: CloudTrackRef; cloudSizeBytes: number },
+  ): Promise<PreloadNextResult> {
     if (this.next && this.next.path === path) {
       return {
         attempted: this.next.preload.attempted,
@@ -229,8 +233,12 @@ export class GaplessController {
     const created = await this.engine.createStream(path, {
       skipMemory,
       memoryOnly: false,
-      memoryReadTimeoutMs: PRELOAD_MEMORY_TIMEOUT_MS,
+      // Cloud preload downloads the whole next file over the network, so it needs
+      // the generous cloud timeout rather than the 3s local-disk preload budget.
+      memoryReadTimeoutMs: cloud ? CLOUD_MEMORY_TIMEOUT_MS : PRELOAD_MEMORY_TIMEOUT_MS,
       isPreload: true,
+      cloudRef: cloud?.cloudRef,
+      cloudSizeBytes: cloud?.cloudSizeBytes,
     })
     const preloadData = this.createTelemetryFromResult(created)
 

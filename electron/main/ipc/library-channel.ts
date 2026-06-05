@@ -79,6 +79,10 @@ async function refreshTrackMetadataInDb(repos: Repos, trackId: number): Promise<
   const track = repos.tracks.getById(trackId)
   if (!track) return null
 
+  // Cloud tracks have no local file to re-parse; their metadata is refreshed by
+  // the OneDrive delta sync + enrichment sweep instead.
+  if (track.source === 'onedrive') return track
+
   const md = await readTrackMetadata(track.path)
   const parsedArtist = parseArtistName(md.artist)
   const artist = repos.artists.getOrCreate(parsedArtist.primary || md.artist)
@@ -274,6 +278,12 @@ export function registerLibraryChannel(): void {
     const track = repos.tracks.getById(payload.trackId)
     if (!track) return
 
+    // Tag write-back to OneDrive (re-upload) isn't supported yet; refuse rather
+    // than write to the synthetic onedrive:// path.
+    if (track.source === 'onedrive') {
+      throw new Error('Editing tags of OneDrive tracks is not supported yet.')
+    }
+
     writeTrackMetadata(track.path, payload.metadata)
     await refreshTrackMetadataInDb(repos, track.id)
     broadcast('library:changed', { reason: 'track-metadata-update' })
@@ -340,6 +350,16 @@ export function registerLibraryChannel(): void {
           path: '',
           error: 'Track no longer exists in the library.',
         })
+        continue
+      }
+
+      // Cloud tracks have no local file: "trash" just removes them from the local
+      // library index. The OneDrive copy is left intact (the user deletes it in
+      // OneDrive if they want it gone).
+      if (track.source === 'onedrive') {
+        repos.tracks.deleteById(track.id)
+        trashedTrackIds.push(track.id)
+        affectedFolderIds.add(track.folder_id)
         continue
       }
 

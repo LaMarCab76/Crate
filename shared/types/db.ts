@@ -10,6 +10,10 @@ export interface DbFolder {
   date_added: string
   date_updated: string
   bookmark_data: Buffer | null
+  source: 'local' | 'onedrive'
+  cloud_drive_id: string | null
+  cloud_item_id: string | null
+  cloud_delta_link: string | null
 }
 
 export interface DbAlbum {
@@ -117,6 +121,14 @@ export interface DbTrack {
   genre_id: number | null
   r128_integrated_loudness: number | null
   state_updated_at: number | null
+  // Source dimension: 'local' tracks have a real filesystem `path`; 'onedrive'
+  // tracks carry a synthetic onedrive://{driveId}/{itemId} `path` and stream
+  // their bytes into RAM from the cloud. The cloud_* columns are null for local.
+  source: 'local' | 'onedrive'
+  cloud_drive_id: string | null
+  cloud_item_id: string | null
+  cloud_etag: string | null
+  cloud_remote_path: string | null
 }
 
 export interface DbPlaylist {

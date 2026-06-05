@@ -11,7 +11,8 @@ const ALL_COLUMNS = `
   bitrate, sample_rate, channels, codec, bit_depth,
   artwork_data, artwork_path, date_added, is_duplicate, primary_track_id, duplicate_group_id,
   extended_metadata, album_id, artist_id, genre_id, r128_integrated_loudness,
-  state_updated_at
+  state_updated_at,
+  source, cloud_drive_id, cloud_item_id, cloud_etag, cloud_remote_path
 `
 
 export interface ListOpts {
@@ -34,6 +35,11 @@ export class TrackRepo {
   private stmtByFolderWithAlbum: Statement
   private stmtUpdateMetadata: Statement
   private stmtMoveAndUpdateMetadata: Statement
+  private stmtByCloudItem: Statement
+  private stmtRepointToCloud: Statement
+  private stmtUpdateCloudEtag: Statement
+  private stmtUpdateTechnical: Statement
+  private stmtRestoreState: Statement
   private stmtInsert: Statement
   private listStmtCache = new Map<string, Statement>()
 
@@ -135,6 +141,55 @@ export class TrackRepo {
         state_updated_at = @stateUpdatedAt
       WHERE id = @id
     `)
+    this.stmtByCloudItem = db.prepare<[string, string], DbTrack>(
+      `SELECT ${ALL_COLUMNS} FROM tracks WHERE cloud_drive_id = ? AND cloud_item_id = ?`,
+    )
+    // Repoint an existing local track to its new OneDrive home after a move.
+    // Keeps the row id (so playlists/queue/favorites/plays/rating survive) and
+    // swaps path → onedrive://… plus the cloud reference columns.
+    this.stmtRepointToCloud = db.prepare(`
+      UPDATE tracks
+      SET
+        source = 'onedrive',
+        path = @path,
+        folder_id = @folderId,
+        cloud_drive_id = @cloudDriveId,
+        cloud_item_id = @cloudItemId,
+        cloud_etag = @cloudEtag,
+        cloud_remote_path = @cloudRemotePath,
+        file_size = @fileSize,
+        state_updated_at = @stateUpdatedAt
+      WHERE id = @id
+    `)
+    this.stmtUpdateCloudEtag = db.prepare(
+      `UPDATE tracks SET cloud_etag = @etag, state_updated_at = @stateUpdatedAt WHERE id = @id`,
+    )
+    // Technical-only update used by the cloud metadata enrichment pass: refines
+    // codec/sample-rate/bit-depth from real tags without disturbing the already
+    // normalized title/artist/album. Loudness only overwrites when newly known.
+    this.stmtUpdateTechnical = db.prepare(`
+      UPDATE tracks SET
+        format = @format,
+        codec = @codec,
+        bitrate = @bitrate,
+        sample_rate = @sampleRate,
+        channels = @channels,
+        bit_depth = @bitDepth,
+        duration = @duration,
+        r128_integrated_loudness = COALESCE(@loudness, r128_integrated_loudness),
+        state_updated_at = @stateUpdatedAt
+      WHERE id = @id
+    `)
+    // Restore per-track state from a cloud manifest (favorites/plays/rating).
+    this.stmtRestoreState = db.prepare(`
+      UPDATE tracks SET
+        is_favorite = @isFavorite,
+        play_count = @playCount,
+        rating = @rating,
+        last_played_date = @lastPlayedDate,
+        state_updated_at = @stateUpdatedAt
+      WHERE id = @id
+    `)
     this.stmtInsert = db.prepare(`
       INSERT OR IGNORE INTO tracks (
         path, filename, title, artist, album, duration, format, folder_id,
@@ -145,7 +200,8 @@ export class TrackRepo {
         sort_title, sort_artist, sort_album, sort_album_artist,
         bitrate, sample_rate, channels, codec, bit_depth,
         artwork_data, artwork_path, date_added, is_duplicate, primary_track_id, duplicate_group_id,
-        extended_metadata, album_id, artist_id, genre_id, r128_integrated_loudness
+        extended_metadata, album_id, artist_id, genre_id, r128_integrated_loudness,
+        source, cloud_drive_id, cloud_item_id, cloud_etag, cloud_remote_path
       ) VALUES (
         @path, @filename, @title, @artist, @album, @duration, @format, @folder_id,
         @file_size, @date_modified, @album_artist, @composer, @genre, @year,
@@ -155,7 +211,8 @@ export class TrackRepo {
         @sort_title, @sort_artist, @sort_album, @sort_album_artist,
         @bitrate, @sample_rate, @channels, @codec, @bit_depth,
         @artwork_data, @artwork_path, @date_added, @is_duplicate, @primary_track_id, @duplicate_group_id,
-        @extended_metadata, @album_id, @artist_id, @genre_id, @r128_integrated_loudness
+        @extended_metadata, @album_id, @artist_id, @genre_id, @r128_integrated_loudness,
+        @source, @cloud_drive_id, @cloud_item_id, @cloud_etag, @cloud_remote_path
       )
     `)
   }
@@ -166,6 +223,79 @@ export class TrackRepo {
 
   getByPath(path: string): DbTrack | undefined {
     return this.stmtByPath.get(path) as DbTrack | undefined
+  }
+
+  getByCloudItem(driveId: string, itemId: string): DbTrack | undefined {
+    return this.stmtByCloudItem.get(driveId, itemId) as DbTrack | undefined
+  }
+
+  repointToCloud(args: {
+    id: number
+    path: string
+    folderId: number
+    cloudDriveId: string
+    cloudItemId: string
+    cloudEtag: string | null
+    cloudRemotePath: string | null
+    fileSize: number | null
+  }): void {
+    this.stmtRepointToCloud.run({
+      id: args.id,
+      path: args.path,
+      folderId: args.folderId,
+      cloudDriveId: args.cloudDriveId,
+      cloudItemId: args.cloudItemId,
+      cloudEtag: args.cloudEtag,
+      cloudRemotePath: args.cloudRemotePath,
+      fileSize: args.fileSize,
+      stateUpdatedAt: Date.now(),
+    })
+  }
+
+  updateCloudEtag(id: number, etag: string | null): void {
+    this.stmtUpdateCloudEtag.run({ id, etag, stateUpdatedAt: Date.now() })
+  }
+
+  restoreState(args: {
+    id: number
+    isFavorite: boolean
+    playCount: number
+    rating: number | null
+    lastPlayedDate: string | null
+  }): void {
+    this.stmtRestoreState.run({
+      id: args.id,
+      isFavorite: args.isFavorite ? 1 : 0,
+      playCount: args.playCount,
+      rating: args.rating,
+      lastPlayedDate: args.lastPlayedDate,
+      stateUpdatedAt: Date.now(),
+    })
+  }
+
+  updateTechnical(args: {
+    id: number
+    format: string
+    codec: string | null
+    bitrate: number | null
+    sampleRate: number | null
+    channels: number | null
+    bitDepth: number | null
+    duration: number
+    loudness: number | null
+  }): void {
+    this.stmtUpdateTechnical.run({
+      id: args.id,
+      format: args.format,
+      codec: args.codec,
+      bitrate: args.bitrate,
+      sampleRate: args.sampleRate,
+      channels: args.channels,
+      bitDepth: args.bitDepth,
+      duration: args.duration,
+      loudness: args.loudness,
+      stateUpdatedAt: Date.now(),
+    })
   }
 
   getByFolder(folderId: number): DbTrack[] {
