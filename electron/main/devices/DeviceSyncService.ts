@@ -68,6 +68,9 @@ import {
   type DeviceScanInternalResult,
 } from './deviceScanCore'
 import { clampDeviceArtworkEdge } from '@shared/constants/device-sync'
+import { getOneDriveClient } from '../cloud/OneDriveClient'
+import { resolveCloudLoadOptions } from '../cloud/cloudTrackRef'
+import { cloudDeviceRelativePath, sanitizeSegment } from './cloudDeviceRelativePath'
 import type { DbTrack } from '@shared/types/db'
 import type { PickFolderResult } from '@shared/types/ipc-contract'
 import type {
@@ -341,6 +344,12 @@ function keyForRelativePath(relPath: string): string {
     .join('/')
     .normalize('NFC')
     .toLowerCase()
+}
+
+// A track row's `path` is a synthetic onedrive://{driveId}/{itemId} URI for
+// cloud-backed sources; such a "source" must be downloaded, not read from disk.
+function isCloudSourcePath(path: string): boolean {
+  return path.startsWith('onedrive://')
 }
 
 function buildReusableDeviceTrackMetadata(state: LibraryStateYaml | null): Map<string, DeviceScanTrackMetadata> {
@@ -1983,6 +1992,7 @@ export class DeviceSyncService {
       affectedPcFolderIds: Set<number>
       optimizeArtwork: boolean
       artworkMaxEdge: number
+      signal?: AbortSignal
     },
   ): Promise<boolean> {
     const actionById = new Map(plan.actions.map(action => [action.id, action]))
@@ -3006,7 +3016,7 @@ export class DeviceSyncService {
     for (const track of dbTracks) {
       const folder = folderById.get(track.folder_id)
       if (!folder) continue
-      const rawRel = toPosixRelative(folder.path, track.path)
+      const rawRel = this.sourceRelativePathFor(track, folder.path, folder.name)
       const key = keyForRelativePath(rawRel)
       rawRelCounts.set(key, (rawRelCounts.get(key) ?? 0) + 1)
     }
@@ -3016,7 +3026,7 @@ export class DeviceSyncService {
     for (const track of dbTracks) {
       const folder = folderById.get(track.folder_id)
       if (!folder) continue
-      const sourceRelativePath = toPosixRelative(folder.path, track.path)
+      const sourceRelativePath = this.sourceRelativePathFor(track, folder.path, folder.name)
       const rawKey = keyForRelativePath(sourceRelativePath)
       let relativePath = sourceRelativePath
       if ((rawRelCounts.get(rawKey) ?? 0) > 1) {
@@ -3035,6 +3045,22 @@ export class DeviceSyncService {
     }
 
     return tracks.sort((a, b) => a.relativePath.localeCompare(b.relativePath))
+  }
+
+  // The device-relative path of a source track. Local tracks use their real
+  // filesystem path relative to the library folder. Cloud tracks have a synthetic
+  // onedrive:// path with no hierarchy, so the layout is rebuilt from the track's
+  // human-readable cloud_remote_path (anchored on the folder name), falling back
+  // to a flat filename.
+  private sourceRelativePathFor(track: DbTrack, folderPath: string, folderName: string): string {
+    if (track.source === 'onedrive') {
+      return cloudDeviceRelativePath({
+        remotePath: track.cloud_remote_path,
+        filename: track.filename,
+        folderName,
+      })
+    }
+    return toPosixRelative(folderPath, track.path)
   }
 
   private dbTrackToPcTrack(
@@ -3290,6 +3316,7 @@ export class DeviceSyncService {
       affectedPcFolderIds: Set<number>
       optimizeArtwork: boolean
       artworkMaxEdge: number
+      signal?: AbortSignal
     },
   ): Promise<ApplyActionResult> {
     switch (action.kind) {
@@ -3298,7 +3325,7 @@ export class DeviceSyncService {
         if (!action.sourcePath || !action.destinationPath) throw new Error('Invalid copy action')
         assertInside(ctx.deviceMusicRoot, resolve(action.destinationPath))
         {
-          return this.copyPcTrackToDevice(action, ctx.artworkMaxEdge, ctx.optimizeArtwork)
+          return this.copyPcTrackToDevice(action, ctx.artworkMaxEdge, ctx.optimizeArtwork, ctx.signal)
         }
       case 'copy_device_to_pc':
         if (!action.sourcePath || !action.destinationPath) throw new Error('Invalid copy action')
@@ -3326,19 +3353,74 @@ export class DeviceSyncService {
     action: DeviceSyncAction,
     artworkMaxEdge: number,
     optimizeArtwork: boolean,
+    signal?: AbortSignal,
   ): Promise<ApplyActionResult> {
     if (!action.sourcePath || !action.destinationPath) throw new Error('Invalid copy action')
 
+    if (isCloudSourcePath(action.sourcePath)) {
+      return this.withCloudSourceTempFile(action.sourcePath, signal, (localPath, mtimeOverride) =>
+        this.copyLocalSourceToDevice(localPath, action, artworkMaxEdge, optimizeArtwork, mtimeOverride),
+      )
+    }
+    return this.copyLocalSourceToDevice(action.sourcePath, action, artworkMaxEdge, optimizeArtwork)
+  }
+
+  private async copyLocalSourceToDevice(
+    localSourcePath: string,
+    action: DeviceSyncAction,
+    artworkMaxEdge: number,
+    optimizeArtwork: boolean,
+    mtimeOverride?: Date,
+  ): Promise<ApplyActionResult> {
+    if (!action.destinationPath) throw new Error('Invalid copy action')
+
     const shouldOptimizeBeforeCopy = shouldOptimizeArtworkBeforeDeviceCopy(action.kind, optimizeArtwork)
-    const staged = shouldOptimizeBeforeCopy && this.sourceArtworkNeedsLimit(action.sourcePath, artworkMaxEdge)
-      ? await this.stageDeviceCopyWithArtworkLimit(action.sourcePath, artworkMaxEdge)
+    const staged = shouldOptimizeBeforeCopy && this.sourceArtworkNeedsLimit(localSourcePath, artworkMaxEdge)
+      ? await this.stageDeviceCopyWithArtworkLimit(localSourcePath, artworkMaxEdge)
       : null
     try {
-      await this.copyPreservingMtime(staged?.path ?? action.sourcePath, action.destinationPath, action.sourcePath)
+      await this.copyPreservingMtime(staged?.path ?? localSourcePath, action.destinationPath, localSourcePath, mtimeOverride)
       if (!shouldOptimizeBeforeCopy) return {}
       return { deviceArtwork: staged?.outcome ?? { optimized: false, bytesSaved: 0 } }
     } finally {
       await staged?.cleanup()
+    }
+  }
+
+  // Materialize a OneDrive-backed source into a local temp file, run the local
+  // copy pipeline against it, then delete the temp. The whole file is downloaded
+  // into a RAM buffer via ranged GETs and written to disk so the existing
+  // artwork-optimization + mtime + copy logic works unchanged. Apply runs
+  // serially, so at most one of these buffers is alive at a time.
+  private async withCloudSourceTempFile<T>(
+    sourceOneDrivePath: string,
+    signal: AbortSignal | undefined,
+    run: (localPath: string, mtimeOverride?: Date) => Promise<T>,
+  ): Promise<T> {
+    const track = getRepos().tracks.getByPath(sourceOneDrivePath)
+    if (!track) throw new Error(`Cloud source not found in library: ${sourceOneDrivePath}`)
+    const opts = await resolveCloudLoadOptions(track, getOneDriveClient())
+    if (!opts) throw new Error(`Track is not a OneDrive source: ${sourceOneDrivePath}`)
+
+    const size = opts.cloudSizeBytes
+    const buffer = Buffer.allocUnsafe(size)
+    await getOneDriveClient().fetchFullIntoBuffer({
+      driveId: opts.cloudRef.driveId,
+      itemId: opts.cloudRef.itemId,
+      sizeBytes: size,
+      buffer,
+      signal,
+    })
+
+    const tempDir = await mkdtemp(join(tmpdir(), 'crate-device-cloud-'))
+    const tempPath = join(tempDir, sanitizeSegment(track.filename) || 'track')
+    try {
+      await writeFile(tempPath, buffer)
+      const mtimeMs = track.date_modified ? Date.parse(track.date_modified) : Number.NaN
+      const mtimeOverride = Number.isFinite(mtimeMs) ? new Date(mtimeMs) : undefined
+      return await run(tempPath, mtimeOverride)
+    } finally {
+      await rm(tempDir, { recursive: true, force: true })
     }
   }
 
@@ -3384,10 +3466,14 @@ export class DeviceSyncService {
     return { optimized: true, bytesSaved: result.bytesSaved }
   }
 
-  private async copyPreservingMtime(source: string, destination: string, mtimeSource = source): Promise<void> {
+  private async copyPreservingMtime(source: string, destination: string, mtimeSource = source, mtimeOverride?: Date): Promise<void> {
     await mkdir(dirname(destination), { recursive: true })
     await copyFile(source, destination)
     try {
+      if (mtimeOverride) {
+        await utimes(destination, mtimeOverride, mtimeOverride)
+        return
+      }
       const sourceStat = await stat(mtimeSource)
       await utimes(destination, sourceStat.atime, sourceStat.mtime)
     } catch (err) {
@@ -3429,6 +3515,15 @@ export class DeviceSyncService {
   private async trashPcFile(sourcePath: string, affectedFolderIds: Set<number>): Promise<void> {
     const repos = getRepos()
     const track = repos.tracks.getByPath(sourcePath)
+    if (isCloudSourcePath(sourcePath)) {
+      // OneDrive tracks have no local file to trash; "delete from PC" means
+      // dropping the library row. The bytes in OneDrive are left untouched.
+      if (track) {
+        repos.tracks.deleteByPath(sourcePath)
+        affectedFolderIds.add(track.folder_id)
+      }
+      return
+    }
     await shell.trashItem(sourcePath)
     const sidecarPath = sidecarPathFor(sourcePath)
     if (existsSync(sidecarPath)) {

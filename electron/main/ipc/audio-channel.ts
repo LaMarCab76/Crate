@@ -8,6 +8,7 @@ import { getPlaybackAnalysisService } from '../audio/PlaybackAnalysisService'
 import { broadcast } from './events'
 import { getRepos } from '../db/repositories'
 import { getOneDriveClient } from '../cloud/OneDriveClient'
+import { resolveCloudLoadOptions } from '../cloud/cloudTrackRef'
 import { estimateLufsFromAnalysis, type LevelerLoudness } from '@shared/constants/leveler'
 import type { DbTrack } from '@shared/types/db'
 import type {
@@ -229,21 +230,6 @@ function assertTrackPathMatches(path: string, trackId: unknown, channel: string)
   return track
 }
 
-// Build the AudioEngine cloud options for a OneDrive-backed track. Resolves the
-// file size from the DB; falls back to a Graph lookup when the row has none.
-async function resolveCloudLoadOptions(
-  track: DbTrack,
-): Promise<{ cloudRef: { driveId: string; itemId: string }; cloudSizeBytes: number } | null> {
-  if (track.source !== 'onedrive' || !track.cloud_drive_id || !track.cloud_item_id) return null
-  const cloudRef = { driveId: track.cloud_drive_id, itemId: track.cloud_item_id }
-  let cloudSizeBytes = track.file_size ?? 0
-  if (!cloudSizeBytes || cloudSizeBytes <= 0) {
-    const info = await getOneDriveClient().getDownloadUrl(cloudRef.driveId, cloudRef.itemId)
-    cloudSizeBytes = info.size
-  }
-  return { cloudRef, cloudSizeBytes }
-}
-
 export function registerAudioChannel(): void {
   const engine = getAudioEngine()
   const eq = getEQManager()
@@ -260,7 +246,7 @@ export function registerAudioChannel(): void {
     // DB record, so a compromised renderer can't point the engine at an arbitrary file.
     const path = requirePath(payload?.path)
     const track = assertTrackPathMatches(path, payload?.trackId, 'audio:load')
-    const cloud = track ? await resolveCloudLoadOptions(track) : null
+    const cloud = track ? await resolveCloudLoadOptions(track, getOneDriveClient()) : null
     const loadResult = await engine.load(path, {
       estimatedDurationSec: track?.duration ?? null,
       cloudRef: cloud?.cloudRef,
@@ -345,7 +331,7 @@ export function registerAudioChannel(): void {
   ipcMain.handle('audio:preloadNext', async (_, payload: { path: string; trackId?: number | null }) => {
     const path = requirePath(payload?.path)
     const track = assertTrackPathMatches(path, payload?.trackId, 'audio:preloadNext')
-    const cloud = track ? await resolveCloudLoadOptions(track) : null
+    const cloud = track ? await resolveCloudLoadOptions(track, getOneDriveClient()) : null
     const result = await getGapless().preloadNext(path, cloud ?? undefined)
     return result
   })
