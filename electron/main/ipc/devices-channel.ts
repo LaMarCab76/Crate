@@ -52,12 +52,6 @@ function assertConnectPayload(value: unknown): DeviceConnectPayload {
       assertSafePath(payload.pcTargetPath, 'PC target path')
     }
   }
-  if (payload.fetchMissingLyrics !== undefined && typeof payload.fetchMissingLyrics !== 'boolean') {
-    throw new Error('Invalid fetchMissingLyrics flag')
-  }
-  if (payload.optimizeArtworkOnSync !== undefined && typeof payload.optimizeArtworkOnSync !== 'boolean') {
-    throw new Error('Invalid optimizeArtworkOnSync flag')
-  }
   if (payload.sourceLibraryIds !== undefined) {
     if (
       !Array.isArray(payload.sourceLibraryIds) ||
@@ -99,12 +93,6 @@ function assertSettingsUpdate(value: unknown): DeviceSettingsUpdate {
   const payload = value as DeviceSettingsUpdate
   if (payload.artworkMaxEdge !== undefined) {
     assertArtworkEdge(payload.artworkMaxEdge)
-  }
-  if (payload.fetchMissingLyrics !== undefined && typeof payload.fetchMissingLyrics !== 'boolean') {
-    throw new Error('Invalid fetchMissingLyrics flag')
-  }
-  if (payload.optimizeArtworkOnSync !== undefined && typeof payload.optimizeArtworkOnSync !== 'boolean') {
-    throw new Error('Invalid optimizeArtworkOnSync flag')
   }
   if (payload.musicRoot !== undefined && typeof payload.musicRoot !== 'string') {
     throw new Error('Invalid device music root')
@@ -194,10 +182,7 @@ function assertApplySelection(value: unknown): DeviceSyncApplySelection | undefi
           }
         })
       : (() => { throw new Error('Invalid conflict resolutions') })()
-  if (payload.optimizeArtwork !== undefined && typeof payload.optimizeArtwork !== 'boolean') {
-    throw new Error('Invalid optimizeArtwork flag')
-  }
-  return { actionIds, conflictResolutions, optimizeArtwork: payload.optimizeArtwork }
+  return { actionIds, conflictResolutions }
 }
 
 export function registerDevicesChannel(): void {

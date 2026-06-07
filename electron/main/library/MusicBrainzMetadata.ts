@@ -31,6 +31,14 @@ export interface MusicBrainzTrackMatch {
   confidence: number
 }
 
+// One row of an album's official tracklist as published on MusicBrainz. Titles
+// are returned raw — normalization/matching is the planner's job.
+export interface MusicBrainzReleaseTrack {
+  discNumber: number
+  trackNumber: number
+  title: string
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
@@ -141,6 +149,31 @@ function mapRecording(recording: unknown, query: MusicBrainzTrackQuery): MusicBr
   }
 }
 
+// Flattens a MusicBrainz release JSON into its full official tracklist. Shared by
+// enrichMatchFromRelease (single-track enrichment) and lookupAlbumTracklist
+// (whole-album lookup). Rows with no positive track number or empty title are
+// dropped so the planner only ever sees usable slots.
+export function parseReleaseTracklist(releaseJson: unknown): MusicBrainzReleaseTrack[] {
+  if (!releaseJson || typeof releaseJson !== 'object') return []
+  const row = releaseJson as Record<string, unknown>
+  const media = Array.isArray(row['media']) ? row['media'] as Record<string, unknown>[] : []
+  const tracklist: MusicBrainzReleaseTrack[] = []
+  for (const medium of media) {
+    const discNumber = asNumber(medium['position']) ?? 1
+    const tracks = Array.isArray(medium['tracks']) ? medium['tracks'] as Record<string, unknown>[] : []
+    for (const track of tracks) {
+      const rec = track['recording'] && typeof track['recording'] === 'object'
+        ? track['recording'] as Record<string, unknown>
+        : null
+      const title = asString(rec?.['title']) ?? asString(track['title'])
+      const trackNumber = asNumber(track['position'] ?? track['number'])
+      if (!title || trackNumber == null) continue
+      tracklist.push({ discNumber, trackNumber, title })
+    }
+  }
+  return tracklist
+}
+
 export function enrichMatchFromRelease(
   base: MusicBrainzTrackMatch,
   releaseJson: unknown,
@@ -149,26 +182,16 @@ export function enrichMatchFromRelease(
   if (!releaseJson || typeof releaseJson !== 'object') return base
   const row = releaseJson as Record<string, unknown>
   const media = Array.isArray(row['media']) ? row['media'] as Record<string, unknown>[] : []
-  let trackNumber: number | null = null
-  let totalTracks: number | null = null
-  let discNumber: number | null = null
   const totalDiscs = media.length > 0 ? media.length : null
 
-  for (const medium of media) {
-    const tracks = Array.isArray(medium['tracks']) ? medium['tracks'] as Record<string, unknown>[] : []
-    const match = tracks.find(track => {
-      const rec = track['recording'] && typeof track['recording'] === 'object'
-        ? track['recording'] as Record<string, unknown>
-        : null
-      return normalizeMetadataText(asString(rec?.['title']) ?? asString(track['title']) ?? '') === normalizeMetadataText(query.title)
-    })
-    if (match) {
-      trackNumber = asNumber(match['position'] ?? match['number'])
-      totalTracks = asNumber(medium['track-count']) ?? tracks.length
-      discNumber = asNumber(medium['position'])
-      break
-    }
-  }
+  const tracklist = parseReleaseTracklist(releaseJson)
+  const target = normalizeMetadataText(query.title)
+  const match = tracklist.find(entry => normalizeMetadataText(entry.title) === target) ?? null
+  const trackNumber = match?.trackNumber ?? null
+  const discNumber = match?.discNumber ?? null
+  const totalTracks = match
+    ? tracklist.filter(entry => entry.discNumber === match.discNumber).length
+    : null
 
   const releaseGroup = row['release-group'] && typeof row['release-group'] === 'object'
     ? row['release-group'] as Record<string, unknown>
@@ -217,6 +240,40 @@ export class MusicBrainzMetadataClient {
     })
     const json = await this.fetchMusicBrainzJson(`${MB_BASE}/release/${encodeURIComponent(result.releaseId)}?${params.toString()}`)
     return enrichMatchFromRelease(result, json, query)
+  }
+
+  // Resolves the destination album's release and returns its full official
+  // tracklist. Prefers the stored MusicBrainz release id (a direct, exact fetch)
+  // and otherwise searches for the best release by album title + artist. Returns
+  // [] when nothing usable is found; throws only on transport errors so the
+  // caller can degrade to library-only placement.
+  async lookupAlbumTracklist(query: {
+    album: string | null
+    albumArtist: string | null
+    musicBrainzAlbumId: string | null
+  }): Promise<MusicBrainzReleaseTrack[]> {
+    if (query.musicBrainzAlbumId) {
+      const params = new URLSearchParams({ fmt: 'json', inc: 'recordings' })
+      const json = await this.fetchMusicBrainzJson(`${MB_BASE}/release/${encodeURIComponent(query.musicBrainzAlbumId)}?${params.toString()}`)
+      const tracklist = parseReleaseTracklist(json)
+      if (tracklist.length > 0) return tracklist
+    }
+
+    const album = cleanQueryValue(query.album)
+    if (!album) return []
+    const artist = cleanQueryValue(query.albumArtist)
+    const lucene = artist ? `release:"${album}" AND artist:"${artist}"` : `release:"${album}"`
+    const searchParams = new URLSearchParams({ fmt: 'json', limit: '5', query: lucene })
+    const searchJson = await this.fetchMusicBrainzJson(`${MB_BASE}/release?${searchParams.toString()}`)
+    const releases = Array.isArray((searchJson as Record<string, unknown>)?.['releases'])
+      ? (searchJson as Record<string, unknown>)['releases'] as Record<string, unknown>[]
+      : []
+    const release = pickRelease(releases, query.album)
+    const releaseId = asString(release?.['id'])
+    if (!releaseId) return []
+    const detailParams = new URLSearchParams({ fmt: 'json', inc: 'recordings' })
+    const detailJson = await this.fetchMusicBrainzJson(`${MB_BASE}/release/${encodeURIComponent(releaseId)}?${detailParams.toString()}`)
+    return parseReleaseTracklist(detailJson)
   }
 
   private async searchRecording(query: MusicBrainzTrackQuery): Promise<MusicBrainzTrackMatch | null> {

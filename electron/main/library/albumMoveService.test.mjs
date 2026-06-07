@@ -21,7 +21,7 @@ test('preview moves between existing library albums and confirms with MusicBrain
   assert.match(source, /lookupRecordingOnAlbum\(/, 'preview still confirms the move with MusicBrainz')
   assert.match(source, /se usan los datos de la biblioteca/, 'a missing or uncertain MusicBrainz answer must not block the move')
   assert.match(source, /suggestedTrackNumber = firstFreeAlbumSlot\(occupants, totalTracks\)/, 'preview recommends the first free slot from the library album')
-  assert.match(source, /Se recomendó la pista/, 'a recommended slot is surfaced as a note')
+  assert.match(source, /Se recomendó la primera pista libre/, 'a recommended free slot is surfaced as a note')
   assert.match(source, /musicBrainzConfidence: match\?\.confidence \?\? 0/, 'confidence shows when MusicBrainz confirms, 0 otherwise')
   assert.doesNotMatch(source, /errors\.push\('MusicBrainz/, 'MusicBrainz outcomes are warnings, never blocking errors')
   assert.match(source, /findAlbumMoveDuplicate\(/, 'preview must detect occupied slot or title duplicate')
@@ -29,14 +29,26 @@ test('preview moves between existing library albums and confirms with MusicBrain
   assert.match(source, /Ya existe una letra \.lrc en destino/, 'preview must block lrc destination collisions')
 })
 
-test('preview compares quality and only allows replacing a lower-quality track', () => {
+test('preview pinpoints the track via the official tracklist before appending at the end', () => {
+  assert.match(source, /lookupAlbumTracklist\(/, 'preview fetches the destination album official tracklist')
+  assert.match(source, /findTracklistSlot\(/, 'preview locates the incoming track within the official tracklist')
+  assert.match(source, /placementSource = 'tracklist'/, 'a tracklist match is recorded as the placement source')
+  assert.match(source, /placementSource = 'append'/, 'appending at the end is an explicit, flagged last resort')
+  assert.match(source, /No se encontró esta pista en el álbum; se agregará al final/, 'append is surfaced as a clear warning')
+  assert.match(source, /No se pudo obtener la lista oficial del álbum/, 'a tracklist fetch failure degrades to library data, never blocks')
+})
+
+test('preview auto-replaces only on better quality, and offers a confirm for equal/lower', () => {
   assert.match(source, /compareTrackQuality\(incoming, existing\) > 0/, 'replacement is gated on the incoming file being higher quality')
-  assert.match(source, /con calidad igual o superior \(\$\{describeTrackQuality\(existing\)\}\); no se reemplaza/, 'equal or worse quality blocks the move')
+  assert.match(source, /Podés borrarlo y mover igual/, 'equal or worse quality is a warning offering an explicit confirm, not a hard block')
+  assert.doesNotMatch(source, /errors\.push\([^)]*no se reemplaza/, 'equal/lower quality must not push a blocking error in buildPreview')
   assert.match(source, /Se reemplazará/, 'a better incoming file produces a replacement warning')
 })
 
-test('apply trashes the displaced track and removes its row when replacing', () => {
-  assert.match(source, /if \(replacement && replacement\.incomingIsBetter\)/, 'replacement only runs when the incoming file is better')
+test('apply trashes the displaced track on better quality OR explicit lower-quality confirm', () => {
+  assert.match(source, /async apply\(previewId: string, confirmLowerQualityReplace = false\)/, 'apply accepts the explicit lower-quality confirmation')
+  assert.match(source, /if \(replacement && \(replacement\.incomingIsBetter \|\| confirmLowerQualityReplace\)\)/, 'replacement runs on better quality or confirmed deletion')
+  assert.match(source, /preview\.replacement\.incomingIsBetter \|\| confirmLowerQualityReplace/, 'validateStoredPreview honours the confirmation')
   assert.match(source, /this\.deps\.trashItem\(replacedPath\)/, 'the replaced file is sent to the OS trash')
   assert.match(source, /this\.deps\.repos\.tracks\.deleteById\(replacedTrack\.id\)/, 'the replaced track row is removed in the move transaction')
 })

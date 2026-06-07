@@ -106,10 +106,6 @@ export interface DeviceRecord {
   syncBase: DeviceSyncBase
   pcTargetPath: string
   artworkMaxEdge: number
-  // Legacy persisted flag. Device sync no longer propagates or fetches lyrics.
-  fetchMissingLyrics: boolean
-  // When true, the sync run also downscales oversized embedded artwork on the device.
-  optimizeArtworkOnSync: boolean
   hasRockbox: boolean
   isAvailable: boolean
   trackCount: number
@@ -387,18 +383,11 @@ export interface DeviceConnectPayload {
   defaultMode?: DeviceSyncMode
   pcTargetPath?: string
   artworkMaxEdge?: number
-  // Legacy/no-op for device sync. Accepted so older callers and device YAML keep
-  // round-tripping, but lyrics are no longer propagated or fetched during sync.
-  fetchMissingLyrics?: boolean
-  optimizeArtworkOnSync?: boolean
   sourceLibraryIds?: number[]
 }
 
 export interface DeviceSettingsUpdate {
   artworkMaxEdge?: number
-  // Legacy/no-op for device sync; kept for compatibility with existing records.
-  fetchMissingLyrics?: boolean
-  optimizeArtworkOnSync?: boolean
   musicRoot?: string
   sourceLibraryIds?: number[]
   defaultMode?: DeviceSyncMode
@@ -443,7 +432,6 @@ export interface DeviceSyncConflictResolution {
 export interface DeviceSyncApplySelection {
   actionIds?: string[]
   conflictResolutions?: DeviceSyncConflictResolution[]
-  optimizeArtwork?: boolean
 }
 
 export interface DeviceSyncPlanRequest {

@@ -585,9 +585,12 @@ export async function previewTrackAlbumMove(
   return window.api.tracks.previewAlbumMove(payload)
 }
 
-export async function applyTrackAlbumMove(preview: TrackAlbumMovePreview): Promise<TrackAlbumMoveApplyResult> {
+export async function applyTrackAlbumMove(
+  preview: TrackAlbumMovePreview,
+  confirmLowerQualityReplace = false,
+): Promise<TrackAlbumMoveApplyResult> {
   await stopPlaybackIfCurrentTrack([preview.source.id])
-  const result = await window.api.tracks.applyAlbumMove({ previewId: preview.previewId })
+  const result = await window.api.tracks.applyAlbumMove({ previewId: preview.previewId, confirmLowerQualityReplace })
   await useLibraryStore.getState().refresh()
   return result
 }
