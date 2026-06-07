@@ -7,6 +7,7 @@ import {
   albumMoveTitlesMatch,
   chooseAlbumMoveDirectory,
   findAlbumMoveDuplicate,
+  findTracklistSlot,
   firstFreeAlbumSlot,
   planAlbumMoveDestination,
   sanitizeAlbumMoveFilenamePart,
@@ -174,4 +175,48 @@ test('findAlbumMoveDuplicate matches a same-titled slot across apostrophe styles
   })
   assert.equal(duplicate?.reason, 'slot')
   assert.equal(duplicate?.id, 8)
+})
+
+const TRACKLIST = [
+  { discNumber: 1, trackNumber: 1, title: 'Intro' },
+  { discNumber: 1, trackNumber: 2, title: 'Verse' },
+  { discNumber: 1, trackNumber: 3, title: 'Borrowed Song' },
+  { discNumber: 1, trackNumber: 4, title: 'Outro' },
+]
+
+test('findTracklistSlot locates a track by exact title — even on a gap slot', () => {
+  const match = findTracklistSlot({ tracklist: TRACKLIST, title: 'Borrowed Song', discNumber: 1 })
+  assert.equal(match?.trackNumber, 3)
+  assert.equal(match?.discNumber, 1)
+  assert.equal(match?.score, 1)
+})
+
+test('findTracklistSlot matches despite accent/case and apostrophe drift', () => {
+  const tracklist = [
+    { discNumber: 1, trackNumber: 7, title: 'Canción Final' },
+    { discNumber: 1, trackNumber: 8, title: 'Girl Can’t Help It' },
+  ]
+  assert.equal(findTracklistSlot({ tracklist, title: 'cancion final', discNumber: 1 })?.trackNumber, 7)
+  assert.equal(findTracklistSlot({ tracklist, title: "Girl Can't Help It", discNumber: 1 })?.trackNumber, 8)
+})
+
+test('findTracklistSlot uses token overlap above minScore and rejects below it', () => {
+  const tracklist = [{ discNumber: 1, trackNumber: 5, title: 'The Long Winding Road Home' }]
+  // 4 of 5 tokens overlap -> 0.8, above the default 0.6 threshold.
+  assert.equal(findTracklistSlot({ tracklist, title: 'Long Winding Road Home', discNumber: 1 })?.trackNumber, 5)
+  // Only 1 of 5 tokens overlaps -> 0.2, below threshold -> no match.
+  assert.equal(findTracklistSlot({ tracklist, title: 'Home Alone', discNumber: 1 }), null)
+})
+
+test('findTracklistSlot prefers the requested disc when the title repeats', () => {
+  const tracklist = [
+    { discNumber: 1, trackNumber: 4, title: 'Reprise' },
+    { discNumber: 2, trackNumber: 9, title: 'Reprise' },
+  ]
+  assert.equal(findTracklistSlot({ tracklist, title: 'Reprise', discNumber: 2 })?.trackNumber, 9)
+  assert.equal(findTracklistSlot({ tracklist, title: 'Reprise', discNumber: 1 })?.trackNumber, 4)
+})
+
+test('findTracklistSlot returns null for an empty tracklist (MusicBrainz offline)', () => {
+  assert.equal(findTracklistSlot({ tracklist: [], title: 'Borrowed Song', discNumber: 1 }), null)
 })

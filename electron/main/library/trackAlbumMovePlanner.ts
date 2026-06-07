@@ -156,6 +156,60 @@ export function firstFreeAlbumSlot(occupants: Map<number, DbTrack>, totalTracks:
   return null
 }
 
+export interface AlbumMoveTracklistMatch {
+  discNumber: number
+  trackNumber: number
+  title: string
+  score: number
+}
+
+// Token overlap of two titles, both normalized. Mirrors tokenSimilarity in
+// MetadataCompletionRules but is duplicated here so the planner stays free of
+// cross-module runtime imports (it is loaded directly by node --test).
+function titleTokenScore(left: string, right: string): number {
+  const leftTokens = new Set(normalizeText(left).split(' ').filter(Boolean))
+  const rightTokens = new Set(normalizeText(right).split(' ').filter(Boolean))
+  if (leftTokens.size === 0 || rightTokens.size === 0) return 0
+  let matches = 0
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) matches++
+  }
+  return matches / Math.max(leftTokens.size, rightTokens.size)
+}
+
+// Locates the incoming title within an album's official tracklist so a move can
+// land on the right slot — even one that is currently a gap in the library copy.
+// An exact normalized title scores 1; otherwise we fall back to token overlap.
+// Rows on the requested disc are preferred. Returns null below minScore.
+export function findTracklistSlot(args: {
+  tracklist: { discNumber: number; trackNumber: number; title: string }[]
+  title: string
+  discNumber: number | null
+  minScore?: number
+}): AlbumMoveTracklistMatch | null {
+  const minScore = args.minScore ?? 0.6
+  const preferredDisc = positiveInt(args.discNumber)
+  const scored = args.tracklist
+    .map(entry => ({
+      discNumber: entry.discNumber,
+      trackNumber: entry.trackNumber,
+      title: entry.title,
+      score: albumMoveTitlesMatch(entry.title, args.title) ? 1 : titleTokenScore(entry.title, args.title),
+    }))
+    .filter(entry => entry.score >= minScore)
+  if (scored.length === 0) return null
+  scored.sort((a, b) => {
+    if (preferredDisc != null) {
+      const aPref = a.discNumber === preferredDisc ? 1 : 0
+      const bPref = b.discNumber === preferredDisc ? 1 : 0
+      if (aPref !== bPref) return bPref - aPref
+    }
+    if (b.score !== a.score) return b.score - a.score
+    return a.trackNumber - b.trackNumber
+  })
+  return scored[0]
+}
+
 export function findAlbumMoveDuplicate(args: {
   targetTracks: DbTrack[]
   sourceTrackId: number

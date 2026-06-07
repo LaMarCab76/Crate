@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { enrichMatchFromRelease } from './MusicBrainzMetadata.ts'
+import { enrichMatchFromRelease, parseReleaseTracklist } from './MusicBrainzMetadata.ts'
 
 const baseMatch = {
   title: 'Borrowed Song',
@@ -75,4 +75,39 @@ test('MusicBrainz release enrichment leaves track slot empty when the recording 
   assert.equal(enriched.trackNumber, null)
   assert.equal(enriched.discNumber, null)
   assert.equal(enriched.totalDiscs, 2)
+})
+
+test('parseReleaseTracklist flattens every disc into disc/track/title rows', () => {
+  const tracklist = parseReleaseTracklist(releaseFixture)
+  assert.deepEqual(tracklist, [
+    { discNumber: 1, trackNumber: 1, title: 'Intro' },
+    { discNumber: 1, trackNumber: 2, title: 'Other Song' },
+    { discNumber: 2, trackNumber: 1, title: 'Bridge' },
+    { discNumber: 2, trackNumber: 2, title: 'Borrowed Song' },
+    { discNumber: 2, trackNumber: 3, title: 'Outro' },
+  ])
+})
+
+test('parseReleaseTracklist skips rows with no position or empty title and defaults disc to 1', () => {
+  const tracklist = parseReleaseTracklist({
+    media: [
+      {
+        tracks: [
+          { position: 1, recording: { title: 'Kept' } },
+          { recording: { title: 'No Position' } },
+          { position: 3, recording: { title: '   ' } },
+          { position: 4, title: 'Fallback Title' },
+        ],
+      },
+    ],
+  })
+  assert.deepEqual(tracklist, [
+    { discNumber: 1, trackNumber: 1, title: 'Kept' },
+    { discNumber: 1, trackNumber: 4, title: 'Fallback Title' },
+  ])
+})
+
+test('parseReleaseTracklist returns [] for non-release input', () => {
+  assert.deepEqual(parseReleaseTracklist(null), [])
+  assert.deepEqual(parseReleaseTracklist({}), [])
 })

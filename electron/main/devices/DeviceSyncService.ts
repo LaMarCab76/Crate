@@ -44,10 +44,6 @@ import {
 import { resolveArtworkOptimizationFiles } from './artworkOptimizeSelection'
 import { classifyArtwork } from './artworkOptimizeDecision'
 import {
-  resolveOptimizeArtworkSelection,
-  shouldOptimizeArtworkBeforeDeviceCopy,
-} from './artworkSyncPreference'
-import {
   applyPendingTrackAlbumMovesToPlan,
   type TrackAlbumMoveRow,
 } from './albumMoveSyncPlan'
@@ -169,8 +165,6 @@ interface DeviceRow {
   sync_base: DeviceSyncBase
   pc_target_path: string
   artwork_max_edge: number
-  fetch_lyrics: number
-  optimize_artwork_on_sync: number
   has_rockbox: number
   track_count: number
   created_at: string
@@ -187,8 +181,6 @@ interface DeviceYaml {
   musicRoot: string
   defaultSyncMode: DeviceSyncMode
   artworkMaxEdge?: number
-  fetchMissingLyrics?: boolean
-  optimizeArtworkOnSync?: boolean
   linkedMachineIds: string[]
   createdAt: string
   updatedAt: string
@@ -200,6 +192,11 @@ interface MachineYaml {
   hostname: string
   platform: string
   pcTargetPath: string
+  // Mode and conflict base this PC used for sync, recorded so the device keeps a
+  // per-machine history of how each connected PC synced. Optional for forward
+  // compat with machine files written before these fields existed.
+  syncMode?: DeviceSyncMode
+  syncBase?: DeviceSyncBase
   firstLinkedAt: string
   lastSeenAt: string
   lastSyncAt: string | null
@@ -283,9 +280,7 @@ interface SyncJournalYaml {
   updatedAt: string
   completedAt?: string
   actions: SyncJournalStep[]
-  lyrics?: SyncJournalStep[]
   artwork: SyncJournalStep[]
-  optimizeArtwork?: boolean
   pcTargetImported?: boolean
   result?: DeviceSyncApplyResult
 }
@@ -851,12 +846,6 @@ export class DeviceSyncService {
     const artworkMaxEdge = clampDeviceArtworkEdge(
       existingDevice?.artworkMaxEdge ?? existingRootRow?.artwork_max_edge ?? payload.artworkMaxEdge,
     )
-    const fetchMissingLyrics =
-      existingDevice?.fetchMissingLyrics ??
-      (existingRootRow ? existingRootRow.fetch_lyrics === 1 : payload.fetchMissingLyrics ?? true)
-    const optimizeArtworkOnSync =
-      existingDevice?.optimizeArtworkOnSync ??
-      (existingRootRow ? existingRootRow.optimize_artwork_on_sync === 1 : payload.optimizeArtworkOnSync ?? true)
     const hasRockbox = existsSync(join(rootPath, '.rockbox'))
 
     const linkedMachineIds = new Set(existingDevice?.linkedMachineIds ?? [])
@@ -873,8 +862,6 @@ export class DeviceSyncService {
       musicRoot,
       defaultSyncMode: defaultMode,
       artworkMaxEdge,
-      fetchMissingLyrics,
-      optimizeArtworkOnSync,
       linkedMachineIds: [...linkedMachineIds],
       createdAt,
       updatedAt,
@@ -885,6 +872,8 @@ export class DeviceSyncService {
       hostname: hostname(),
       platform: platform(),
       pcTargetPath,
+      syncMode: defaultMode,
+      syncBase,
       firstLinkedAt: existingMachine?.firstLinkedAt ?? updatedAt,
       lastSeenAt: updatedAt,
       lastSyncAt: existingMachine?.lastSyncAt ?? null,
@@ -901,8 +890,6 @@ export class DeviceSyncService {
       sync_base: syncBase,
       pc_target_path: pcTargetPath,
       artwork_max_edge: artworkMaxEdge,
-      fetch_lyrics: fetchMissingLyrics ? 1 : 0,
-      optimize_artwork_on_sync: optimizeArtworkOnSync ? 1 : 0,
       has_rockbox: hasRockbox ? 1 : 0,
       track_count: 0,
       created_at: createdAt,
@@ -926,12 +913,6 @@ export class DeviceSyncService {
   async updateSettings(deviceId: string, settings: DeviceSettingsUpdate): Promise<DeviceRecord> {
     const row = await this.requireDevice(deviceId)
     const artworkMaxEdge = clampDeviceArtworkEdge(settings.artworkMaxEdge, row.artwork_max_edge)
-    const fetchMissingLyrics = settings.fetchMissingLyrics === undefined
-      ? row.fetch_lyrics === 1
-      : settings.fetchMissingLyrics
-    const optimizeArtworkOnSync = settings.optimizeArtworkOnSync === undefined
-      ? row.optimize_artwork_on_sync === 1
-      : settings.optimizeArtworkOnSync
     const defaultMode = settings.defaultMode === undefined
       ? row.sync_mode
       : validateSyncMode(settings.defaultMode)
@@ -961,8 +942,6 @@ export class DeviceSyncService {
       musicRoot,
       defaultSyncMode: defaultMode,
       artworkMaxEdge,
-      fetchMissingLyrics,
-      optimizeArtworkOnSync,
       linkedMachineIds: [...linkedMachineIds],
       createdAt: existingDevice?.createdAt ?? row.created_at,
       updatedAt,
@@ -976,13 +955,15 @@ export class DeviceSyncService {
       hostname: existingMachine?.hostname ?? hostname(),
       platform: existingMachine?.platform ?? platform(),
       pcTargetPath,
+      syncMode: defaultMode,
+      syncBase,
       firstLinkedAt: existingMachine?.firstLinkedAt ?? updatedAt,
       lastSeenAt: updatedAt,
       lastSyncAt: existingMachine?.lastSyncAt ?? row.last_sync_at,
     }
     getDatabase()
-      .prepare(`UPDATE devices SET music_root = ?, sync_mode = ?, sync_base = ?, pc_target_path = ?, artwork_max_edge = ?, fetch_lyrics = ?, optimize_artwork_on_sync = ?, last_seen_at = ? WHERE id = ?`)
-      .run(musicRoot, defaultMode, syncBase, pcTargetPath, artworkMaxEdge, fetchMissingLyrics ? 1 : 0, optimizeArtworkOnSync ? 1 : 0, updatedAt, row.id)
+      .prepare(`UPDATE devices SET music_root = ?, sync_mode = ?, sync_base = ?, pc_target_path = ?, artwork_max_edge = ?, last_seen_at = ? WHERE id = ?`)
+      .run(musicRoot, defaultMode, syncBase, pcTargetPath, artworkMaxEdge, updatedAt, row.id)
     if (settings.sourceLibraryIds !== undefined) {
       this.setDeviceLibraries(row.id, settings.sourceLibraryIds)
     }
@@ -1158,7 +1139,6 @@ export class DeviceSyncService {
       deviceMusicRoot,
       startedAt,
       false,
-      true,
     )
     const journalPath = this.journalPath(row.root_path, journal.id)
 
@@ -1553,21 +1533,10 @@ export class DeviceSyncService {
     if (!cached) throw new Error('Sync plan expired. Create a new plan before applying.')
 
     const { plan, deviceRoot, deviceMusicRoot } = cached
-    let row = await this.requireDevice(plan.deviceId)
+    const row = await this.requireDevice(plan.deviceId)
     await this.assertPortableStateWritable(row)
     const executablePlan = this.planForSelection(plan, selection, deviceMusicRoot)
     const writeCompleteState = this.selectionCoversPlan(plan, selection)
-    if (
-      selection?.optimizeArtwork !== undefined &&
-      (row.optimize_artwork_on_sync === 1) !== selection.optimizeArtwork
-    ) {
-      await this.updateSettings(row.id, { optimizeArtworkOnSync: selection.optimizeArtwork })
-      row = await this.requireDevice(plan.deviceId)
-    }
-    const optimizeArtwork = resolveOptimizeArtworkSelection(
-      selection?.optimizeArtwork,
-      row.optimize_artwork_on_sync === 1,
-    )
     const runId = randomUUID()
     const startedAt = nowIso()
     const journal = this.createSyncJournal(
@@ -1577,7 +1546,6 @@ export class DeviceSyncService {
       deviceMusicRoot,
       startedAt,
       writeCompleteState,
-      optimizeArtwork,
     )
     const journalPath = this.journalPath(deviceRoot, journal.id)
     try {
@@ -1688,7 +1656,6 @@ export class DeviceSyncService {
     deviceMusicRoot: string,
     startedAt: string,
     writeCompleteState: boolean,
-    optimizeArtwork: boolean,
   ): SyncJournalYaml {
     return {
       version: DEVICE_STATE_VERSION,
@@ -1699,7 +1666,6 @@ export class DeviceSyncService {
       phase: null,
       plan,
       writeCompleteState,
-      optimizeArtwork,
       deviceRoot,
       deviceMusicRoot,
       startedAt,
@@ -1745,7 +1711,6 @@ export class DeviceSyncService {
         const journal = await readYamlFile<SyncJournalYaml>(path)
         if (this.isPendingJournal(journal)) {
           journal.artwork ??= []
-          journal.optimizeArtwork ??= true
           if (sanitizeLegacyDeviceSyncJournal(journal)) {
             await writeYamlFile(path, journal).catch(() => undefined)
           }
@@ -1892,7 +1857,6 @@ export class DeviceSyncService {
           pcTargetPath: plan.pcTargetPath,
           runId: journal.runId,
           affectedPcFolderIds,
-          optimizeArtwork: journal.optimizeArtwork ?? true,
           artworkMaxEdge: row.artwork_max_edge,
         },
       )
@@ -1912,9 +1876,6 @@ export class DeviceSyncService {
           }
         }
 
-        if (journal.optimizeArtwork ?? true) {
-          await this.optimizeArtworkForJournal(plan, deviceMusicRoot, row.artwork_max_edge, journalPath, journal)
-        }
         failed = this.failedSteps(journal)
       }
 
@@ -1990,7 +1951,6 @@ export class DeviceSyncService {
       pcTargetPath: string
       runId: string
       affectedPcFolderIds: Set<number>
-      optimizeArtwork: boolean
       artworkMaxEdge: number
       signal?: AbortSignal
     },
@@ -2761,8 +2721,6 @@ export class DeviceSyncService {
       syncBase: validateSyncBase(row.sync_base),
       pcTargetPath: row.pc_target_path,
       artworkMaxEdge: clampDeviceArtworkEdge(row.artwork_max_edge),
-      fetchMissingLyrics: row.fetch_lyrics === 1,
-      optimizeArtworkOnSync: row.optimize_artwork_on_sync === 1,
       hasRockbox: row.has_rockbox === 1,
       isAvailable,
       trackCount: row.track_count,
@@ -2885,10 +2843,10 @@ export class DeviceSyncService {
     getDatabase()
       .prepare(`
         INSERT INTO devices (
-          id, name, root_path, music_root, sync_mode, sync_base, pc_target_path, artwork_max_edge, fetch_lyrics, optimize_artwork_on_sync, has_rockbox,
+          id, name, root_path, music_root, sync_mode, sync_base, pc_target_path, artwork_max_edge, has_rockbox,
           track_count, created_at, last_seen_at, last_scan_at, last_sync_at
         ) VALUES (
-          @id, @name, @root_path, @music_root, @sync_mode, @sync_base, @pc_target_path, @artwork_max_edge, @fetch_lyrics, @optimize_artwork_on_sync, @has_rockbox,
+          @id, @name, @root_path, @music_root, @sync_mode, @sync_base, @pc_target_path, @artwork_max_edge, @has_rockbox,
           @track_count, @created_at, @last_seen_at, @last_scan_at, @last_sync_at
         )
         ON CONFLICT(id) DO UPDATE SET
@@ -2898,8 +2856,6 @@ export class DeviceSyncService {
           sync_mode = excluded.sync_mode,
           pc_target_path = excluded.pc_target_path,
           artwork_max_edge = excluded.artwork_max_edge,
-          fetch_lyrics = excluded.fetch_lyrics,
-          optimize_artwork_on_sync = excluded.optimize_artwork_on_sync,
           has_rockbox = excluded.has_rockbox,
           last_seen_at = excluded.last_seen_at
       `)
@@ -3314,7 +3270,6 @@ export class DeviceSyncService {
       pcTargetPath: string
       runId: string
       affectedPcFolderIds: Set<number>
-      optimizeArtwork: boolean
       artworkMaxEdge: number
       signal?: AbortSignal
     },
@@ -3606,8 +3561,6 @@ export class DeviceSyncService {
         musicRoot: freshRow.music_root,
         defaultSyncMode: plan.mode,
         artworkMaxEdge: clampDeviceArtworkEdge(freshRow.artwork_max_edge),
-        fetchMissingLyrics: freshRow.fetch_lyrics === 1,
-        optimizeArtworkOnSync: freshRow.optimize_artwork_on_sync === 1,
         linkedMachineIds: [...linkedMachineIds],
         createdAt: existingDevice?.createdAt ?? row.created_at,
         updatedAt: completedAt,
@@ -3626,6 +3579,8 @@ export class DeviceSyncService {
         machine.lastSyncAt = completedAt
         machine.lastSeenAt = completedAt
         machine.pcTargetPath = plan.pcTargetPath
+        machine.syncMode = plan.mode
+        machine.syncBase = validateSyncBase(freshRow.sync_base)
         await writeYamlFile(machinePath, machine)
       }
       this.setPortableState(row.id, true, null)

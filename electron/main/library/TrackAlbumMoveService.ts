@@ -8,7 +8,7 @@ import { parseArtistName } from './ArtistNameParser'
 import { readTrackMetadata, type TrackMetadata } from './MetadataExtractor'
 import { writeTrackMetadata, type MetadataArtworkPayload } from './MetadataWriter'
 import { artworkAbsolutePath } from './ArtworkCache'
-import { getMusicBrainzMetadataClient, type MusicBrainzMetadataClient } from './MusicBrainzMetadata'
+import { getMusicBrainzMetadataClient, type MusicBrainzMetadataClient, type MusicBrainzReleaseTrack } from './MusicBrainzMetadata'
 import { getLibraryBackup } from '../services/LibraryBackup'
 import { getLyricsIndexService } from '../lyrics/LyricsIndexService'
 import type { DbAlbum, DbFolder, DbTrack } from '@shared/types/db'
@@ -16,6 +16,7 @@ import type {
   TrackAlbumMoveApplyResult,
   TrackAlbumMoveDuplicate as PublicMoveDuplicate,
   TrackAlbumMoveEndpoint,
+  TrackAlbumMovePlacementSource,
   TrackAlbumMovePreview,
   TrackAlbumMoveProposal,
   TrackAlbumMoveReplacement,
@@ -25,6 +26,7 @@ import {
   albumDiscOccupants,
   albumMoveTitlesMatch,
   findAlbumMoveDuplicate,
+  findTracklistSlot,
   firstFreeAlbumSlot,
   planAlbumMoveDestination,
 } from './trackAlbumMovePlanner'
@@ -63,7 +65,7 @@ interface TrackAlbumMoveRecordInput {
 export interface TrackAlbumMoveServiceDeps {
   repos: Repos
   db: BetterSqliteDatabase
-  musicBrainz: Pick<MusicBrainzMetadataClient, 'lookupRecordingOnAlbum'>
+  musicBrainz: Pick<MusicBrainzMetadataClient, 'lookupRecordingOnAlbum' | 'lookupAlbumTracklist'>
   readTrackMetadata: typeof readTrackMetadata
   writeTrackMetadata: typeof writeTrackMetadata
   scheduleBackupForTrack: (trackId: number) => void
@@ -187,7 +189,7 @@ export class TrackAlbumMoveService {
     return built.preview
   }
 
-  async apply(previewId: string): Promise<TrackAlbumMoveApplyResult> {
+  async apply(previewId: string, confirmLowerQualityReplace = false): Promise<TrackAlbumMoveApplyResult> {
     this.pruneExpiredPreviews()
     const stored = this.previews.get(previewId)
     if (!stored) throw new Error('La vista previa expiró. Volvé a calcular el movimiento.')
@@ -200,7 +202,7 @@ export class TrackAlbumMoveService {
       throw new Error('El archivo cambió desde la vista previa. Volvé a calcular el movimiento.')
     }
     const targetAlbum = this.requireAlbum(stored.targetAlbumId)
-    const localErrors = this.validateStoredPreview(track, targetAlbum, stored.preview)
+    const localErrors = this.validateStoredPreview(track, targetAlbum, stored.preview, confirmLowerQualityReplace)
     if (localErrors.length > 0) throw new Error(localErrors[0])
 
     const proposal = stored.preview.proposal
@@ -208,11 +210,13 @@ export class TrackAlbumMoveService {
     const destinationPath = resolve(proposal.destinationPath)
     const applyResult: { movedTrack: DbTrack | null } = { movedTrack: null }
 
-    // Replacement: send the displaced (lower-quality) track to the OS trash —
-    // recoverable — before the move so the slot and destination path are free.
+    // Replacement: send the displaced track to the OS trash — recoverable —
+    // before the move so the slot and destination path are free. We do this when
+    // the incoming file is higher quality, or when the user explicitly confirmed
+    // deleting an equal/lower-quality same-title track.
     const replacement = stored.preview.replacement
     let replacedTrack: DbTrack | null = null
-    if (replacement && replacement.incomingIsBetter) {
+    if (replacement && (replacement.incomingIsBetter || confirmLowerQualityReplace)) {
       replacedTrack = this.deps.repos.tracks.getById(replacement.trackId) ?? null
       if (replacedTrack) {
         const replacedPath = resolve(replacedTrack.path)
@@ -273,6 +277,7 @@ export class TrackAlbumMoveService {
     let selectedTrackNumber: number | null = null
     let suggestedTrackNumber: number | null = null
     let trackNumberFromMusicBrainz = false
+    let placementSource: TrackAlbumMovePlacementSource = 'append'
     let replacement: TrackAlbumMoveReplacement | null = null
 
     if (track.album_id === targetAlbum.id) {
@@ -330,6 +335,26 @@ export class TrackAlbumMoveService {
       const discNumber = match?.discNumber ?? bestNumber(targetTracks, row => row.disc_number)
       const totalDiscs = match?.totalDiscs ?? bestNumber(targetTracks, row => row.total_discs)
 
+      // The destination album's full official tracklist. Lets us pinpoint the
+      // incoming track's real position by title — even when it currently sits in
+      // a gap (a missing track) — instead of blindly appending at the end. Only
+      // fetched when it could change the outcome (no user override and no
+      // confident MusicBrainz track number, which both outrank it). Never blocks:
+      // any failure degrades to library-only placement below.
+      let officialTracklist: MusicBrainzReleaseTrack[] = []
+      const needsTracklist = positiveTrackNumber(trackNumberOverride) == null && positiveTrackNumber(match?.trackNumber) == null
+      if (mbChecked && needsTracklist) {
+        try {
+          officialTracklist = await this.deps.musicBrainz.lookupAlbumTracklist({
+            album: targetAlbum.title,
+            albumArtist: targetAlbumArtist(targetAlbum, targetTracks),
+            musicBrainzAlbumId: targetAlbum.musicbrainz_album_id,
+          })
+        } catch (err) {
+          warnings.push(`No se pudo obtener la lista oficial del álbum (${moveErrorMessage(err)}); se usan los datos de la biblioteca.`)
+        }
+      }
+
       // Layout of the destination disc: recommend a free slot and render the
       // picker straight from the existing library album.
       discNumberForSlots = normalizedDiscNumber(discNumber)
@@ -342,23 +367,49 @@ export class TrackAlbumMoveService {
       const titleTwin = targetTracks.find(row => row.id !== track.id && albumMoveTitlesMatch(row.title, title)) ?? null
       const mbNumber = positiveTrackNumber(match?.trackNumber)
       const overrideNumber = positiveTrackNumber(trackNumberOverride)
+      const tracklistMatch = findTracklistSlot({ tracklist: officialTracklist, title, discNumber })
 
+      // Priority chain, most to least certain: user override → confident
+      // MusicBrainz recording → official-tracklist title match (locates the slot
+      // even if it's currently a gap) → same-title twin in the library → first
+      // free gap → append at the end (flagged so the UI can warn).
       let effective: number
       if (overrideNumber != null) {
         effective = overrideNumber
+        placementSource = 'override'
       } else if (mbNumber != null) {
         effective = mbNumber
         trackNumberFromMusicBrainz = true
+        placementSource = 'musicbrainz'
+      } else if (tracklistMatch != null) {
+        effective = tracklistMatch.trackNumber
+        placementSource = 'tracklist'
+        if (tracklistMatch.discNumber !== discNumberForSlots) {
+          warnings.push(`La lista oficial ubica esta pista en el disco ${tracklistMatch.discNumber}.`)
+        }
       } else if (titleTwin && positiveTrackNumber(titleTwin.track_number) != null) {
         effective = positiveTrackNumber(titleTwin.track_number)!
+        placementSource = 'titleTwin'
+      } else if (suggestedTrackNumber != null) {
+        effective = suggestedTrackNumber
+        placementSource = 'gap'
       } else {
-        effective = suggestedTrackNumber ?? (occupants.size > 0 ? Math.max(...occupants.keys()) + 1 : 1)
+        effective = occupants.size > 0 ? Math.max(...occupants.keys()) + 1 : 1
+        placementSource = 'append'
       }
       selectedTrackNumber = effective
       slots = buildAlbumMoveSlots(occupants, totalTracks, effective)
 
-      if (!trackNumberFromMusicBrainz && overrideNumber == null) {
-        warnings.push(`Se recomendó la pista ${effective}.`)
+      if (overrideNumber == null) {
+        if (placementSource === 'tracklist') {
+          warnings.push(`Ubicada por la lista oficial de MusicBrainz en la pista ${effective}.`)
+        } else if (placementSource === 'titleTwin') {
+          warnings.push(`El álbum ya tiene este tema en la pista ${effective}.`)
+        } else if (placementSource === 'gap') {
+          warnings.push(`Se recomendó la primera pista libre (${effective}).`)
+        } else if (placementSource === 'append') {
+          warnings.push(`No se encontró esta pista en el álbum; se agregará al final (${effective}).`)
+        }
       }
 
       const destination = planAlbumMoveDestination({
@@ -396,7 +447,9 @@ export class TrackAlbumMoveService {
           if (incomingIsBetter) {
             warnings.push(`Se reemplazará "${replaceRow.title}" (${describeTrackQuality(existing)}) por la versión entrante (${describeTrackQuality(incoming)}).`)
           } else {
-            errors.push(`El álbum ya tiene "${replaceRow.title}" con calidad igual o superior (${describeTrackQuality(existing)}); no se reemplaza.`)
+            // Not a hard error: the preview stays "ready" but the renderer must
+            // collect an explicit "borrar igual" confirmation before apply.
+            warnings.push(`El álbum ya tiene "${replaceRow.title}" con calidad igual o superior (${describeTrackQuality(existing)}). Podés borrarlo y mover igual.`)
           }
         } else {
           errors.push(`La pista ${effective} ya está ocupada por "${replaceRow.title}". Elegí otro número.`)
@@ -459,6 +512,9 @@ export class TrackAlbumMoveService {
       selectedTrackNumber,
       suggestedTrackNumber,
       trackNumberFromMusicBrainz,
+      placementSource,
+      isEstimated: placementSource !== 'override' && placementSource !== 'musicbrainz',
+      isAppend: placementSource === 'append',
       replacement,
       errors,
       warnings,
@@ -471,18 +527,26 @@ export class TrackAlbumMoveService {
     }
   }
 
-  private validateStoredPreview(track: DbTrack, targetAlbum: DbAlbum, preview: TrackAlbumMovePreview): string[] {
+  private validateStoredPreview(
+    track: DbTrack,
+    targetAlbum: DbAlbum,
+    preview: TrackAlbumMovePreview,
+    confirmLowerQualityReplace = false,
+  ): string[] {
     const errors: string[] = []
     const proposal = preview.proposal
     if (!proposal) return ['El movimiento no tiene propuesta para aplicar.']
     const targetTracks = this.deps.repos.entityTracks.getTracksForAlbum(targetAlbum.id)
-    // The track we're allowed to overwrite/trash (only when the incoming file is
-    // the higher-quality one). Its slot, file and sidecar are exempt below.
-    const replacement = preview.replacement && preview.replacement.incomingIsBetter ? preview.replacement : null
+    // The track we're allowed to overwrite/trash — when the incoming file is the
+    // higher-quality one, or when the user confirmed deleting an equal/lower
+    // quality same-title track. Its slot, file and sidecar are exempt below.
+    const replacement = preview.replacement && (preview.replacement.incomingIsBetter || confirmLowerQualityReplace)
+      ? preview.replacement
+      : null
     const replacePath = replacement ? resolve(replacement.path) : null
     const replaceSidecar = replacePath ? albumMoveSidecarPathFor(replacePath) : null
-    if (preview.replacement && !preview.replacement.incomingIsBetter) {
-      errors.push(`El álbum ya tiene "${preview.replacement.title}" con calidad igual o superior; no se reemplaza.`)
+    if (preview.replacement && !preview.replacement.incomingIsBetter && !confirmLowerQualityReplace) {
+      errors.push(`El álbum ya tiene "${preview.replacement.title}" con calidad igual o superior; confirmá para borrarlo y mover igual.`)
     }
     const duplicate = findAlbumMoveDuplicate({
       targetTracks,

@@ -62,7 +62,7 @@ test('album move modal orders candidates by score and preselects first ranked ca
 
 test('move modal calls preview and apply APIs and blocks the apply button unless preview is ready', () => {
   assert.match(mediaActions, /previewTrackAlbumMove\(\{ trackId: track\.dbId, targetAlbumId, trackNumber: trackNumberOverride \}\)/)
-  assert.match(mediaActions, /applyTrackAlbumMove\(preview\)/)
+  assert.match(mediaActions, /applyTrackAlbumMove\(preview, confirmLower\)/)
   assert.match(mediaActions, /preview\?\.status === 'ready'/)
   assert.match(mediaActions, /Validando en MusicBrainz\.\.\./)
   assert.match(mediaActions, /preview\?\.errors\.map/)
@@ -72,11 +72,11 @@ test('move modal exposes a track-number slot picker and quality-based replacemen
   assert.match(mediaActions, /function albumMoveSuggestionPercent/)
   assert.match(mediaActions, /function albumMoveQualityLabel/)
   assert.match(mediaActions, /const \[trackNumberOverride, setTrackNumberOverride\]/)
-  assert.match(mediaActions, /className="album-move-slots"/)
+  assert.match(mediaActions, /className="album-move-columns"/)
   assert.match(mediaActions, /preview\.slots\.map/)
   assert.match(mediaActions, /setTrackNumberOverride\(slot\.trackNumber\)/)
   assert.match(mediaActions, /preview\?\.replacement/)
-  assert.match(mediaActions, /incomingIsBetter \? 'Reemplazar'/)
+  assert.match(mediaActions, /willReplace \? 'Reemplazar'/)
   assert.match(ipcTypes, /interface TrackAlbumMoveReplacement/)
   assert.match(ipcTypes, /interface TrackAlbumMoveSlot/)
   assert.match(ipcTypes, /slots: TrackAlbumMoveSlot\[\]/)

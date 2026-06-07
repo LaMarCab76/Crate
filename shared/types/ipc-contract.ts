@@ -314,6 +314,16 @@ export interface TrackAlbumMoveReplacement {
   incomingIsBetter: boolean
 }
 
+// How the destination track number was decided, from most to least certain. The
+// UI uses it to be honest about confidence (e.g. warn loudly on 'append').
+export type TrackAlbumMovePlacementSource =
+  | 'override'
+  | 'musicbrainz'
+  | 'tracklist'
+  | 'titleTwin'
+  | 'gap'
+  | 'append'
+
 export interface TrackAlbumMovePreview {
   previewId: string
   createdAt: number
@@ -339,6 +349,11 @@ export interface TrackAlbumMovePreview {
   // False when MusicBrainz found the album but not the track number (we then
   // recommend a slot instead of blocking).
   trackNumberFromMusicBrainz: boolean
+  // How the selected track number was chosen, plus convenience flags derived
+  // from it for the UI's honesty banner.
+  placementSource: TrackAlbumMovePlacementSource
+  isEstimated: boolean
+  isAppend: boolean
   replacement: TrackAlbumMoveReplacement | null
   errors: string[]
   warnings: string[]
@@ -354,6 +369,10 @@ export interface TrackAlbumMovePreviewRequest {
 
 export interface TrackAlbumMoveApplyRequest {
   previewId: string
+  // Explicit user confirmation to trash an existing same-title track whose
+  // quality is equal or better than the incoming file. Without it the apply is
+  // refused for an equal/lower-quality replacement.
+  confirmLowerQualityReplace?: boolean
 }
 
 export interface TrackAlbumMoveApplyResult {

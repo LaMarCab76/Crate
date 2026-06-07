@@ -561,8 +561,6 @@ function SyncResultStep({
 function SyncConfirmStep({
   plan,
   selection,
-  optimizeArtwork,
-  onOptimizeArtworkChange,
   loading,
   applyBlockedReason,
   result,
@@ -570,8 +568,6 @@ function SyncConfirmStep({
 }: {
   plan: DeviceSyncPlan
   selection: DeviceSyncApplySelection | null
-  optimizeArtwork: boolean
-  onOptimizeArtworkChange: (value: boolean) => void
   loading: boolean
   applyBlockedReason: string | null
   result: DeviceSyncApplyResult | null
@@ -582,7 +578,7 @@ function SyncConfirmStep({
   const toPc = summary.copyDeviceToPc + summary.replacePc
   const removed = summary.deleteDevice + summary.deletePc
   const executable = toDevice + toPc + removed
-  const canApply = executable > 0 || optimizeArtwork
+  const canApply = executable > 0
   return (
     <section className="device-side-card device-sync-confirm">
       <div className="device-card-head">
@@ -598,18 +594,6 @@ function SyncConfirmStep({
         <div><b className="mono">{fmtFileSize(summary.bytesToCopy)}</b><span>A copiar</span></div>
       </div>
       {applyBlockedReason && <div className="device-warning inline">{applyBlockedReason}</div>}
-      <label className="device-toggle-field device-sync-confirm-toggle">
-        <input
-          type="checkbox"
-          checked={optimizeArtwork}
-          disabled={loading || result != null}
-          onChange={event => onOptimizeArtworkChange(event.target.checked)}
-        />
-        <span>
-          <strong>Optimizar artwork en el dispositivo</strong>
-          <em>Reduce carátulas embebidas que superan el límite configurado antes de cerrar la sincronización.</em>
-        </span>
-      </label>
       {result && (
         <div className={result.failed.length > 0 ? 'device-error inline' : 'sync-result-ok inline'}>
           {result.failed.length > 0
@@ -1146,7 +1130,6 @@ export function DeviceSyncView({
   const [mode, setMode] = useState<DeviceSyncMode>('bidirectional_safe')
   const [musicRoot, setMusicRoot] = useState('')
   const [artworkMaxEdge, setArtworkMaxEdge] = useState('')
-  const [optimizeArtworkOnSync, setOptimizeArtworkOnSync] = useState(true)
   const [sourceLibraryIds, setSourceLibraryIds] = useState<number[]>([])
   const [destinationFolderId, setDestinationFolderId] = useState<number | null>(null)
   const [libraryPickerOpen, setLibraryPickerOpen] = useState(false)
@@ -1187,7 +1170,6 @@ export function DeviceSyncView({
     setMode(selectedDevice.defaultMode)
     setMusicRoot(selectedDevice.musicRoot)
     setArtworkMaxEdge(String(selectedDevice.artworkMaxEdge))
-    setOptimizeArtworkOnSync(selectedDevice.optimizeArtworkOnSync)
     const folderIds = new Set(folders.map(folder => folder.id))
     const nextSourceIds = selectedDevice.sourceLibraryIds.length > 0
       ? selectedDevice.sourceLibraryIds.filter(id => folderIds.has(id))
@@ -1205,7 +1187,6 @@ export function DeviceSyncView({
     selectedDevice?.musicRoot,
     selectedDevice?.pcTargetPath,
     selectedDevice?.artworkMaxEdge,
-    selectedDevice?.optimizeArtworkOnSync,
     selectedDevice?.sourceLibraryIds,
     folders,
   ])
@@ -1428,19 +1409,13 @@ export function DeviceSyncView({
     setApplying(true)
     setWizardStep('apply')
     try {
-      if (selectedDevice && selectedDevice.optimizeArtworkOnSync !== optimizeArtworkOnSync) {
-        await updateSettings(selectedDevice.id, { optimizeArtworkOnSync })
-      }
-      const selection = currentPlanSelection
-        ? { ...currentPlanSelection, optimizeArtwork: optimizeArtworkOnSync }
-        : { optimizeArtwork: optimizeArtworkOnSync }
-      const result = await applyPlan(visiblePlan.id, selection)
+      const result = await applyPlan(visiblePlan.id, currentPlanSelection ?? undefined)
       setApplyResult(result)
       await scan(visiblePlan.deviceId)
     } finally {
       setApplying(false)
     }
-  }, [visiblePlan, applyBlockedReason, devices, applyPlan, currentPlanSelection, scan, clearPlan, optimizeArtworkOnSync, selectedDevice, updateSettings])
+  }, [visiblePlan, applyBlockedReason, devices, applyPlan, currentPlanSelection, scan, clearPlan])
 
   const resumePendingJournal = useCallback(async (journalId: string) => {
     const result = await resumeJournal(journalId)
@@ -1796,8 +1771,6 @@ export function DeviceSyncView({
                 <SyncConfirmStep
                   plan={visiblePlan}
                   selection={currentPlanSelection}
-                  optimizeArtwork={optimizeArtworkOnSync}
-                  onOptimizeArtworkChange={setOptimizeArtworkOnSync}
                   loading={loading}
                   applyBlockedReason={applyBlockedReason}
                   result={applyResult}

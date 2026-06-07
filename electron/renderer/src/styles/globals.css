@@ -3340,7 +3340,7 @@ button:disabled { cursor: not-allowed; }
   background: rgba(0, 0, 0, 0.18);
 }
 .modal-panel:has(.album-move-modal) {
-  width: min(720px, calc(100vw - 56px));
+  width: min(960px, calc(100vw - 56px));
   background: var(--up-next-toast-bg);
   border-color: var(--up-next-toast-border);
   backdrop-filter: blur(20px) saturate(1.15);
@@ -4010,6 +4010,162 @@ button:disabled { cursor: not-allowed; }
   color: var(--text-secondary);
   font-size: 11px;
   font-style: normal;
+}
+.album-move-replace-path {
+  display: block;
+}
+.album-move-force {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.album-move-force input {
+  cursor: pointer;
+}
+
+/* Three-column before/after view: pick a slot, see the album now, see how it
+   ends up. Mirrors the slot/replace tokens above. */
+.album-move-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+.album-move-col {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+.album-move-col-head {
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.album-move-poslist {
+  display: grid;
+  gap: 4px;
+  max-height: 280px;
+  overflow: auto;
+}
+.album-move-poslist .album-move-slot {
+  width: 100%;
+  height: auto;
+  min-height: 30px;
+  padding: 5px 8px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  justify-content: start;
+  text-align: left;
+}
+.album-move-slot-no {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+}
+.album-move-slot.selected .album-move-slot-no {
+  color: var(--text-primary);
+}
+.album-move-slot-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+}
+.album-move-rows {
+  display: grid;
+  gap: 2px;
+  max-height: 280px;
+  overflow: auto;
+  padding: 6px;
+  border: 0.5px solid var(--border-subtle);
+  border-radius: 7px;
+  background: color-mix(in oklab, var(--bg-active) 30%, transparent);
+  align-content: start;
+}
+.album-move-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  padding: 3px 6px;
+  border-radius: 5px;
+  font-size: 11.5px;
+}
+.album-move-row-no {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+}
+.album-move-row-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.album-move-row-title strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.album-move-row.empty .album-move-row-title {
+  color: var(--text-tertiary);
+}
+.album-move-row.incoming {
+  background: var(--bg-selected);
+}
+.album-move-row.conflict {
+  background: rgba(214, 74, 58, 0.14);
+}
+.album-move-after-replaced {
+  text-decoration: line-through;
+  color: var(--text-tertiary);
+}
+.album-move-pill {
+  flex: none;
+  padding: 0 6px;
+  height: 15px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  background: color-mix(in oklab, var(--accent) 30%, transparent);
+  color: var(--text-primary);
+}
+.album-move-row.conflict .album-move-pill {
+  background: rgba(214, 74, 58, 0.3);
+  color: #ffb3aa;
+}
+.album-move-flag {
+  padding: 8px 12px;
+  border-radius: 7px;
+  font-size: 11.5px;
+  border: 0.5px solid var(--border-subtle);
+  background: color-mix(in oklab, var(--bg-active) 45%, transparent);
+  color: var(--text-secondary);
+}
+.album-move-flag.append {
+  border-color: rgba(214, 74, 58, 0.35);
+  color: #ffb3aa;
 }
 
 /* Album view */

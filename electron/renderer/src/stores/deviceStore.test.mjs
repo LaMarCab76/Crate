@@ -15,8 +15,6 @@ function device(id, trackCount) {
     syncBase: 'review',
     pcTargetPath: `/Music/${id}`,
     artworkMaxEdge: 600,
-    fetchMissingLyrics: true,
-    optimizeArtworkOnSync: true,
     hasRockbox: true,
     isAvailable: true,
     trackCount,

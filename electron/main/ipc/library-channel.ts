@@ -329,8 +329,11 @@ export function registerLibraryChannel(): void {
     )
   })
 
-  ipcMain.handle('track:albumMove:apply', async (_, payload: { previewId: string }) => {
-    const result = await albumMove.apply(assertNonEmptyString(payload?.previewId, 'previewId'))
+  ipcMain.handle('track:albumMove:apply', async (_, payload: { previewId: string; confirmLowerQualityReplace?: boolean }) => {
+    const result = await albumMove.apply(
+      assertNonEmptyString(payload?.previewId, 'previewId'),
+      payload?.confirmLowerQualityReplace === true,
+    )
     broadcast('library:changed', { reason: 'track-album-move' })
     return result
   })

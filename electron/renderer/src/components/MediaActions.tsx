@@ -439,6 +439,9 @@ function TrackAlbumMoveModal({ track, onClose }: { track: Track; onClose: () => 
   const [loading, setLoading] = useState(false)
   const [applying, setApplying] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Explicit confirmation to trash an existing equal/lower-quality same-title
+  // track. Reset on every fresh preview so a stale confirm never carries over.
+  const [confirmLower, setConfirmLower] = useState(false)
 
   useEffect(() => {
     if (targetAlbumId != null && candidates.some(candidate => albumDbId(candidate.album) === targetAlbumId)) return
@@ -458,6 +461,7 @@ function TrackAlbumMoveModal({ track, onClose }: { track: Track; onClose: () => 
     setLoading(true)
     setError(null)
     setPreview(null)
+    setConfirmLower(false)
     void previewTrackAlbumMove({ trackId: track.dbId, targetAlbumId, trackNumber: trackNumberOverride })
       .then(next => {
         if (!cancelled) setPreview(next)
@@ -472,14 +476,52 @@ function TrackAlbumMoveModal({ track, onClose }: { track: Track; onClose: () => 
   }, [targetAlbumId, track.dbId, trackNumberOverride])
 
   const selectedAlbum = candidates.find(candidate => albumDbId(candidate.album) === targetAlbumId)?.album ?? null
-  const canApply = preview?.status === 'ready' && !loading && !applying
+  const lowerQualityBlocked = !!preview?.replacement && !preview.replacement.incomingIsBetter && !confirmLower
+  const canApply = preview?.status === 'ready' && !loading && !applying && !lowerQualityBlocked
+  const willReplace = confirmLower || preview?.replacement?.incomingIsBetter === true
+
+  // How the destination album looks AFTER the move — derived entirely from the
+  // preview: each current slot, with the chosen slot showing the incoming track.
+  // A same-title occupant (the replacement candidate) is marked "reemplaza"; a
+  // different song sitting in the chosen slot is a "conflicto" (hard block).
+  const afterRows = useMemo(() => {
+    if (!preview) return []
+    const sel = preview.selectedTrackNumber
+    const incomingTitle = preview.proposal?.title ?? track.t
+    const replacementId = preview.replacement?.trackId ?? null
+    const rows = preview.slots.map(slot => {
+      if (sel != null && slot.trackNumber === sel) {
+        const occ = slot.occupiedBy
+        return {
+          trackNumber: slot.trackNumber,
+          title: incomingTitle,
+          kind: 'incoming' as const,
+          displacedTitle: occ?.title ?? null,
+          replacing: occ != null && occ.trackId === replacementId,
+          conflict: occ != null && occ.trackId !== replacementId,
+        }
+      }
+      return {
+        trackNumber: slot.trackNumber,
+        title: slot.occupiedBy?.title ?? '—',
+        kind: 'existing' as const,
+        displacedTitle: null,
+        replacing: false,
+        conflict: false,
+      }
+    })
+    if (sel != null && !preview.slots.some(s => s.trackNumber === sel)) {
+      rows.push({ trackNumber: sel, title: incomingTitle, kind: 'incoming', displacedTitle: null, replacing: false, conflict: false })
+    }
+    return rows
+  }, [preview, track.t])
 
   const apply = async () => {
     if (!preview || preview.status !== 'ready') return
     setApplying(true)
     setError(null)
     try {
-      await applyTrackAlbumMove(preview)
+      await applyTrackAlbumMove(preview, confirmLower)
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -497,8 +539,8 @@ function TrackAlbumMoveModal({ track, onClose }: { track: Track; onClose: () => 
           <button type="button" className="btn" onClick={onClose} disabled={applying}>Cancelar</button>
           <button type="button" className="btn primary" disabled={!canApply} onClick={() => { void apply() }}>
             {applying
-              ? (preview?.replacement?.incomingIsBetter ? 'Reemplazando...' : 'Moviendo...')
-              : (preview?.replacement?.incomingIsBetter ? 'Reemplazar' : 'Mover')}
+              ? (willReplace ? 'Reemplazando...' : 'Moviendo...')
+              : (willReplace ? 'Reemplazar' : 'Mover')}
           </button>
         </>
       )}
@@ -539,51 +581,99 @@ function TrackAlbumMoveModal({ track, onClose }: { track: Track; onClose: () => 
         </div>
 
         {preview && preview.slots.length > 0 && (
-          <div className="album-move-slotpick">
-            <div className="album-move-slotpick-head">
-              <span>Pista</span>
-              {!preview.trackNumberFromMusicBrainz && (
-                <em>MusicBrainz no devolvió el número — elegí la pista (se recomienda la libre).</em>
-              )}
+          <div className="album-move-columns">
+            <div className="album-move-col">
+              <span className="album-move-col-head">Elegir pista</span>
+              <div className="album-move-poslist" role="listbox" aria-label="Número de pista destino">
+                {preview.slots.map(slot => {
+                  const isSelected = slot.trackNumber === preview.selectedTrackNumber
+                  const isSuggested = slot.trackNumber === preview.suggestedTrackNumber && !slot.occupiedBy
+                  const className = [
+                    'album-move-slot',
+                    slot.occupiedBy ? 'occupied' : 'free',
+                    isSelected ? 'selected' : '',
+                    isSuggested ? 'suggested' : '',
+                  ].filter(Boolean).join(' ')
+                  const hint = slot.occupiedBy
+                    ? `Ocupada: ${slot.occupiedBy.title} (${albumMoveQualityLabel(slot.occupiedBy.quality)})`
+                    : 'Libre'
+                  return (
+                    <button
+                      key={slot.trackNumber}
+                      type="button"
+                      role="option"
+                      aria-selected={isSelected}
+                      className={className}
+                      title={hint}
+                      onClick={() => setTrackNumberOverride(slot.trackNumber)}
+                    >
+                      <span className="album-move-slot-no">{slot.trackNumber}</span>
+                      <span className="album-move-slot-title">{slot.occupiedBy?.title ?? 'Libre'}</span>
+                    </button>
+                  )
+                })}
+              </div>
             </div>
-            <div className="album-move-slots" role="listbox" aria-label="Número de pista destino">
-              {preview.slots.map(slot => {
-                const isSelected = slot.trackNumber === preview.selectedTrackNumber
-                const isSuggested = slot.trackNumber === preview.suggestedTrackNumber && !slot.occupiedBy
-                const className = [
-                  'album-move-slot',
-                  slot.occupiedBy ? 'occupied' : 'free',
-                  isSelected ? 'selected' : '',
-                  isSuggested ? 'suggested' : '',
-                ].filter(Boolean).join(' ')
-                const hint = slot.occupiedBy
-                  ? `Ocupada: ${slot.occupiedBy.title} (${albumMoveQualityLabel(slot.occupiedBy.quality)})`
-                  : 'Libre'
-                return (
-                  <button
-                    key={slot.trackNumber}
-                    type="button"
-                    role="option"
-                    aria-selected={isSelected}
-                    className={className}
-                    title={hint}
-                    onClick={() => setTrackNumberOverride(slot.trackNumber)}
+
+            <div className="album-move-col">
+              <span className="album-move-col-head">{selectedAlbum?.title ?? 'Actual'}</span>
+              <div className="album-move-rows">
+                {preview.slots.map(slot => (
+                  <div className={`album-move-row ${slot.occupiedBy ? '' : 'empty'}`} key={slot.trackNumber}>
+                    <span className="album-move-row-no">{slot.trackNumber}</span>
+                    <span className="album-move-row-title">{slot.occupiedBy?.title ?? '—'}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="album-move-col">
+              <span className="album-move-col-head">Cómo queda</span>
+              <div className="album-move-rows">
+                {afterRows.map(row => (
+                  <div
+                    className={`album-move-row ${row.kind === 'incoming' ? (row.conflict ? 'conflict' : 'incoming') : ''}`}
+                    key={row.trackNumber}
                   >
-                    {slot.trackNumber}
-                  </button>
-                )
-              })}
+                    <span className="album-move-row-no">{row.trackNumber}</span>
+                    <span className="album-move-row-title">
+                      {row.kind === 'incoming' ? (
+                        <>
+                          {row.displacedTitle && (
+                            <span className="album-move-after-replaced">{row.displacedTitle}</span>
+                          )}
+                          <strong>{row.title}</strong>
+                          <span className="album-move-pill">
+                            {row.conflict ? 'conflicto' : row.replacing ? 'reemplaza' : 'nuevo'}
+                          </span>
+                        </>
+                      ) : row.title}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         )}
 
+        {preview?.isAppend && (
+          <div className="album-move-flag append">
+            No encontramos esta pista en el álbum: se agregará al final ({preview.selectedTrackNumber}).
+          </div>
+        )}
+
         {preview?.replacement && (
-          <div className={`album-move-replace ${preview.replacement.incomingIsBetter ? 'ok' : 'blocked'}`}>
-            <span>{preview.replacement.incomingIsBetter ? 'Reemplazo por mejor calidad' : 'No se reemplaza'}</span>
+          <div className={`album-move-replace ${willReplace ? 'ok' : 'blocked'}`}>
+            <span>
+              {preview.replacement.incomingIsBetter
+                ? 'Reemplazo por mejor calidad'
+                : willReplace ? 'Reemplazo confirmado' : 'No se reemplaza por menor calidad'}
+            </span>
             <div className="album-move-replace-grid">
               <div>
                 <small title={preview.replacement.title}>Existente · {preview.replacement.title}</small>
                 <strong>{albumMoveQualityLabel(preview.replacement.existing)}</strong>
+                <small className="album-move-replace-path" title={preview.replacement.path}>{preview.replacement.path}</small>
               </div>
               <span className="album-move-replace-arrow" aria-hidden="true">→</span>
               <div>
@@ -591,28 +681,20 @@ function TrackAlbumMoveModal({ track, onClose }: { track: Track; onClose: () => 
                 <strong>{albumMoveQualityLabel(preview.replacement.incoming)}</strong>
               </div>
             </div>
-            <em>
-              {preview.replacement.incomingIsBetter
-                ? 'La pista existente irá a la papelera (recuperable).'
-                : 'La pista existente tiene calidad igual o superior; elegí otra pista.'}
-            </em>
+            {preview.replacement.incomingIsBetter ? (
+              <em>La pista existente irá a la papelera (recuperable).</em>
+            ) : (
+              <label className="album-move-force">
+                <input
+                  type="checkbox"
+                  checked={confirmLower}
+                  onChange={event => setConfirmLower(event.target.checked)}
+                />
+                Borrar "{preview.replacement.title}" igual y mover (va a la papelera, recuperable).
+              </label>
+            )}
           </div>
         )}
-
-        <div className="album-move-preview">
-          <div>
-            <span>Actual</span>
-            <strong>{track.t}</strong>
-            <em>{track.artist} · {track.albumTitle}</em>
-            <small title={track.path}>{track.path}</small>
-          </div>
-          <div>
-            <span>Destino</span>
-            <strong>{preview?.proposal?.title ?? track.t}</strong>
-            <em>{selectedAlbum ? `${selectedAlbum.artist} · ${selectedAlbum.title}` : '-'}</em>
-            <small title={preview?.proposal?.destinationPath}>{preview?.proposal?.destinationPath ?? '-'}</small>
-          </div>
-        </div>
 
         <div className="album-move-facts">
           <div><span>Track</span><strong>{formatTrackPosition(preview)}</strong></div>
