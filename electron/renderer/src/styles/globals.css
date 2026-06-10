@@ -2020,12 +2020,15 @@ html, body {
 
 .pp-lyrics-preview .lyr-inline .lyr-body,
 .pp-lyrics-preview .lyr-current .lyr-body {
-  max-height: 176px;
+  flex: 1;
+  min-height: 0;
+  max-height: none;
 }
 
 .pp-lyrics-preview .lyr-inline .lyr-list,
 .pp-lyrics-preview .lyr-current .lyr-list {
   padding-bottom: 6px;
+  overflow: auto;
 }
 
 .pp-lyrics-preview .lyr-inline .lyr-line {
@@ -11139,6 +11142,13 @@ button.device-artwork-group-row:focus-visible {
   overflow-wrap: anywhere;
 }
 .lyr-line-gap { height: 8px; list-style: none; }
+/* Invisible one-line spacer that reserves the "previous verse" slot when the
+   active line is the first one, so the active verse holds a stable position. */
+.lyr-line-lead-pad {
+  visibility: hidden;
+  pointer-events: none;
+  cursor: default;
+}
 
 .lyr-plain { overflow: auto; flex: 1; min-height: 0; padding: 8px 14px 24px; }
 .lyr-plain-line {

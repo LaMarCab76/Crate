@@ -90,8 +90,7 @@ function visibleSyncedLines(lines: LrcLine[], currentLineIndex: number, mode: Sy
   const activeIndex = currentLineIndex >= 0 ? currentLineIndex : 0
   const start = Math.max(0, activeIndex - (mode === 'current' ? 0 : 1))
   const end =
-    mode === 'preview' ? Math.min(lines.length - 1, activeIndex + 1)
-    : mode === 'current' ? activeIndex
+    mode === 'current' ? activeIndex
     : Math.min(lines.length - 1, activeIndex + linesAfter)
   const visibleStart = mode === 'flow' ? Math.max(0, activeIndex - FLOW_LINES_BEFORE) : start
 
@@ -351,12 +350,23 @@ function LyricsPanelContent({
   const showPlain = !showSynced && !!plainLines && (status === 'found_plain' || status === 'low_confidence')
   // The intro wait bar visually occupies the "active verse" slot, so when it's
   // visible we render one fewer upcoming line to keep the total count constant.
-  const baseLinesAfter = focusLinesAfter ?? FLOW_LINES_AFTER
+  // The preview window only ever shows a single upcoming line, so it gets its
+  // own base instead of the flow default (which would otherwise expand to 28).
+  const baseLinesAfter = syncedWindow === 'preview' ? 1 : (focusLinesAfter ?? FLOW_LINES_AFTER)
   const effectiveLinesAfter = waitRange != null ? Math.max(0, baseLinesAfter - 1) : baseLinesAfter
   const visibleLines = useMemo(
     () => showSynced && parsed ? visibleSyncedLines(parsed.lines, displayLineIndex, syncedWindow, effectiveLinesAfter) : [],
     [displayLineIndex, effectiveLinesAfter, parsed, showSynced, syncedWindow],
   )
+  // When the active verse is the very first line (or we're still on the intro
+  // wait bar) there is no "previous" line to fill the slot above it. In the
+  // animated windows we reserve that slot with an invisible placeholder so the
+  // active verse keeps a stable vertical position from the start — no jump once
+  // a real previous line appears.
+  const activeIndexClamped = displayLineIndex >= 0 ? displayLineIndex : 0
+  const reserveLeadingSlot =
+    animatedLyricsWindow && showSynced && visibleLines.length > 0 &&
+    visibleLines[0].index === activeIndexClamped
   const reserveActiveLineLayout = syncedWindow !== 'all'
   const activeLayoutClass = reserveActiveLineLayout ? ' lyr-line-layout-active' : ''
   const flowLineClass = animatedLyricsWindow ? ' lyr-flow-line' : ''
@@ -758,6 +768,14 @@ function LyricsPanelContent({
               className={`lyr-measure lyr-line lyr-line-active${activeLayoutClass}${flowLineClass}`}
               aria-hidden="true"
             />
+            {reserveLeadingSlot && (
+              <li key="lyr-lead-pad" className="lyr-line lyr-line-lead-pad" aria-hidden="true">
+                <span className="lyr-line-stack">
+                  <span className="lyr-line-visible">{' '}</span>
+                  <span className="lyr-line-ghost" aria-hidden="true">{' '}</span>
+                </span>
+              </li>
+            )}
             {visibleLines.map(({ line, index: i }) => {
               const activeIndex = displayLineIndex >= 0 ? displayLineIndex : 0
               const isActive = i === displayLineIndex
