@@ -198,7 +198,7 @@ export function AlbumsView({
             <SourceBadge
               folderIds={al.tracks.map(track => track.folderId)}
               provider={al.tracks[0]?.provider}
-              compact
+              appearance="icon"
             />
           </div>
         ))}

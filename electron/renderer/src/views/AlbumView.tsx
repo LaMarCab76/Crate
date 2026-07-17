@@ -74,7 +74,11 @@ export function AlbumView({ album }: Props) {
             <a>{a.artist}</a> · {a.year} · {a.tracks.length} tracks · {fmtTime(totalDur)} · {fmtFileSize(totalSize)}
           </div>
           <div className="album-source-summary">
-            <SourceBadge folderIds={sourceIds} provider={a.tracks[0]?.provider} />
+            <SourceBadge
+              folderIds={sourceIds}
+              provider={a.tracks[0]?.provider}
+              appearance="plain"
+            />
           </div>
           {isUnresolvedAlbum && (
             <div className="meta-note">

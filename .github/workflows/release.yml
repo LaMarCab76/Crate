@@ -9,7 +9,7 @@ on:
       tag:
         description: Existing tag to publish
         required: true
-        default: v0.5.1
+        default: v0.5.2
       unsigned_macos:
         description: Build macOS ad hoc without notarization
         required: true

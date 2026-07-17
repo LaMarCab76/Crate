@@ -13077,6 +13077,16 @@ button.device-artwork-group-row:focus-visible {
 }
 
 .source-badge.compact { padding: 3px 6px; font-size: 10px; }
+.source-badge.plain,
+.source-badge.icon-only {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.source-badge.icon-only {
+  width: fit-content;
+  color: var(--text-tertiary);
+}
 .source-badge.mixed { font-weight: 600; }
 .source-badge-part { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
 .source-badge-part > span { overflow: hidden; text-overflow: ellipsis; }
