@@ -17,6 +17,7 @@ export function SearchView({ query, onSelectAlbum, onSelectArtist }: Props) {
   const [results, setResults] = useState<SearchResultsPayload>({ tracks: [], albums: [], artists: [] })
   const [albumTracks, setAlbumTracks] = useState<Record<number, DbTrack[]>>({})
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const albumActions = useAlbumActions()
 
   useEffect(() => {
@@ -26,18 +27,28 @@ export function SearchView({ query, onSelectAlbum, onSelectArtist }: Props) {
       setResults({ tracks: [], albums: [], artists: [] })
       setAlbumTracks({})
       setLoading(false)
+      setError(null)
       return
     }
     setLoading(true)
+    setError(null)
     const handle = window.setTimeout(async () => {
       try {
         const res = await window.api.library.search(trimmed, 20)
-        const albumTrackPairs = await Promise.all(
+        const albumTrackResults = await Promise.allSettled(
           res.albums.map(async album => [album.id, await window.api.library.albumTracks(album.id)] as const),
         )
+        const albumTrackPairs = albumTrackResults.flatMap(result => result.status === 'fulfilled' ? [result.value] : [])
         if (!canceled) {
           setResults(res)
           setAlbumTracks(Object.fromEntries(albumTrackPairs))
+          if (albumTrackPairs.length !== res.albums.length) {
+            setError('Algunos álbumes no pudieron completar sus pistas; se muestran los demás resultados.')
+          }
+        }
+      } catch (searchError) {
+        if (!canceled) {
+          setError(searchError instanceof Error ? searchError.message : 'No se pudo completar la búsqueda.')
         }
       } finally {
         if (!canceled) setLoading(false)
@@ -66,6 +77,7 @@ export function SearchView({ query, onSelectAlbum, onSelectArtist }: Props) {
         <div style={{ padding: 24, color: 'var(--text-tertiary)' }}>Searching…</div>
       ) : (
         <>
+          {error && <div className="device-warning inline" role="status">{error}</div>}
           {tracks.length > 0 && (
             <div className="search-section">
               <h3>Songs</h3>
@@ -81,6 +93,11 @@ export function SearchView({ query, onSelectAlbum, onSelectArtist }: Props) {
                     key={al.id}
                     className="card"
                     onClick={() => onSelectAlbum?.(al)}
+                    onKeyDown={event => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return
+                      event.preventDefault()
+                      onSelectAlbum?.(al)
+                    }}
                     onContextMenu={e => albumActions.openAlbumMenu(e, al)}
                     role="button"
                     tabIndex={0}
@@ -103,6 +120,11 @@ export function SearchView({ query, onSelectAlbum, onSelectArtist }: Props) {
                     className="card"
                     style={{ width: 120 }}
                     onClick={() => onSelectArtist?.(ar)}
+                    onKeyDown={event => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return
+                      event.preventDefault()
+                      onSelectArtist?.(ar)
+                    }}
                     role="button"
                     tabIndex={0}
                   >

@@ -4,14 +4,17 @@ Audiophile music library and player for **macOS, Windows and Linux**, built as a
 Electron + Vite + React + TypeScript desktop app on top of the
 [BASS](https://www.un4seen.com/bass.html) audio library.
 
-> Current release: **v0.5.0** — installers and release notes live in
+> Current release: **v0.5.1** — installers and release notes live in
 > [`docs/releases/`](docs/releases/).
 
 ## Quick start
 
 ```bash
 npm install
+npm run fetch:bass   # downloads the native libraries for this OS
+npm run verify:bass  # checks the complete BASS runtime before launch/package
 npm run dev          # Electron dev window with Vite HMR
+npm test             # Node test suite
 npm run typecheck    # tsc for the main + renderer projects
 npm run build        # bundles main, preload, renderer into out/
 npm run dist         # packages an installer with electron-builder
@@ -27,8 +30,21 @@ runtime. If a native module ever drifts after an Electron upgrade,
 Packaged builds check GitHub Releases for updates through `electron-updater`.
 The release workflow uploads installer artifacts plus `latest*.yml` metadata,
 and Preferences → Actualizaciones can check, download, and install the
-published release. macOS auto-update still requires a signed build for the
-final install step.
+published release. The macOS release job requires Developer ID signing,
+notarization, a stapled ticket, and Gatekeeper acceptance before upload. A
+manual workflow dispatch can explicitly request ad hoc macOS artifacts when no
+Developer ID is available; those builds require a Gatekeeper override and do
+not support automatic installation of updates.
+
+## Optional OneDrive setup
+
+Crate supports personal OneDrive accounts through OAuth without embedding a
+client secret. To enable it, create a Microsoft public-client app that accepts
+personal Microsoft accounts, add the **Mobile and desktop applications**
+platform with the `http://localhost` redirect, and grant delegated
+`Files.ReadWrite` and `User.Read` permissions. Enter its **Application (client)
+ID** in Settings → Libraries when adding OneDrive; tokens are encrypted using
+the operating system's secure storage.
 
 ## Project layout
 
@@ -36,7 +52,10 @@ final install step.
 electron/
   main/         Electron main process (Node) — DB, audio, devices, downloads, IPC
     audio/        BASS FFI bindings, AudioEngine, GaplessController, EQ, CoreAudio hog mode
-    db/           better-sqlite3 connection, migrator + 24 SQL migrations, repositories
+    db/           better-sqlite3 connection, migrator + 30 SQL migrations, repositories
+    cloud/        OneDrive auth, Graph client, delta index, portable manifests
+    library-mirror/ persistent local/cloud backup plans and journals
+    library-migration/ relocate/merge planning, execution and recovery
     devices/      DAP detection, sync planner/journal, Rockbox theme scanner, artwork optimizer
     downloads/    Qobuz + Tidal providers, HAR credential extractor, job manager
     library/      Folder watchers, reconciler, metadata extractor/writer, artwork cache
@@ -57,7 +76,7 @@ electron/
       styles/       globals.css
 shared/         Cross-process TypeScript: IPC contract, library/db/device types,
                 LRC parser, equalizer + device-sync constants
-native/libs/    BASS dylibs (FX, FLAC, Opus, DSD, WV, TTA, MPC, APE, HLS, WebM, MIDI…)
+native/libs/    BASS native libs (FX, FLAC, Opus, DSD, WV, TTA, MPC, APE, HLS, WebM, MIDI…)
 electron-build/ App icon, entitlements, Electron rebuild scripts
 docs/           Release notes + feature specs (e.g. lyrics-feature.md)
 ```
@@ -88,7 +107,8 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
   shared between the renderer store and the engine.
 
 ### Library
-- Multi-folder libraries with a **chokidar** `FolderWatcher` plus a
+- Unified local and OneDrive libraries with per-source names, icons and badges.
+- Multi-folder local libraries with a **chokidar** `FolderWatcher` plus a
   `LibraryReconciler` that scans on startup, sweeps in the background, and
   records every run in a `library_scan_log` with configurable retention.
 - `ImportService` + `MetadataExtractor` use **music-metadata** and
@@ -103,7 +123,7 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
 - `ArtworkCache` extracts and resizes embedded art on first sight and exposes
   it under a privileged `crate://` protocol scheme so the renderer can render
   thousands of covers without round-tripping through IPC for the bytes.
-- **SQLite** schema (23 migrations) with **FTS5** search and triggers that keep
+- **SQLite** schema (30 migrations) with **FTS5** search and triggers that keep
   the index fresh as tracks change, plus repositories per entity
   (tracks, albums, artists, genres, playlists, queues, folders, scan log,
   playback analysis, download jobs, lyrics).
@@ -208,9 +228,15 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
 - `electron-builder` targets: **DMG (x64 + arm64), NSIS (x64), AppImage, .deb**,
   with `native/libs/` shipped via `extraResources` + `asarUnpack` so BASS
   loads at runtime.
+- `fetch:bass` downloads the platform-specific core/FX/plugin set and
+  `verify:bass` validates both source and packaged resources before a release
+  artifact can be uploaded.
 - GitHub Releases publish configuration emits updater metadata
   (`latest-mac.yml`, `latest.yml`, `latest-linux.yml`) and macOS zip artifacts
   required by the updater.
+- macOS release packaging is fail-closed: it requires a Developer ID certificate,
+  notarizes both architectures, and verifies codesign, stapling and Gatekeeper
+  acceptance before upload.
 - Strict renderer sandbox: `contextIsolation: true`, `nodeIntegration: false`,
   navigation locked to the app's own origin, `window.open` filtered to
   http(s) only.

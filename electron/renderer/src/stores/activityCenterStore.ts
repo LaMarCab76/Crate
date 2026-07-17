@@ -42,6 +42,7 @@ export interface ActivityMetadata {
   deviceId?: string
   planId?: string
   rootPath?: string
+  pathToken?: string
   volumeName?: string
   folderId?: number
   downloadJobId?: string
@@ -488,6 +489,7 @@ export function activityFromUnknownVolume(volume: DeviceUnknownVolume): Activity
     metadata: {
       activityKind: 'unknown-volume',
       rootPath: volume.rootPath,
+      pathToken: volume.token,
       volumeName: volume.name,
     },
     actionIds: ['connect-device', 'add-library', 'ignore-volume', 'open-libraries'],

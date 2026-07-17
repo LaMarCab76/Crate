@@ -1,28 +1,28 @@
-import { app } from 'electron'
 import { readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadBass } from './bass-ffi'
 import { bassErrorName } from './bass-constants'
+import { bassLibExtension, bassLibFileName, nativeLibsDir } from './bass-paths'
 
 // All BASS decoder plugins we want to enable. Bass core itself handles MP3,
 // MP4/AAC, WAV, AIFF, OGG Vorbis natively. The plugins below add the rest.
-const KNOWN_PLUGINS = [
-  'libbassflac.dylib',
-  'libbassopus.dylib',
-  'libbasswebm.dylib',
-  'libbasswv.dylib',
-  'libbassape.dylib',
-  'libbassdsd.dylib',
-  'libbassmidi.dylib',
-  'libbass_mpc.dylib',
-  'libbass_spx.dylib',
-  'libbass_tta.dylib',
-  'libbasshls.dylib',
+const KNOWN_PLUGIN_BASES = [
+  'bassflac',
+  'bassopus',
+  'basswebm',
+  'basswv',
+  'bassape',
+  'bassdsd',
+  'bassmidi',
+  'bass_mpc',
+  'bass_spx',
+  'bass_tta',
+  'basshls',
 ]
 
-function libsDir(): string {
-  const base = app.isPackaged ? process.resourcesPath : app.getAppPath()
-  return join(base, 'native', 'libs')
+function isBassPluginFile(entry: string): boolean {
+  const stem = process.platform === 'win32' ? entry : entry.replace(/^lib/, '')
+  return stem.startsWith('bass')
 }
 
 export interface PluginLoadResult {
@@ -33,9 +33,10 @@ export interface PluginLoadResult {
 export function loadAllPlugins(): PluginLoadResult {
   const bass = loadBass()
   const result: PluginLoadResult = { loaded: [], skipped: [] }
-  const dir = libsDir()
+  const dir = nativeLibsDir()
+  const knownNames = KNOWN_PLUGIN_BASES.map(bassLibFileName)
 
-  for (const name of KNOWN_PLUGINS) {
+  for (const name of knownNames) {
     const path = join(dir, name)
     if (!existsSync(path)) {
       result.skipped.push({ name, reason: 'missing' })
@@ -50,15 +51,20 @@ export function loadAllPlugins(): PluginLoadResult {
     result.loaded.push(name)
   }
 
-  // Also auto-load any other libbass*.dylib we ship that wasn't in the list
-  // above (e.g. format plugins added later — we ignore non-decoder plugins
-  // like libbass_fx since that one is loaded explicitly by EQManager).
+  // Also auto-load any other platform BASS decoder plugin we ship. Core,
+  // bass_fx (loaded by EQManager), and bass_vst are intentionally excluded.
+  const ext = bassLibExtension()
+  const skipNames = new Set([
+    bassLibFileName('bass'),
+    bassLibFileName('bass_fx'),
+    bassLibFileName('bass_vst'),
+    ...knownNames,
+  ])
   try {
     for (const entry of readdirSync(dir)) {
-      if (!entry.startsWith('libbass')) continue
-      if (entry === 'libbass.dylib' || entry === 'libbass_fx.dylib') continue
-      if (entry === 'libbass_vst.dylib') continue
-      if (KNOWN_PLUGINS.includes(entry)) continue
+      if (!entry.endsWith(ext)) continue
+      if (skipNames.has(entry)) continue
+      if (!isBassPluginFile(entry)) continue
       const path = join(dir, entry)
       const handle = bass.PluginLoad(path, 0)
       if (handle !== 0) result.loaded.push(entry)

@@ -11,7 +11,7 @@ const ALL_COLUMNS = `
   bitrate, sample_rate, channels, codec, bit_depth,
   artwork_data, artwork_path, date_added, is_duplicate, primary_track_id, duplicate_group_id,
   extended_metadata, album_id, artist_id, genre_id, r128_integrated_loudness,
-  state_updated_at
+  state_updated_at, provider, drive_id, item_id, etag, remote_path, quickxor_hash
 `
 
 export interface ListOpts {
@@ -34,6 +34,7 @@ export class TrackRepo {
   private stmtByFolderWithAlbum: Statement
   private stmtUpdateMetadata: Statement
   private stmtMoveAndUpdateMetadata: Statement
+  private stmtUpdatePath: Statement
   private stmtInsert: Statement
   private listStmtCache = new Map<string, Statement>()
 
@@ -135,6 +136,9 @@ export class TrackRepo {
         state_updated_at = @stateUpdatedAt
       WHERE id = @id
     `)
+    this.stmtUpdatePath = db.prepare(`
+      UPDATE tracks SET path = ?, filename = ? WHERE id = ?
+    `)
     this.stmtInsert = db.prepare(`
       INSERT OR IGNORE INTO tracks (
         path, filename, title, artist, album, duration, format, folder_id,
@@ -145,7 +149,8 @@ export class TrackRepo {
         sort_title, sort_artist, sort_album, sort_album_artist,
         bitrate, sample_rate, channels, codec, bit_depth,
         artwork_data, artwork_path, date_added, is_duplicate, primary_track_id, duplicate_group_id,
-        extended_metadata, album_id, artist_id, genre_id, r128_integrated_loudness
+        extended_metadata, album_id, artist_id, genre_id, r128_integrated_loudness,
+        provider, drive_id, item_id, etag, remote_path, quickxor_hash
       ) VALUES (
         @path, @filename, @title, @artist, @album, @duration, @format, @folder_id,
         @file_size, @date_modified, @album_artist, @composer, @genre, @year,
@@ -155,7 +160,8 @@ export class TrackRepo {
         @sort_title, @sort_artist, @sort_album, @sort_album_artist,
         @bitrate, @sample_rate, @channels, @codec, @bit_depth,
         @artwork_data, @artwork_path, @date_added, @is_duplicate, @primary_track_id, @duplicate_group_id,
-        @extended_metadata, @album_id, @artist_id, @genre_id, @r128_integrated_loudness
+        @extended_metadata, @album_id, @artist_id, @genre_id, @r128_integrated_loudness,
+        @provider, @drive_id, @item_id, @etag, @remote_path, @quickxor_hash
       )
     `)
   }
@@ -207,6 +213,10 @@ export class TrackRepo {
 
   getByFolderWithAlbum(folderId: number): DbTrack[] {
     return this.stmtByFolderWithAlbum.all(folderId) as DbTrack[]
+  }
+
+  updatePath(id: number, path: string, filename: string): void {
+    this.stmtUpdatePath.run(path, filename, id)
   }
 
   updateMetadata(args: {
@@ -344,7 +354,19 @@ export class TrackRepo {
   }
 
   insert(track: DbTrackInsert): number {
-    const result = this.stmtInsert.run(track as unknown as Record<string, unknown>)
+    // Keep older/local import call sites source-compatible with the cloud-aware
+    // schema. better-sqlite3 requires every named parameter to be present even
+    // when the corresponding database column has a default value.
+    const row: DbTrackInsert = {
+      provider: 'local',
+      drive_id: null,
+      item_id: null,
+      etag: null,
+      remote_path: null,
+      quickxor_hash: null,
+      ...track,
+    }
+    const result = this.stmtInsert.run(row as unknown as Record<string, unknown>)
     // INSERT OR IGNORE returns changes=0 when the row was a UNIQUE conflict —
     // surface that to callers as id 0 so they can skip downstream broadcasts.
     if (result.changes === 0) return 0
@@ -372,12 +394,12 @@ export class TrackRepo {
     const offset = Number.isInteger(opts.offset) && (opts.offset as number) > 0 ? (opts.offset as number) : 0
     const orderClause = (() => {
       switch (orderBy) {
-        case 'date_added_asc':   return 'date_added ASC'
-        case 'title':            return 'title COLLATE NOCASE ASC'
-        case 'artist':           return 'artist COLLATE NOCASE ASC'
-        case 'play_count_desc':  return 'play_count DESC'
+        case 'date_added_asc':   return 'date_added ASC, id ASC'
+        case 'title':            return 'title COLLATE NOCASE ASC, id ASC'
+        case 'artist':           return 'artist COLLATE NOCASE ASC, id ASC'
+        case 'play_count_desc':  return 'play_count DESC, id DESC'
         case 'date_added_desc':
-        default:                 return 'date_added DESC'
+        default:                 return 'date_added DESC, id DESC'
       }
     })()
 

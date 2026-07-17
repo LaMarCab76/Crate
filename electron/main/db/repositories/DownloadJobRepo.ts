@@ -56,10 +56,19 @@ export class DownloadJobRepo {
   private stmtQueued: Statement
   private stmtById: Statement
   private stmtInsert: Statement
+  private stmtActiveReservation: Statement
+  private stmtActiveReservationExcept: Statement
   private stmtUpdateStatus: Statement
   private stmtUpdateProgress: Statement
   private stmtUpdatePath: Statement
   private stmtResetForRetry: Statement
+  private stmtInterrupted: Statement
+  private stmtRecoverInterrupted: Statement
+  private stmtClaimQueued: Statement
+  private reserveTransaction: (
+    track: OnlineTrackResult,
+    args: { id: string; folderId: number | null; quality: DownloadQuality },
+  ) => { job: DownloadJob; created: boolean }
 
   constructor(db: BetterSqliteDatabase) {
     this.stmtList = db.prepare<unknown[], DownloadJobRow>(`
@@ -90,6 +99,35 @@ export class DownloadJobRepo {
         @title, @artist, @album, @artworkUrl, @sourceUrl, @metadataJson,
         @path, @error, @bytesReceived, @bytesTotal, @createdAt, @updatedAt, @completedAt
       )
+    `)
+    this.stmtActiveReservation = db.prepare<
+      [DownloadProvider, string, DownloadQuality, number],
+      DownloadJobRow
+    >(`
+      SELECT ${SELECT_COLUMNS}
+      FROM download_jobs
+      WHERE provider = ?
+        AND provider_track_id = ?
+        AND quality = ?
+        AND IFNULL(folder_id, -1) = ?
+        AND status IN ('queued', 'authenticating', 'resolving', 'downloading', 'verifying', 'tagging', 'importing')
+      ORDER BY created_at ASC, id ASC
+      LIMIT 1
+    `)
+    this.stmtActiveReservationExcept = db.prepare<
+      [DownloadProvider, string, DownloadQuality, number, string],
+      DownloadJobRow
+    >(`
+      SELECT ${SELECT_COLUMNS}
+      FROM download_jobs
+      WHERE provider = ?
+        AND provider_track_id = ?
+        AND quality = ?
+        AND IFNULL(folder_id, -1) = ?
+        AND id != ?
+        AND status IN ('queued', 'authenticating', 'resolving', 'downloading', 'verifying', 'tagging', 'importing')
+      ORDER BY created_at ASC, id ASC
+      LIMIT 1
     `)
     this.stmtUpdateStatus = db.prepare(`
       UPDATE download_jobs
@@ -122,6 +160,50 @@ export class DownloadJobRepo {
           completed_at = NULL
       WHERE id = @id
     `)
+    this.stmtInterrupted = db.prepare<unknown[], DownloadJobRow>(`
+      SELECT ${SELECT_COLUMNS}
+      FROM download_jobs
+      WHERE status IN ('authenticating', 'resolving', 'downloading', 'verifying', 'tagging', 'importing')
+      ORDER BY created_at ASC
+    `)
+    this.stmtRecoverInterrupted = db.prepare(`
+      UPDATE download_jobs
+      SET status = 'queued',
+          error = NULL,
+          bytes_received = 0,
+          bytes_total = NULL,
+          updated_at = @updatedAt,
+          completed_at = NULL
+      WHERE status IN ('authenticating', 'resolving', 'downloading', 'verifying', 'tagging', 'importing')
+    `)
+    this.stmtClaimQueued = db.prepare(`
+      UPDATE download_jobs
+      SET status = 'authenticating',
+          error = NULL,
+          updated_at = @updatedAt,
+          completed_at = NULL
+      WHERE id = @id AND status = 'queued'
+    `)
+
+    const reserve = db.transaction((
+      track: OnlineTrackResult,
+      args: { id: string; folderId: number | null; quality: DownloadQuality },
+    ): { job: DownloadJob; created: boolean } => {
+      const folderKey = args.folderId ?? -1
+      const existing = this.stmtActiveReservation.get(
+        track.provider,
+        track.providerTrackId,
+        args.quality,
+        folderKey,
+      ) as DownloadJobRow | undefined
+      if (existing) return { job: toJob(existing), created: false }
+
+      this.insertRow(track, args)
+      const job = this.getById(args.id)
+      if (!job) throw new Error('Download reservation was not persisted.')
+      return { job, created: true }
+    })
+    this.reserveTransaction = (track, args) => reserve(track, args)
   }
 
   list(): DownloadJob[] {
@@ -137,7 +219,19 @@ export class DownloadJobRepo {
     return row ? toJob(row) : null
   }
 
+  reserve(
+    track: OnlineTrackResult,
+    args: { id: string; folderId: number | null; quality: DownloadQuality },
+  ): { job: DownloadJob; created: boolean } {
+    return this.reserveTransaction(track, args)
+  }
+
   insert(track: OnlineTrackResult, args: { id: string; folderId: number | null; quality: DownloadQuality }): DownloadJob {
+    this.insertRow(track, args)
+    return this.getById(args.id)!
+  }
+
+  private insertRow(track: OnlineTrackResult, args: { id: string; folderId: number | null; quality: DownloadQuality }): void {
     const now = Date.now()
     this.stmtInsert.run({
       id: args.id,
@@ -160,7 +254,17 @@ export class DownloadJobRepo {
       updatedAt: now,
       completedAt: null,
     })
-    return this.getById(args.id)!
+  }
+
+  claimQueued(id: string): DownloadJob | null {
+    const result = this.stmtClaimQueued.run({ id, updatedAt: Date.now() })
+    return result.changes === 1 ? this.getById(id) : null
+  }
+
+  recoverInterrupted(): DownloadJob[] {
+    const interrupted = (this.stmtInterrupted.all() as DownloadJobRow[]).map(toJob)
+    this.stmtRecoverInterrupted.run({ updatedAt: Date.now() })
+    return interrupted
   }
 
   setStatus(id: string, status: DownloadStatus, error: string | null = null): DownloadJob | null {
@@ -182,6 +286,16 @@ export class DownloadJobRepo {
   }
 
   resetForRetry(id: string): DownloadJob | null {
+    const current = this.getById(id)
+    if (!current) return null
+    const existing = this.stmtActiveReservationExcept.get(
+      current.provider,
+      current.providerTrackId,
+      current.quality,
+      current.folderId ?? -1,
+      current.id,
+    ) as DownloadJobRow | undefined
+    if (existing) return toJob(existing)
     this.stmtResetForRetry.run({ id, updatedAt: Date.now() })
     return this.getById(id)
   }

@@ -1,4 +1,4 @@
-// koffi FFI bindings to libbass.dylib + libbass_fx.dylib.
+// koffi FFI bindings to the platform-specific BASS core library.
 // Loaded lazily so the module can be imported in test environments without
 // the native libraries being present.
 
@@ -6,9 +6,8 @@
 // `import * as` + unwrap dance fails at runtime in the bundled output, so
 // we go through `createRequire` to grab the CJS export directly — this gives
 // us the koffi object straight, no interop quirks.
-import { app } from 'electron'
 import { createRequire } from 'node:module'
-import { join } from 'node:path'
+import { bassLibPath } from './bass-paths'
 
 const require = createRequire(import.meta.url)
 type KoffiNs = typeof import('koffi')
@@ -59,13 +58,6 @@ const BASS_DEVICEINFO = koffi.struct('BASS_DEVICEINFO', {
   flags:  'uint32_t',
 })
 
-function nativeLibPath(name: string): string {
-  // In dev `app.getAppPath()` is the repo root; in production
-  // `process.resourcesPath` points at Resources/ inside the bundle.
-  const base = app.isPackaged ? process.resourcesPath : app.getAppPath()
-  return join(base, 'native', 'libs', name)
-}
-
 interface BassBindings {
   lib: ReturnType<typeof koffi.load>
   Init: (device: number, freq: number, flags: number, win: bigint, dsguid: bigint) => number
@@ -106,7 +98,7 @@ let bindings: BassBindings | null = null
 export function loadBass(): BassBindings {
   if (bindings) return bindings
 
-  const lib = koffi.load(nativeLibPath('libbass.dylib'))
+  const lib = koffi.load(bassLibPath('bass'))
 
   bindings = {
     lib,

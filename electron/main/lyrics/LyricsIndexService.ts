@@ -11,9 +11,11 @@
 // Source of truth is the in-memory `cache`, mutated incrementally by set/remove
 // as lyrics change; doWrite just serializes it (no folder rescan per write).
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { dirname, join, relative, sep } from 'node:path'
 import { getRepos, type Repos } from '../db/repositories'
+import { isLibraryLocationMigrationLocked } from '../library-migration/locationLocks'
 import type { DbTrack } from '@shared/types/db'
 import type { LyricsIndexEntry, LyricsIndexFile } from '@shared/types/lyrics-index'
 import {
@@ -34,10 +36,14 @@ function indexPathForFolder(folderPath: string): string {
 }
 
 function writeJsonAtomic(target: string, payload: LyricsIndexFile): void {
-  const tmp = target + '.tmp'
+  const tmp = `${target}.tmp-${randomUUID()}`
   mkdirSync(dirname(target), { recursive: true })
-  writeFileSync(tmp, JSON.stringify(payload), 'utf8')
-  renameSync(tmp, target)
+  try {
+    writeFileSync(tmp, JSON.stringify(payload), { encoding: 'utf8', flag: 'wx' })
+    renameSync(tmp, target)
+  } finally {
+    rmSync(tmp, { force: true })
+  }
 }
 
 function entriesEqual(a: LyricsIndexEntry, b: LyricsIndexEntry): boolean {
@@ -126,13 +132,13 @@ class LyricsIndexService {
 
   setForTrack(track: DbTrack, entry: LyricsIndexEntry): void {
     const folder = this.repos.folders.getById(track.folder_id)
-    if (!folder) return
+    if (!folder || folder.provider !== 'local' || folder.role !== 'library' || track.provider !== 'local') return
     this.set(track.folder_id, folder.path, track.path, entry)
   }
 
   removeEntryForTrack(track: DbTrack): void {
     const folder = this.repos.folders.getById(track.folder_id)
-    if (!folder) return
+    if (!folder || folder.provider !== 'local' || folder.role !== 'library' || track.provider !== 'local') return
     this.remove(track.folder_id, folder.path, track.path)
   }
 
@@ -171,10 +177,11 @@ class LyricsIndexService {
   }
 
   private doWrite(folderId: number): void {
+    if (isLibraryLocationMigrationLocked(folderId)) return
     const file = this.cache.get(folderId)
     if (!file) return
     const folder = this.repos.folders.getById(folderId)
-    if (!folder) return
+    if (!folder || folder.provider !== 'local' || folder.role !== 'library') return
     try {
       file.updatedAt = new Date().toISOString()
       writeJsonAtomic(indexPathForFolder(folder.path), file)

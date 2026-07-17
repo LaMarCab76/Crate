@@ -1,11 +1,10 @@
-// koffi bindings for libbass_fx.dylib. We expose only what we actually use for
-// the equalizer. Reverb / volume FX live in the same library and can be added
-// later by adding more struct definitions and func calls.
+// koffi bindings for the platform-specific BASS_FX library. We expose only
+// what we actually use for the equalizer. Reverb / volume FX live in the same
+// library and can be added later by adding more struct definitions and calls.
 
-import { app } from 'electron'
 import { createRequire } from 'node:module'
-import { join } from 'node:path'
 import { loadBass } from './bass-ffi'
+import { bassLibPath } from './bass-paths'
 
 const require = createRequire(import.meta.url)
 const koffi = require('koffi') as typeof import('koffi')
@@ -63,16 +62,11 @@ interface BassFxBindings {
 
 let bindings: BassFxBindings | null = null
 
-function nativeLibPath(name: string): string {
-  const base = app.isPackaged ? process.resourcesPath : app.getAppPath()
-  return join(base, 'native', 'libs', name)
-}
-
 export function loadBassFx(): BassFxBindings {
   if (bindings) return bindings
   // Loading libbass_fx runs its static constructor, which registers the BFX
   // effects with the core BASS so BASS_ChannelSetFX recognises them.
-  const fxLib = koffi.load(nativeLibPath('libbass_fx.dylib'))
+  const fxLib = koffi.load(bassLibPath('bass_fx'))
   // BASS_FXSet/GetParameters are CORE BASS exports (libbass_fx only exports
   // BASS_FX_GetVersion), so bind them from the same libbass handle bass-ffi
   // already opened rather than relying on dlsym traversing the dependency.

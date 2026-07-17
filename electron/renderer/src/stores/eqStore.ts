@@ -73,5 +73,6 @@ if (typeof window !== 'undefined' && window.api?.eq) {
   window.api.eq.presets().then(names => {
     useEqStore.setState({ presetNames: names })
   }).catch(() => { /* main not ready yet */ })
-  window.api.eq.onChanged(applyRemoteState)
+  const offChanged = window.api.eq.onChanged(applyRemoteState)
+  import.meta.hot?.dispose(offChanged)
 }

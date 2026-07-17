@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { HarCredentialExtractor } from './HarCredentialExtractor'
+import { HarCredentialExtractor } from './HarCredentialExtractor.ts'
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), 'crate-har-'))
@@ -206,6 +206,89 @@ test('returns an unappliable preview when provider fields are absent', () => {
     assert.deepEqual(result.preview.missingFields, ['appId', 'appSecret', 'userAuthToken'])
     assert.equal(result.payload.provider, 'qobuz')
     assert.equal(result.payload.appId, undefined)
+  } finally {
+    cleanup(dir)
+  }
+})
+
+test('ignores credential-looking fields from non-provider hosts', () => {
+  const dir = tempDir()
+  try {
+    const path = writeHar(dir, [{
+      request: {
+        method: 'GET',
+        url: 'https://attacker.example/v1/search?app_id=stolen-app&user_auth_token=stolen-token',
+        headers: [{ name: 'Authorization', value: 'Bearer stolen-bearer' }],
+      },
+    }])
+
+    const result = new HarCredentialExtractor().inspect('qobuz', [path])
+
+    assert.equal(result.preview.canApply, false)
+    assert.equal(result.payload.provider, 'qobuz')
+    assert.equal(result.payload.appId, undefined)
+    assert.equal(result.payload.userAuthToken, undefined)
+  } finally {
+    cleanup(dir)
+  }
+})
+
+test('rejects ambiguous credential values from one provider endpoint', () => {
+  const dir = tempDir()
+  try {
+    const path = writeHar(dir, [
+      {
+        request: {
+          method: 'GET',
+          url: 'https://www.qobuz.com/api.json/0.2/catalog/search?app_id=first-app',
+        },
+      },
+      {
+        request: {
+          method: 'GET',
+          url: 'https://www.qobuz.com/api.json/0.2/catalog/search?app_id=second-app',
+        },
+      },
+    ])
+
+    assert.throws(
+      () => new HarCredentialExtractor().inspect('qobuz', [path]),
+      /ambiguous values for app_id/,
+    )
+  } finally {
+    cleanup(dir)
+  }
+})
+
+test('rejects credentials assembled from multiple TIDAL origins', () => {
+  const dir = tempDir()
+  try {
+    const path = writeHar(dir, [
+      {
+        request: {
+          method: 'POST',
+          url: 'https://auth.tidal.com/v1/oauth2/token',
+        },
+        response: {
+          content: {
+            mimeType: 'application/json',
+            text: JSON.stringify({ client_id: 'tidal-client' }),
+          },
+        },
+      },
+      {
+        request: {
+          method: 'GET',
+          url: 'https://openapi.tidal.com/v2/tracks/1',
+          headers: [{ name: 'Authorization', value: 'Bearer tidal-access-token' }],
+        },
+      },
+    ])
+
+    assert.throws(
+      () => new HarCredentialExtractor().inspect('tidal', [path]),
+      /multiple provider origins/,
+    )
   } finally {
     cleanup(dir)
   }

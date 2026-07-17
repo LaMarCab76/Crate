@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import type { PlayerTintSource, Tweak } from '@renderer/stores/settingsStore'
 import type { DbFolder } from '@shared/types/db'
 import { useEqStore } from '@renderer/stores/eqStore'
@@ -11,6 +11,7 @@ import {
 } from '@shared/constants/leveler'
 import { Icon } from '@renderer/components/Icon'
 import { ModalShell } from '@renderer/components/ModalShell'
+import { LibraryLocationsPanel } from '@renderer/components/LibraryLocationsPanel'
 import { FolderRemovalConfirmModal } from '@renderer/components/FolderRemovalConfirmModal'
 import type { DeviceConnectTarget } from '@renderer/components/DeviceConnectModal'
 import { useDeviceStore } from '@renderer/stores/deviceStore'
@@ -33,6 +34,12 @@ import type {
 } from '@shared/types/ipc-contract'
 import { COLOR_PRESETS } from '@renderer/utils/colorPresets'
 import { clearPlaybackTableBarsMemoryCache } from '@renderer/utils/playbackTableBars'
+
+function activateSwitchFromKeyboard(event: KeyboardEvent<HTMLElement>, action: () => void): void {
+  if (event.key !== 'Enter' && event.key !== ' ') return
+  event.preventDefault()
+  action()
+}
 import { basenameForPath } from '@renderer/utils/devicePaths'
 import { fmtTime } from '@renderer/utils/format'
 import { useVirtualRows } from '@renderer/utils/useVirtualRows'
@@ -87,16 +94,17 @@ function LibraryVolumeClassificationPanel({
 
   const pickDeviceRoot = async () => {
     const picked = await window.api.devices.pickRoot()
-    if (picked.canceled || !picked.path) return
+    if (picked.canceled || !picked.token || !picked.displayPath) return
     onConnectDevice({
-      rootPath: picked.path,
-      name: basenameForPath(picked.path),
+      token: picked.token,
+      displayPath: picked.displayPath,
+      name: basenameForPath(picked.displayPath),
     })
   }
 
-  const addAsLibrary = async (rootPath: string) => {
-    await addFolder(rootPath)
-    await ignoreVolume(rootPath)
+  const addAsLibrary = async (token: string) => {
+    await addFolder(token)
+    await refreshVolumes()
   }
 
   return (
@@ -162,7 +170,7 @@ function LibraryVolumeClassificationPanel({
                   className="btn sm"
                   type="button"
                   disabled={loading || connectedRoots.has(candidate.rootPath)}
-                  onClick={() => onConnectDevice({ rootPath: candidate.rootPath, name: candidate.name })}
+                  onClick={() => onConnectDevice({ token: candidate.token, displayPath: candidate.rootPath, name: candidate.name })}
                 >
                   MP3
                 </button>
@@ -191,7 +199,7 @@ function LibraryVolumeClassificationPanel({
                   className="btn sm"
                   type="button"
                   disabled={loading}
-                  onClick={() => onConnectDevice({ rootPath: volume.rootPath, name: volume.name })}
+                  onClick={() => onConnectDevice({ token: volume.token, displayPath: volume.rootPath, name: volume.name })}
                 >
                   MP3
                 </button>
@@ -199,11 +207,11 @@ function LibraryVolumeClassificationPanel({
                   className="btn sm"
                   type="button"
                   disabled={libraryRoots.has(volume.rootPath)}
-                  onClick={() => void addAsLibrary(volume.rootPath)}
+                  onClick={() => void addAsLibrary(volume.token)}
                 >
                   Biblioteca
                 </button>
-                <button className="btn ghost sm" type="button" onClick={() => void ignoreVolume(volume.rootPath)}>
+                <button className="btn ghost sm" type="button" onClick={() => void ignoreVolume(volume.token)}>
                   Ignorar
                 </button>
               </div>
@@ -413,8 +421,10 @@ function AppearanceSection({ tweak, setTweak }: Props) {
           <div
             className={`toggle ${tweak.translucent ? 'on' : ''}`}
             onClick={() => setTweak('translucent', !tweak.translucent)}
+            onKeyDown={event => activateSwitchFromKeyboard(event, () => setTweak('translucent', !tweak.translucent))}
             role="switch"
             aria-checked={tweak.translucent}
+            aria-label="Barra lateral translúcida"
             tabIndex={0}
           />
         </div>
@@ -531,6 +541,8 @@ function PlaybackGeneralSection({ tweak, setTweak }: Props) {
               value={tweak.crossfade}
               onChange={e => setTweak('crossfade', Number(e.target.value))}
               style={{ width: 160 }}
+              aria-label="Duración total del crossfade"
+              aria-valuetext={tweak.crossfade === 0 ? 'Sin transición' : `${tweak.crossfade} segundos`}
             />
           </div>
           <div className="set-row">
@@ -541,8 +553,10 @@ function PlaybackGeneralSection({ tweak, setTweak }: Props) {
             <div
               className={`toggle ${tweak.gapless ? 'on' : ''}`}
               onClick={() => setTweak('gapless', !tweak.gapless)}
+              onKeyDown={event => activateSwitchFromKeyboard(event, () => setTweak('gapless', !tweak.gapless))}
               role="switch"
               aria-checked={tweak.gapless}
+              aria-label="Reproducción sin pausas"
               tabIndex={0}
             />
           </div>
@@ -581,6 +595,7 @@ function LevelerSettings() {
         <div
           className={`toggle ${enabled ? 'on' : ''}`}
           onClick={() => { void setEnabled(!enabled) }}
+          onKeyDown={event => activateSwitchFromKeyboard(event, () => { void setEnabled(!enabled) })}
           role="switch"
           aria-checked={enabled}
           aria-label="Activar nivelador de volumen"
@@ -603,6 +618,7 @@ function LevelerSettings() {
               onChange={e => { void setTargetLufs(Number(e.target.value)) }}
               style={{ width: 160 }}
               aria-label="Nivel objetivo de normalización en LUFS"
+              aria-valuetext={`${targetLufs} LUFS`}
             />
           </div>
           <div className="set-row">
@@ -613,6 +629,7 @@ function LevelerSettings() {
             <div
               className={`toggle ${preventClipping ? 'on' : ''}`}
               onClick={() => { void setPreventClipping(!preventClipping) }}
+              onKeyDown={event => activateSwitchFromKeyboard(event, () => { void setPreventClipping(!preventClipping) })}
               role="switch"
               aria-checked={preventClipping}
               aria-label="Evitar saturación al nivelar"
@@ -655,8 +672,10 @@ function PlaybackLyricsSection({ tweak, setTweak }: Props) {
             <div
               className={`toggle ${tweak[key] ? 'on' : ''}`}
               onClick={() => setTweak(key, !tweak[key])}
+              onKeyDown={event => activateSwitchFromKeyboard(event, () => setTweak(key, !tweak[key]))}
               role="switch"
               aria-checked={tweak[key]}
+              aria-label={label}
               tabIndex={0}
             />
           </div>
@@ -923,26 +942,27 @@ function LibrariesSection({
 }) {
   return (
     <>
-      <LibraryFoldersPanel />
+      <LibraryLocationsPanel />
       <LibraryVolumeClassificationPanel onConnectDevice={onConnectDevice} />
       <section className="set-section">
-        <h2>Respaldo y registro</h2>
+        <h2>Estado portable y registro</h2>
         <div className="set-card">
           <div className="set-row">
             <div>
-              <div className="lbl">Keep portable backup in folder</div>
+              <div className="lbl">Estado portable de biblioteca</div>
               <div className="sub">
-                Saves your plays, favorites, ratings and EQ settings into a hidden{' '}
+                Guarda reproducciones, favoritos y ratings en el archivo oculto{' '}
                 <code style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>.crate/library.yaml</code>
-                {' '}inside each library folder. When you reconnect the folder elsewhere those
-                are merged back automatically.
+                {' '}de cada biblioteca. Al reconectarla en otro equipo, Crate combina ese estado automáticamente.
               </div>
             </div>
             <div
               className={`toggle ${tweak.libraryBackup ? 'on' : ''}`}
               onClick={() => setTweak('libraryBackup', !tweak.libraryBackup)}
+              onKeyDown={event => activateSwitchFromKeyboard(event, () => setTweak('libraryBackup', !tweak.libraryBackup))}
               role="switch"
               aria-checked={tweak.libraryBackup}
+              aria-label="Mantener el estado portable de la biblioteca en la carpeta"
               tabIndex={0}
             />
           </div>
@@ -1207,6 +1227,7 @@ const SCAN_EVENT_LABELS: Record<LibraryScanEvent['type'], string> = {
   updated: 'Actualizado',
   removed: 'Eliminado',
   missing_root: 'Carpeta faltante',
+  root_unavailable: 'Raíz no disponible',
   skipped: 'Omitido',
   error: 'Error',
   orphan_lrc_removed: 'Letra huérfana eliminada',
@@ -1550,8 +1571,10 @@ function EqPanel() {
           <div
             className={`toggle ${enabled ? 'on' : ''}`}
             onClick={() => { void setEnabled(!enabled) }}
+            onKeyDown={event => activateSwitchFromKeyboard(event, () => { void setEnabled(!enabled) })}
             role="switch"
             aria-checked={enabled}
+            aria-label="Activar ecualizador"
             tabIndex={0}
           />
         </div>
@@ -1584,6 +1607,7 @@ function EqPanel() {
                 onPointerUp={() => commitCount(countDraft)}
                 onKeyUp={() => commitCount(countDraft)}
                 aria-label="Number of EQ bands"
+                aria-valuetext={`${countDraft} bandas`}
               />
               <span className="eq-bandcount-value">{countDraft}</span>
             </div>

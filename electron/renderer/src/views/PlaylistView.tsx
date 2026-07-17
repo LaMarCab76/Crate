@@ -9,6 +9,7 @@ import { useListPrefs } from '@renderer/stores/settingsStore'
 import { createListPrefsDefaults, sortTracks, trackMatchesQuery } from '@renderer/utils/listSort'
 import { fmtTotal } from '@renderer/utils/format'
 import { useAlbums } from '@renderer/stores/libraryStore'
+import { useQueueStore } from '@renderer/stores/queueStore'
 
 interface Props {
   playlist: Playlist
@@ -33,6 +34,8 @@ export function PlaylistView({ playlist, kind }: Props) {
   const defaults = useMemo(() => createListPrefsDefaults(), [])
   const isFavoriteView = kind === 'favoriteTracks'
   const albums = useAlbums()
+  const playNow = useQueueStore(state => state.playNow)
+  const playShuffled = useQueueStore(state => state.playShuffled)
   const filteredTracks = useMemo(() => {
     const query = prefs.query.trim()
     let next = playlist.tracks
@@ -105,12 +108,8 @@ export function PlaylistView({ playlist, kind }: Props) {
             {filterBits.length > 0 ? ` · Filtrado por ${filterBits.join(', ')}` : ''}
           </div>
           <div className="ctas" style={{ marginTop: 8, flexWrap: 'wrap', rowGap: 6 }}>
-            <button className="btn primary"><Icon name="play" size={12} /> Play</button>
-            <button className="btn"><Icon name="shuffle" size={14} /> Shuffle</button>
-            {playlist.kind === 'smart' && (
-              <button className="btn"><Icon name="sliders" size={14} /> Edit Rules</button>
-            )}
-            <button className="btn ghost icon"><Icon name="ellipsis" /></button>
+            <button className="btn primary" type="button" onClick={() => { if (filteredTracks[0]) void playNow(filteredTracks[0], filteredTracks) }}><Icon name="play" size={12} /> Play</button>
+            <button className="btn" type="button" onClick={() => { void playShuffled(filteredTracks) }}><Icon name="shuffle" size={14} /> Shuffle</button>
           </div>
           <div className="actions list-toolbar" style={{ marginTop: 12 }}>
             <ListPrefsMenu buttonLabel="Filtro" menuTitle="Playlist" onReset={() => setPrefs(defaults[kind])}>

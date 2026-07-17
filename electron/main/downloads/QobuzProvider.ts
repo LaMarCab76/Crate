@@ -97,14 +97,14 @@ export class QobuzProvider implements OnlineProvider {
     return tracks.map(item => this.mapTrack(item)).filter((item): item is OnlineTrackResult => item != null)
   }
 
-  async getTrack(providerTrackId: string): Promise<OnlineTrackResult> {
+  async getTrack(providerTrackId: string, signal?: AbortSignal): Promise<OnlineTrackResult> {
     const credentials = this.requireSearchCredentials()
     const params = new URLSearchParams({
       app_id: credentials.appId,
       track_id: providerTrackId,
     })
     if (credentials.userAuthToken) params.set('user_auth_token', credentials.userAuthToken)
-    const json = await this.fetchJson(`${QOBUZ_BASE}/track/get?${params.toString()}`)
+    const json = await this.fetchJson(`${QOBUZ_BASE}/track/get?${params.toString()}`, signal)
     return this.mapTrack(json) ?? {
       provider: 'qobuz',
       providerTrackId,

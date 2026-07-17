@@ -1,14 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useFolders } from '@renderer/stores/libraryStore'
 import { useDeviceStore } from '@renderer/stores/deviceStore'
 import { basenameForPath, isValidDeviceMusicRoot, normalizeDeviceMusicRoot } from '@renderer/utils/devicePaths'
+import { isLocalLibraryDestination } from '@renderer/utils/libraryDestinations'
 import type { DeviceRecord } from '@shared/types/device-sync'
 import type { DbFolder } from '@shared/types/db'
 import { Icon } from './Icon'
 import { ModalShell } from './ModalShell'
 
 export interface DeviceConnectTarget {
-  rootPath: string
+  token: string
+  displayPath: string
   name?: string
 }
 
@@ -30,29 +32,36 @@ export function DeviceConnectModal({
   onConnected,
 }: DeviceConnectModalProps) {
   const folders = useFolders()
+  const destinationFolders = useMemo(
+    () => folders.filter(isLocalLibraryDestination),
+    [folders],
+  )
   const connect = useDeviceStore(s => s.connect)
   const loading = useDeviceStore(s => s.loading)
   const [musicRoot, setMusicRoot] = useState('.')
   const [selectedFolderId, setSelectedFolderId] = useState<number | null>(
-    folders.length === 1 ? folders[0].id : null,
+    destinationFolders.length === 1 ? destinationFolders[0].id : null,
   )
   const [localError, setLocalError] = useState<string | null>(null)
-  const selectedFolder = folders.find(folder => folder.id === selectedFolderId) ?? null
+  const selectedFolder = destinationFolders.find(folder => folder.id === selectedFolderId) ?? null
   const musicRootValid = isValidDeviceMusicRoot(musicRoot)
   const canConnect = !loading && musicRootValid && selectedFolder != null
-  const targetName = target.name ?? basenameForPath(target.rootPath)
+  const targetName = target.name ?? basenameForPath(target.displayPath)
 
   useEffect(() => {
     setSelectedFolderId(current => {
-      if (current != null && folders.some(folder => folder.id === current)) return current
-      return folders.length === 1 ? folders[0].id : null
+      if (current != null && destinationFolders.some(folder => folder.id === current)) return current
+      return destinationFolders.length === 1 ? destinationFolders[0].id : null
     })
-  }, [folders])
+  }, [destinationFolders])
 
   const pickMusicRoot = async () => {
     setLocalError(null)
     try {
-      const picked = await window.api.devices.pickMusicRoot(target.rootPath, normalizeDeviceMusicRoot(musicRoot))
+      const picked = await window.api.devices.pickMusicRoot(
+        { token: target.token },
+        normalizeDeviceMusicRoot(musicRoot),
+      )
       if (!picked.canceled && picked.musicRoot) setMusicRoot(picked.musicRoot)
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : String(err))
@@ -64,7 +73,7 @@ export function DeviceConnectModal({
     setLocalError(null)
     try {
       const device = await connect({
-        rootPath: target.rootPath,
+        token: target.token,
         name: targetName,
         musicRoot: normalizeDeviceMusicRoot(musicRoot),
         pcTargetPath: selectedFolder.path,
@@ -99,7 +108,7 @@ export function DeviceConnectModal({
           <Icon name="device" size={15} />
           <span>
             <strong>{targetName}</strong>
-            <em>{target.rootPath}</em>
+            <em>{target.displayPath}</em>
           </span>
         </div>
 
@@ -127,10 +136,10 @@ export function DeviceConnectModal({
           <strong>{selectedFolder?.path ?? 'Seleccioná una biblioteca'}</strong>
         </div>
         <div className="device-library-list device-connect-library-list">
-          {folders.length === 0 ? (
-            <div className="device-empty compact">Agregá una biblioteca antes de conectar el dispositivo.</div>
+          {destinationFolders.length === 0 ? (
+            <div className="device-empty compact">Agregá una biblioteca local antes de conectar el dispositivo.</div>
           ) : (
-            folders.map(folder => (
+            destinationFolders.map(folder => (
               <label className="device-library-row" key={folder.id} title={folder.path}>
                 <input
                   type="radio"

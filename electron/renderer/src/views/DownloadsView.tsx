@@ -4,6 +4,7 @@ import { Icon } from '@renderer/components/Icon'
 import { ServiceSetupWizard, ServiceTutorialPanel } from '@renderer/components/ServiceSetup'
 import { useDownloadStore } from '@renderer/stores/downloadStore'
 import { useFolders } from '@renderer/stores/libraryStore'
+import { isLocalLibraryDestination } from '@renderer/utils/libraryDestinations'
 
 const PROVIDERS: Array<{ provider: DownloadProvider; label: string }> = [
   { provider: 'qobuz', label: 'Qobuz' },
@@ -150,12 +151,21 @@ export function DownloadsView() {
   const cancel = useDownloadStore(s => s.cancel)
   const retry = useDownloadStore(s => s.retry)
 
+  const destinationFolders = useMemo(
+    () => folders.filter(isLocalLibraryDestination),
+    [folders],
+  )
+  const configuredDestinationFolderId = settings?.folderId ?? null
+  const destinationFolderId = destinationFolders.some(folder => folder.id === configuredDestinationFolderId)
+    ? configuredDestinationFolderId
+    : null
+
   useEffect(() => {
     void load()
   }, [load])
 
   const activeAuth = auth[provider]
-  const canDownload = Boolean(activeAuth?.canDownload && settings?.folderId)
+  const canDownload = Boolean(activeAuth?.canDownload && destinationFolderId)
   const authLoaded = Boolean(auth.qobuz && auth.tidal)
   const needsProviderSetup = authLoaded && !auth.qobuz?.canSearch && !auth.tidal?.canSearch
   const recentJobs = useMemo(() => jobs.slice(0, 80), [jobs])
@@ -166,11 +176,11 @@ export function DownloadsView() {
   }
 
   const handleDownload = (track: OnlineTrackResult) => {
-    if (!settings?.folderId) return
+    if (!destinationFolderId || !settings) return
     void enqueue({
       provider: track.provider,
       providerTrackIds: [track.providerTrackId],
-      folderId: settings.folderId,
+      folderId: destinationFolderId,
       quality: settings.quality,
     })
   }
@@ -191,12 +201,12 @@ export function DownloadsView() {
           </button>
           <select
             className="list-select"
-            value={settings?.folderId ?? ''}
+            value={destinationFolderId ?? ''}
             onChange={e => void setSettings({ folderId: e.target.value ? Number(e.target.value) : null })}
             aria-label="Destination library"
           >
             <option value="">Destination</option>
-            {folders.map(folder => (
+            {destinationFolders.map(folder => (
               <option key={folder.id} value={folder.id}>{folder.name}</option>
             ))}
           </select>

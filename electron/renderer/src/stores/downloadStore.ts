@@ -181,7 +181,7 @@ export const useDownloadStore = create<DownloadStoreState>((set, get) => ({
 }))
 
 if (typeof window !== 'undefined' && window.api?.downloads) {
-  window.api.downloads.onProgress(({ job }) => {
+  const offProgress = window.api.downloads.onProgress(({ job }) => {
     useDownloadStore.setState(state => {
       const exists = state.jobs.some(item => item.id === job.id)
       const jobs = exists
@@ -191,7 +191,11 @@ if (typeof window !== 'undefined' && window.api?.downloads) {
     })
   })
 
-  window.api.downloads.onJobsChanged(({ jobs }) => {
+  const offJobsChanged = window.api.downloads.onJobsChanged(({ jobs }) => {
     useDownloadStore.setState({ jobs })
+  })
+  import.meta.hot?.dispose(() => {
+    offProgress()
+    offJobsChanged()
   })
 }

@@ -7,6 +7,7 @@ import { test } from 'node:test'
 import {
   albumMoveSidecarPathFor,
   applyAlbumMoveFileOperation,
+  stageAlbumMoveReplacement,
 } from './trackAlbumMoveFileOperation.ts'
 
 async function tempRoot() {
@@ -93,4 +94,37 @@ test('file operation blocks existing destination audio before touching the sourc
 
   assert.equal(await readFile(source, 'utf8'), 'source')
   assert.equal(await readFile(destination, 'utf8'), 'existing')
+})
+
+test('replacement staging restores audio and lyrics when a later step fails', async () => {
+  const root = await tempRoot()
+  const replaced = join(root, 'album', '02 - Existing.flac')
+  await mkdir(join(root, 'album'), { recursive: true })
+  await writeFile(replaced, 'existing-audio')
+  await writeFile(albumMoveSidecarPathFor(replaced), 'existing-lyrics')
+
+  const stage = await stageAlbumMoveReplacement(replaced, (() => {
+    let n = 0
+    return () => `stage-${++n}`
+  })())
+  assert.equal(existsSync(replaced), false)
+  assert.equal(existsSync(albumMoveSidecarPathFor(replaced)), false)
+  assert.equal(await readFile(stage.audioBackupPath, 'utf8'), 'existing-audio')
+
+  await stage.rollback()
+  assert.equal(await readFile(replaced, 'utf8'), 'existing-audio')
+  assert.equal(await readFile(albumMoveSidecarPathFor(replaced), 'utf8'), 'existing-lyrics')
+})
+
+test('replacement staging retires only after the caller commits', async () => {
+  const root = await tempRoot()
+  const replaced = join(root, 'album', '02 - Existing.flac')
+  await mkdir(join(root, 'album'), { recursive: true })
+  await writeFile(replaced, 'existing-audio')
+  const retired = []
+
+  const stage = await stageAlbumMoveReplacement(replaced, () => 'retire')
+  assert.equal(retired.length, 0)
+  await stage.retire(async path => { retired.push(path) })
+  assert.deepEqual(retired, [stage.audioBackupPath])
 })

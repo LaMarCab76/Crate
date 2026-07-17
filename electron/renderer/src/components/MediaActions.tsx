@@ -1,6 +1,7 @@
 import { type FormEvent, type MouseEvent, type ReactNode, useEffect, useMemo, useState } from 'react'
 import type { Album, Playlist, Track } from '@shared/types/library'
 import type { TrackAlbumMovePreview, TrackAlbumMoveQuality, TrackMetadataUpdatePayload } from '@shared/types/ipc-contract'
+import type { CloudMoveDisposition, CloudMoveProgressEvent } from '@shared/types/cloud'
 import { fmtTime, fmtTotal } from '@renderer/utils/format'
 import {
   addTracksToPlaylist,
@@ -12,6 +13,8 @@ import {
   updateTrackMetadata,
   updateTracksMetadata,
   useAlbums,
+  useFolders,
+  useLibraryStore,
   usePlaylists,
 } from '@renderer/stores/libraryStore'
 import { useQueueStore } from '@renderer/stores/queueStore'
@@ -24,6 +27,7 @@ type TrackDialog =
   | { kind: 'details'; track: Track }
   | { kind: 'edit'; track: Track }
   | { kind: 'moveAlbum'; track: Track }
+  | { kind: 'moveCloud'; track: Track }
   | { kind: 'trash'; tracks: Track[] }
 
 type AlbumDialog =
@@ -167,6 +171,98 @@ function TrackDetailsModal({ track, onClose }: { track: Track; onClose: () => vo
         <DetailRow label="Agregado" value={formatDate(track.added)} />
         <DetailRow label="Modificado" value={formatDate(track.dateModified)} />
         <DetailRow label="Ruta" value={track.path || '-'} title={track.path} />
+      </div>
+    </ModalShell>
+  )
+}
+
+function MoveTrackToCloudModal({ track, onClose }: { track: Track; onClose: () => void }) {
+  const folders = useFolders()
+  const refreshLibrary = useLibraryStore(state => state.refresh)
+  const cloudFolders = folders.filter(folder => folder.provider === 'onedrive' && folder.role === 'library')
+  const [targetFolderId, setTargetFolderId] = useState<number | null>(cloudFolders[0]?.id ?? null)
+  const [disposition, setDisposition] = useState<Exclude<CloudMoveDisposition, 'ask'>>('trash')
+  const [progress, setProgress] = useState<CloudMoveProgressEvent | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    void window.api.cloud.getPrefs().then(prefs => {
+      if (prefs.moveDisposition !== 'ask') setDisposition(prefs.moveDisposition)
+    }).catch(() => undefined)
+    return window.api.cloud.onMoveProgress(event => {
+      if (event.trackId === track.dbId) setProgress(event)
+    })
+  }, [track.dbId])
+
+  const move = async (): Promise<void> => {
+    if (track.dbId == null || targetFolderId == null) return
+    setBusy(true)
+    setError(null)
+    try {
+      await window.api.cloud.moveToCloud({
+        trackId: track.dbId,
+        targetFolderId,
+        disposition,
+      })
+      await window.api.cloud.setPrefs({ moveDisposition: disposition })
+      await refreshLibrary()
+      onClose()
+    } catch (moveError) {
+      setError(moveError instanceof Error ? moveError.message : String(moveError))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const percent = progress && progress.total > 0
+    ? Math.min(100, Math.round((progress.uploaded / progress.total) * 100))
+    : 0
+
+  return (
+    <ModalShell
+      title="Mover a OneDrive"
+      onClose={onClose}
+      footer={(
+        <>
+          <button type="button" className="btn" disabled={busy} onClick={onClose}>Cancelar</button>
+          <button type="button" className="btn primary" disabled={busy || targetFolderId == null} onClick={() => { void move() }}>
+            {busy ? 'Moviendo…' : 'Mover a OneDrive'}
+          </button>
+        </>
+      )}
+    >
+      <div className="cloud-move-form">
+        <p className="modal-copy">
+          “{track.t}” se subirá a una biblioteca cloud normal. Los backups espejo nunca se usan como destino de esta acción.
+        </p>
+        {cloudFolders.length === 0 ? (
+          <div className="modal-error">Agregá primero una biblioteca de OneDrive desde Ajustes → Bibliotecas.</div>
+        ) : (
+          <>
+            <label className="form-field">
+              <span>Biblioteca de destino</span>
+              <select value={targetFolderId ?? ''} onChange={event => setTargetFolderId(Number(event.target.value))} disabled={busy}>
+                {cloudFolders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+              </select>
+            </label>
+            <label className="form-field">
+              <span>Archivo local después de subir</span>
+              <select value={disposition} onChange={event => setDisposition(event.target.value as Exclude<CloudMoveDisposition, 'ask'>)} disabled={busy}>
+                <option value="trash">Mover a la Papelera</option>
+                <option value="keep">Conservar en disco</option>
+                <option value="delete">Eliminar permanentemente</option>
+              </select>
+            </label>
+          </>
+        )}
+        {busy && (
+          <div className="cloud-move-progress" role="status" aria-live="polite">
+            <progress max={100} value={percent}>{percent}%</progress>
+            <span>{progress?.phase === 'finalizing' ? 'Verificando y actualizando el catálogo…' : `Subiendo… ${percent}%`}</span>
+          </div>
+        )}
+        {error && <div className="modal-error" role="alert">{error}</div>}
       </div>
     </ModalShell>
   )
@@ -917,6 +1013,8 @@ export function useTrackActions() {
   const [menu, setMenu] = useState<MenuState<Track> | null>(null)
   const [dialog, setDialog] = useState<TrackDialog | null>(null)
   const requestMetadataFix = useNavIntentStore(s => s.requestMetadataFix)
+  const folders = useFolders()
+  const hasCloudLibrary = folders.some(folder => folder.provider === 'onedrive' && folder.role === 'library')
 
   const openTrackMenu = (event: MouseEvent<HTMLElement>, track: Track) => {
     event.preventDefault()
@@ -933,6 +1031,7 @@ export function useTrackActions() {
     if (!menu) return []
     const track = menu.target
     const disabled = track.dbId == null
+    const localOnlyDisabled = disabled || track.provider === 'onedrive'
     return [
       {
         id: 'favorite',
@@ -959,28 +1058,35 @@ export function useTrackActions() {
         id: 'edit',
         label: 'Editar metadatos...',
         icon: 'edit',
-        disabled,
+        disabled: localOnlyDisabled,
         onSelect: () => setDialog({ kind: 'edit', track }),
       },
       {
         id: 'move-album',
         label: 'Mover a álbum...',
         icon: 'album',
-        disabled,
+        disabled: localOnlyDisabled,
         onSelect: () => setDialog({ kind: 'moveAlbum', track }),
+      },
+      {
+        id: 'move-cloud',
+        label: 'Mover a OneDrive...',
+        icon: 'cloud',
+        disabled: localOnlyDisabled || !hasCloudLibrary,
+        onSelect: () => setDialog({ kind: 'moveCloud', track }),
       },
       {
         id: 'complete-metadata',
         label: 'Completar metadatos...',
         icon: 'sparkle',
-        disabled,
+        disabled: localOnlyDisabled,
         onSelect: () => requestMetadataFix(trackDbIds([track]), track.t),
       },
       {
         id: 'lyrics',
         label: 'Buscar letras',
         icon: 'lyrics',
-        disabled,
+        disabled: localOnlyDisabled,
         onSelect: () => { if (track.dbId != null) void window.api.lyrics?.fetchForSelection([track.dbId]) },
       },
       { id: 'sep-2', divider: true },
@@ -989,11 +1095,11 @@ export function useTrackActions() {
         label: 'Mover archivo a Papelera...',
         icon: 'trash',
         danger: true,
-        disabled,
+        disabled: localOnlyDisabled,
         onSelect: () => setDialog({ kind: 'trash', tracks: [track] }),
       },
     ]
-  }, [menu, requestMetadataFix])
+  }, [hasCloudLibrary, menu, requestMetadataFix])
 
   const elements = (
     <>
@@ -1002,6 +1108,7 @@ export function useTrackActions() {
       {dialog?.kind === 'details' && <TrackDetailsModal track={dialog.track} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'edit' && <TrackMetadataEditor track={dialog.track} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'moveAlbum' && <TrackAlbumMoveModal track={dialog.track} onClose={() => setDialog(null)} />}
+      {dialog?.kind === 'moveCloud' && <MoveTrackToCloudModal track={dialog.track} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'trash' && (
         <ConfirmTrashModal
           title="Mover archivo a Papelera"
@@ -1048,6 +1155,7 @@ export function useAlbumActions() {
     const album = menu.target
     const hasTracks = album.tracks.length > 0
     const hasDbTracks = trackDbIds(album.tracks).length > 0
+    const allTracksLocal = album.tracks.every(track => track.provider !== 'onedrive')
     return [
       {
         id: 'play',
@@ -1075,14 +1183,14 @@ export function useAlbumActions() {
         id: 'edit',
         label: 'Editar metadatos del álbum...',
         icon: 'edit',
-        disabled: !hasDbTracks,
+        disabled: !hasDbTracks || !allTracksLocal,
         onSelect: () => setDialog({ kind: 'edit', album }),
       },
       {
         id: 'complete-metadata',
         label: 'Completar metadatos...',
         icon: 'sparkle',
-        disabled: !hasDbTracks,
+        disabled: !hasDbTracks || !allTracksLocal,
         onSelect: () => requestMetadataFix(trackDbIds(album.tracks), album.title),
       },
       { id: 'sep-2', divider: true },
@@ -1091,7 +1199,7 @@ export function useAlbumActions() {
         label: 'Mover álbum a Papelera...',
         icon: 'trash',
         danger: true,
-        disabled: !hasDbTracks,
+        disabled: !hasDbTracks || !allTracksLocal,
         onSelect: () => setDialog({ kind: 'trash', album }),
       },
     ]

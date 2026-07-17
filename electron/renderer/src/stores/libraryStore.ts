@@ -29,6 +29,7 @@ import {
 import { usePlaybackStore } from './playbackStore'
 import { useQueueStore } from './queueStore'
 import { useActivityCenterStore } from './activityCenterStore'
+import { useLibraryLocationsStore } from './libraryLocationsStore'
 import { runTrackDeletionLifecycle } from '@renderer/utils/trackDeletionLifecycle'
 
 const TRACK_NO_WITHOUT = Number.MAX_SAFE_INTEGER
@@ -136,6 +137,13 @@ function latestTrackAddedDateInAlbum(tracks: Track[]): string {
 }
 
 const LEGACY_ACTIVE_LIBRARY_STORAGE_KEY = 'crate.activeLibraryId'
+const LIBRARY_TRACK_PAGE_SIZE = 2_000
+
+// Coalesce broadcasts that arrive while a refresh is hydrating a large
+// library. The active pass is allowed to finish, then exactly one fresh pass
+// runs against the latest database snapshot.
+let libraryRefreshPromise: Promise<void> | null = null
+let libraryRefreshRequested = false
 
 function clearLegacyActiveLibraryScope(): void {
   if (typeof window === 'undefined') return
@@ -166,7 +174,7 @@ interface LibraryState {
     trackIds: number[]
   } | null
   refresh(): Promise<void>
-  addFolder(path: string): Promise<void>
+  addFolder(token: string): Promise<void>
   removeFolder(id: number, options?: RemoveFolderOptions): Promise<void>
   pickFolder(): Promise<string | null>
   dismissMetadataCompletionPrompt(): void
@@ -198,14 +206,20 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   pendingTrashIds: new Set<number>(),
 
   async refresh() {
-    if (get().loading) return
-    set({ loading: true, error: null })
-    try {
+    if (libraryRefreshPromise) {
+      libraryRefreshRequested = true
+      return libraryRefreshPromise
+    }
+
+    const refreshTask = (async () => {
+      do {
+        libraryRefreshRequested = false
+        set({ loading: true, error: null })
+        try {
       const api = window.api.library
 
-      const [rawDbTracks, dbAlbums, dbArtists, dbGenres, dbPlaylists, dbFolders, count] =
+      const [dbAlbums, dbArtists, dbGenres, dbPlaylists, dbFolders, count] =
         await Promise.all([
-          api.tracks({ limit: 10000 }),
           api.albums(),
           api.artists(),
           api.genres(),
@@ -213,6 +227,17 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
           api.folders(),
           api.trackCount(),
         ])
+
+      const rawDbTracks: DbTrack[] = []
+      for (let offset = 0; offset < count; offset += LIBRARY_TRACK_PAGE_SIZE) {
+        const page = await api.tracks({
+          limit: LIBRARY_TRACK_PAGE_SIZE,
+          offset,
+          orderBy: 'date_added_desc',
+        })
+        rawDbTracks.push(...page)
+        if (page.length < LIBRARY_TRACK_PAGE_SIZE) break
+      }
 
       // Drop rows whose disk deletion is still in flight so a reload triggered
       // mid-deletion (e.g. a `library:changed` broadcast) can't resurrect an
@@ -324,24 +349,40 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         loading: false,
         error: null,
       })
-    } catch (err) {
-      set({ loading: false, error: (err as Error).message })
+      await useQueueStore.getState().hydrate(orderedTracks)
+        } catch (err) {
+          set({ loading: false, error: (err as Error).message })
+        }
+      } while (libraryRefreshRequested)
+    })()
+
+    libraryRefreshPromise = refreshTask
+    try {
+      await refreshTask
+    } finally {
+      if (libraryRefreshPromise === refreshTask) libraryRefreshPromise = null
     }
   },
 
-  async addFolder(path) {
-    await window.api.library.addFolder(path)
-    await get().refresh()
+  async addFolder(token) {
+    await window.api.library.addFolder(token)
+    await Promise.all([
+      get().refresh(),
+      useLibraryLocationsStore.getState().load(),
+    ])
   },
 
   async removeFolder(id, options) {
     await window.api.library.removeFolder(id, options)
-    await get().refresh()
+    await Promise.all([
+      get().refresh(),
+      useLibraryLocationsStore.getState().load(),
+    ])
   },
 
   async pickFolder() {
     const result = await window.api.library.pickFolder()
-    return result.canceled ? null : result.path
+    return result.canceled ? null : result.token
   },
 
   dismissMetadataCompletionPrompt() {

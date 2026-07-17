@@ -4,6 +4,8 @@ import type { DbQueueEntry } from '@shared/types/db'
 export interface QueueSnapshot {
   trackIds: number[]
   currentIndex: number
+  shuffle: boolean
+  repeat: 'off' | 'all' | 'one'
 }
 
 // Thin wrapper around better-sqlite3's multi-statement runner. Kept as a
@@ -48,13 +50,15 @@ export class QueueRepo {
     `)
   }
 
-  save(trackIds: number[], currentIndex: number): void {
+  save(trackIds: number[], currentIndex: number, shuffle: boolean, repeat: 'off' | 'all' | 'one'): void {
     const tx = this.db.transaction((ids: number[]) => {
       this.stmtClear.run()
       for (let i = 0; i < ids.length; i++) {
         this.stmtInsert.run(ids[i], i)
       }
       this.stmtSetCurrentMeta.run('queue.currentIndex', String(currentIndex))
+      this.stmtSetCurrentMeta.run('queue.shuffle', shuffle ? '1' : '0')
+      this.stmtSetCurrentMeta.run('queue.repeat', repeat)
     })
     tx(trackIds)
   }
@@ -62,9 +66,14 @@ export class QueueRepo {
   load(): QueueSnapshot {
     const rows = this.stmtAll.all()
     const meta = this.stmtCurrentMeta.get('queue.currentIndex')
+    const shuffleMeta = this.stmtCurrentMeta.get('queue.shuffle')
+    const repeatMeta = this.stmtCurrentMeta.get('queue.repeat')
+    const repeat = repeatMeta?.value === 'all' || repeatMeta?.value === 'one' ? repeatMeta.value : 'off'
     return {
       trackIds: rows.map(r => r.track_id),
       currentIndex: meta ? parseInt(meta.value, 10) || 0 : 0,
+      shuffle: shuffleMeta?.value === '1',
+      repeat,
     }
   }
 }

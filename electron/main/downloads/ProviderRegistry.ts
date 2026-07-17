@@ -18,6 +18,10 @@ export class ProviderRegistry {
   get(provider: DownloadProvider): OnlineProvider {
     return this.providers[provider]
   }
+
+  invalidateCredentials(provider: DownloadProvider): void {
+    this.providers[provider].invalidateCredentials?.()
+  }
 }
 
 let instance: ProviderRegistry | null = null

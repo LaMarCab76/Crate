@@ -38,7 +38,10 @@ import {
 import {
   albumMoveSidecarPathFor,
   applyAlbumMoveFileOperation,
+  stageAlbumMoveReplacement,
+  type AlbumMoveReplacementStage,
 } from './trackAlbumMoveFileOperation'
+import { requireLocalLibraryTrackPath } from './localLibraryTrackGuard'
 
 const PREVIEW_TTL_MS = 30 * 60 * 1000
 const MB_READY_CONFIDENCE = 0.58
@@ -183,6 +186,7 @@ export class TrackAlbumMoveService {
   async preview(trackId: number, targetAlbumId: number, trackNumberOverride: number | null = null): Promise<TrackAlbumMovePreview> {
     this.pruneExpiredPreviews()
     const track = this.requireTrack(trackId)
+    if (track.provider !== 'local') throw new Error('Mover entre álbumes no está disponible para pistas cloud.')
     const targetAlbum = this.requireAlbum(targetAlbumId)
     const built = await this.buildPreview(track, targetAlbum, trackNumberOverride)
     this.previews.set(built.preview.previewId, built)
@@ -206,51 +210,80 @@ export class TrackAlbumMoveService {
     if (localErrors.length > 0) throw new Error(localErrors[0])
 
     const proposal = stored.preview.proposal
-    const sourcePath = resolve(track.path)
+    const sourcePath = requireLocalLibraryTrackPath({
+      track,
+      folder: this.deps.repos.folders.getById(track.folder_id),
+      expectedPath: stored.sourcePath,
+      label: 'La pista original',
+    })
     const destinationPath = resolve(proposal.destinationPath)
+    this.folderForDestination(targetAlbum, destinationPath)
     const applyResult: { movedTrack: DbTrack | null } = { movedTrack: null }
 
-    // Replacement: send the displaced track to the OS trash — recoverable —
-    // before the move so the slot and destination path are free. We do this when
-    // the incoming file is higher quality, or when the user explicitly confirmed
-    // deleting an equal/lower-quality same-title track.
+    // Replacement is staged on the same filesystem first, not sent to trash.
+    // This keeps it reversible until metadata, file moves and the DB transaction
+    // have all committed.
     const replacement = stored.preview.replacement
     let replacedTrack: DbTrack | null = null
+    let replacementStage: AlbumMoveReplacementStage | null = null
     if (replacement && (replacement.incomingIsBetter || confirmLowerQualityReplace)) {
       replacedTrack = this.deps.repos.tracks.getById(replacement.trackId) ?? null
-      if (replacedTrack) {
-        const replacedPath = resolve(replacedTrack.path)
-        try {
-          await this.deps.trashItem(replacedPath)
-        } catch (err) {
-          throw new Error(`No se pudo enviar a la papelera la pista reemplazada: ${moveErrorMessage(err)}`)
-        }
-        const replacedSidecar = albumMoveSidecarPathFor(replacedPath)
-        if (existsSync(replacedSidecar)) {
-          await this.deps.trashItem(replacedSidecar).catch(err => {
-            console.warn(`[album-move] could not trash replaced lyrics ${replacedSidecar}:`, moveErrorMessage(err))
-          })
-        }
+      if (!replacedTrack) {
+        throw new Error('La pista a reemplazar ya no existe. Volvé a calcular el movimiento.')
+      }
+      const replacedPath = requireLocalLibraryTrackPath({
+        track: replacedTrack,
+        folder: this.deps.repos.folders.getById(replacedTrack.folder_id),
+        expectedPath: replacement.path,
+        label: 'La pista a reemplazar',
+      })
+      try {
+        replacementStage = await stageAlbumMoveReplacement(replacedPath)
+      } catch (err) {
+        throw new Error(`No se pudo preparar de forma reversible la pista reemplazada: ${moveErrorMessage(err)}`)
       }
     }
 
-    await applyAlbumMoveFileOperation({
-      sourcePath,
-      destinationPath,
-      writeTempMetadata: tempPath => {
-        this.deps.writeTrackMetadata(tempPath, this.payloadFromProposal(proposal), {
-          artwork: stored.artwork,
-          createBackup: false,
-        })
-      },
-      afterFilesMoved: async () => {
-        const md = await this.deps.readTrackMetadata(destinationPath)
-        applyResult.movedTrack = this.updateDbAfterMove(track, targetAlbum, md, destinationPath, randomUUID(), sourcePath, replacedTrack)
-      },
-    })
+    try {
+      await applyAlbumMoveFileOperation({
+        sourcePath,
+        destinationPath,
+        writeTempMetadata: tempPath => {
+          this.deps.writeTrackMetadata(tempPath, this.payloadFromProposal(proposal), {
+            artwork: stored.artwork,
+            createBackup: false,
+          })
+        },
+        afterFilesMoved: async () => {
+          const md = await this.deps.readTrackMetadata(destinationPath)
+          applyResult.movedTrack = this.updateDbAfterMove(track, targetAlbum, md, destinationPath, randomUUID(), sourcePath, replacedTrack)
+        },
+      })
+    } catch (err) {
+      if (replacementStage) {
+        try {
+          await replacementStage.rollback()
+        } catch (rollbackErr) {
+          throw new Error(
+            `${moveErrorMessage(err)}; además falló restaurar la pista reemplazada: ${moveErrorMessage(rollbackErr)}`,
+          )
+        }
+      }
+      throw err
+    }
 
     const movedTrack = applyResult.movedTrack
     if (!movedTrack) throw new Error('No se pudo actualizar la biblioteca después de mover el archivo.')
+    if (replacementStage) {
+      await replacementStage.retire(path => this.deps.trashItem(path)).catch(err => {
+        // The new track and DB are already committed. Retain the staged file for
+        // manual recovery rather than turning a cleanup failure into data loss.
+        console.warn(
+          `[album-move] replacement committed but staged cleanup failed at ${replacementStage?.audioBackupPath}:`,
+          moveErrorMessage(err),
+        )
+      })
+    }
     this.previews.delete(previewId)
     return {
       trackId: movedTrack.id,
@@ -266,6 +299,7 @@ export class TrackAlbumMoveService {
     const previewId = randomUUID()
     const createdAt = Date.now()
     const targetTracks = this.deps.repos.entityTracks.getTracksForAlbum(targetAlbum.id)
+      .filter(candidate => candidate.provider === 'local')
     const errors: string[] = []
     const warnings: string[] = []
     let proposal: TrackAlbumMoveProposal | null = null
@@ -537,6 +571,7 @@ export class TrackAlbumMoveService {
     const proposal = preview.proposal
     if (!proposal) return ['El movimiento no tiene propuesta para aplicar.']
     const targetTracks = this.deps.repos.entityTracks.getTracksForAlbum(targetAlbum.id)
+      .filter(candidate => candidate.provider === 'local')
     // The track we're allowed to overwrite/trash — when the incoming file is the
     // higher-quality one, or when the user confirmed deleting an equal/lower
     // quality same-title track. Its slot, file and sidecar are exempt below.
@@ -621,9 +656,8 @@ export class TrackAlbumMoveService {
     const replacesOther = replacedTrack != null && replacedTrack.id !== originalTrack.id
     this.deps.runTransaction(() => {
       this.deps.removeLyricsIndexEntry(originalTrack)
-      // Drop the displaced track's row in the same transaction as the move so the
-      // album never momentarily holds two tracks in the slot. Its file is already
-      // in the trash by this point.
+      // Drop the displaced row in the same transaction. Its file remains in a
+      // reversible same-filesystem staging path until this transaction commits.
       if (replacesOther) {
         this.deps.removeLyricsIndexEntry(replacedTrack)
         this.deps.repos.tracks.deleteById(replacedTrack.id)
@@ -696,15 +730,22 @@ export class TrackAlbumMoveService {
 
   private folderForDestination(targetAlbum: DbAlbum, destinationPath: string): DbFolder {
     const targetTracks = this.deps.repos.entityTracks.getTracksForAlbum(targetAlbum.id)
+      .filter(candidate => candidate.provider === 'local')
     const exact = targetTracks
       .map(track => this.deps.repos.folders.getById(track.folder_id))
-      .filter((folder): folder is DbFolder => folder != null)
+      .filter((folder): folder is DbFolder =>
+        folder?.provider === 'local' && folder.role === 'library',
+      )
       .find(folder => isInside(resolve(folder.path), resolve(destinationPath)))
     if (exact) return exact
 
     const folders = this.deps.repos.folders
       .list()
-      .filter(folder => isInside(resolve(folder.path), resolve(destinationPath)))
+      .filter(folder =>
+        folder.provider === 'local' &&
+        folder.role === 'library' &&
+        isInside(resolve(folder.path), resolve(destinationPath)),
+      )
       .sort((a, b) => b.path.length - a.path.length)
     const folder = folders[0]
     if (!folder) throw new Error('La ruta destino no pertenece a ninguna biblioteca.')

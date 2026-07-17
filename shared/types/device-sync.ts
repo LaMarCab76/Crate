@@ -72,6 +72,7 @@ export interface DeviceArtworkAnalysisProgressEvent {
 }
 
 export interface DeviceCandidate {
+  token: string
   rootPath: string
   name: string
   hasRockbox: boolean
@@ -79,6 +80,7 @@ export interface DeviceCandidate {
 }
 
 export interface DeviceUnknownVolume {
+  token: string
   rootPath: string
   name: string
 }
@@ -126,9 +128,13 @@ export interface DeviceVolumeSnapshot {
 
 export interface DeviceMusicRootPickResult {
   canceled: boolean
-  absolutePath: string | null
+  displayPath: string | null
   musicRoot: string | null
 }
+
+export type DeviceRootReference =
+  | { token: string }
+  | { deviceId: string }
 
 export interface DeviceTrack {
   key: string
@@ -377,7 +383,7 @@ export interface DeviceScanProgressEvent {
 }
 
 export interface DeviceConnectPayload {
-  rootPath: string
+  token: string
   name?: string
   musicRoot?: string
   defaultMode?: DeviceSyncMode
@@ -415,9 +421,11 @@ export interface DeviceSyncAction {
   pcPath: string | null
   pcRelativePath: string | null
   pcBytes: number | null
+  pcFingerprint?: string | null
   devicePath: string | null
   deviceRelativePath: string | null
   deviceBytes: number | null
+  deviceFingerprint?: string | null
   sourcePath: string | null
   destinationPath: string | null
   bytes: number
@@ -519,4 +527,6 @@ export interface DevicePendingJournal {
   failedActions: number
   currentPath: string | null
   artwork: DeviceArtworkOptimizationSummary
+  resumeDisposition: 'ready' | 'review' | 'legacy_blocked'
+  blockedReason: string | null
 }

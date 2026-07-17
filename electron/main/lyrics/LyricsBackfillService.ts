@@ -66,6 +66,7 @@ export class LyricsBackfillService {
     this.sweepDone = true
     const svc = getLyricsService()
     for (const folder of this.repos.folders.list()) {
+      if (folder.provider !== 'local' || folder.role !== 'library') continue
       for (const track of this.repos.tracks.getByFolder(folder.id)) {
         if (this.queued.has(track.id) || this.seen.has(track.id)) continue
         if (!shouldBackfill(svc.getForTrack(track.id).status)) continue

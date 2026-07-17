@@ -143,6 +143,7 @@ export function dbToUiTrack(t: DbTrack): Track {
     bitDepth: t.bit_depth,
     loudness: t.r128_integrated_loudness ?? null,
     artworkPath: t.artwork_path ?? undefined,
+    provider: t.provider,
   }
 }
 

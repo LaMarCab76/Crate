@@ -9,6 +9,7 @@ import { DEVICE_ARTWORK_EDGE_DEFAULT, clampDeviceArtworkEdge } from '@shared/con
 import { clampLyricsOffsetMs } from '@shared/lyrics/lrc'
 import type { ListPrefsMap, ListViewKind } from '@renderer/utils/listSort'
 import type { LyricsSettingsState } from '@shared/types/lyrics'
+import type { SourceDisplayPreferences } from '@shared/types/library-locations'
 
 export type Layout = 'classic' | 'editorial' | 'dense'
 export type Density = 'compact' | 'regular' | 'comfy'
@@ -56,6 +57,7 @@ export interface Tweak {
   // Delete orphaned .lrc files (no matching audio) during library scans. Off by
   // default (destructive).
   lyricsDeleteOrphans: boolean
+  sourceDisplay: SourceDisplayPreferences
 }
 
 const TWEAK_DEFAULTS: Tweak = {
@@ -84,6 +86,15 @@ const TWEAK_DEFAULTS: Tweak = {
   lyricsGlobalOffsetMs: 0,
   lyricsBackgroundFetch: false,
   lyricsDeleteOrphans: false,
+  sourceDisplay: {
+    identity: 'both',
+    locationPresentation: 'both',
+    providerPresentation: 'both',
+    providers: {
+      local: { name: 'Local', icon: 'computer' },
+      onedrive: { name: 'OneDrive', icon: 'cloud' },
+    },
+  },
 }
 
 // Maps the renderer tweak keys onto the main-process LyricsSettingsState shape.
@@ -106,6 +117,20 @@ function load(): Tweak {
     if (!raw) return TWEAK_DEFAULTS
     const parsed = JSON.parse(raw) as Partial<Tweak> & { bgSource?: string; fullPlayerFileDataVisible?: unknown; soundcheck?: unknown }
     const merged = { ...TWEAK_DEFAULTS, ...parsed } as Tweak & { fullPlayerFileDataVisible?: unknown; soundcheck?: unknown }
+    merged.sourceDisplay = {
+      ...TWEAK_DEFAULTS.sourceDisplay,
+      ...(parsed.sourceDisplay ?? {}),
+      providers: {
+        local: {
+          ...TWEAK_DEFAULTS.sourceDisplay.providers.local,
+          ...(parsed.sourceDisplay?.providers?.local ?? {}),
+        },
+        onedrive: {
+          ...TWEAK_DEFAULTS.sourceDisplay.providers.onedrive,
+          ...(parsed.sourceDisplay?.providers?.onedrive ?? {}),
+        },
+      },
+    }
     delete merged.fullPlayerFileDataVisible
     // soundcheck migrated to the dedicated leveler store (crate.leveler.v1).
     delete merged.soundcheck
@@ -247,6 +272,11 @@ export const useTweakStore = create<TweakStore>((set, get) => ({
           // main not ready yet, ignore
         })
       }
+      if (k === 'gapless') {
+        void window.api?.audio?.setGaplessEnabled(value as boolean).catch(() => {
+          // main not ready yet, renderer still blocks local preloads
+        })
+      }
       if (String(k).startsWith('lyrics')) {
         void window.api?.settings?.setLyrics(lyricsPrefsFromTweak(next)).catch(() => {
           // main not ready yet, ignore
@@ -267,16 +297,22 @@ if (typeof window !== 'undefined') {
   void window.api?.settings?.setLibraryScanLogRetention(initial.libraryScanLogRetentionDays).catch(() => {
     /* main not ready yet, ignore */
   })
+  void window.api?.audio?.setGaplessEnabled(initial.gapless).catch(() => {
+    /* main not ready yet, renderer also enforces the preference */
+  })
   // Push lyrics prefs to main on boot so cache/fetch behavior is known.
   // before the user opens Settings.
   void window.api?.settings?.setLyrics(lyricsPrefsFromTweak(initial)).catch(() => {
     /* main not ready yet, ignore */
   })
 
-  // Reconcile persisted exclusive-mode against the engine. If the persisted
-  // value is on but the engine couldn't take hog (device unplugged, hog held
-  // elsewhere), clear the local bit so the UI shows reality.
-  void window.api?.audio?.getExclusiveMode().then(state => {
+  // Restore the persisted preference by actually acquiring exclusive mode.
+  // Reading the engine state alone would silently turn the preference off on
+  // every relaunch without ever attempting hog mode.
+  const exclusiveRestore = initial.exclusiveMode
+    ? window.api?.audio?.setExclusiveMode(true)
+    : window.api?.audio?.getExclusiveMode()
+  void exclusiveRestore?.then(state => {
     if (state.enabled === initial.exclusiveMode) return
     useTweakStore.setState(prev => ({ tweak: { ...prev.tweak, exclusiveMode: state.enabled } }))
     try {
@@ -285,7 +321,7 @@ if (typeof window !== 'undefined') {
   }).catch(() => { /* main not ready */ })
 
   // Live updates while the popup is closed (e.g. device switch transferred hog).
-  window.api?.audio?.onExclusiveModeChanged(state => {
+  const offExclusiveMode = window.api?.audio?.onExclusiveModeChanged(state => {
     useTweakStore.setState(prev => {
       if (prev.tweak.exclusiveMode === state.enabled) return prev
       const next = { ...prev.tweak, exclusiveMode: state.enabled }
@@ -293,6 +329,7 @@ if (typeof window !== 'undefined') {
       return { tweak: next }
     })
   })
+  import.meta.hot?.dispose(() => offExclusiveMode?.())
 }
 
 // Compatibility wrapper for the existing useTweaks() callsites (App, Settings).

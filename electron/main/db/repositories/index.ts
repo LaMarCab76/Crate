@@ -1,5 +1,5 @@
 import { getDatabase } from '../database'
-import { FolderRepo } from './FolderRepo'
+import { FolderRepo, toLibraryLocation } from './FolderRepo'
 import { TrackRepo } from './TrackRepo'
 import { AlbumRepo } from './AlbumRepo'
 import { ArtistRepo } from './ArtistRepo'
@@ -51,6 +51,7 @@ export function getRepos(): Repos {
 
 export {
   FolderRepo,
+  toLibraryLocation,
   TrackRepo,
   AlbumRepo,
   ArtistRepo,

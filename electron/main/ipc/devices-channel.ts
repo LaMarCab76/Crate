@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { secureIpcMain as ipcMain } from './secureIpc'
 import { isAbsolute } from 'node:path'
 import { getDeviceSyncService } from '../devices/DeviceSyncService'
 import { assertNonEmptyString } from './validation'
@@ -10,6 +10,7 @@ import type {
   DeviceConnectPayload,
   DeviceArtworkOptimizationSelection,
   DeviceLibraryOptions,
+  DeviceRootReference,
   DeviceSettingsUpdate,
   DeviceSyncApplySelection,
   DeviceSyncActionKind,
@@ -62,8 +63,20 @@ function assertConnectPayload(value: unknown): DeviceConnectPayload {
   }
   return {
     ...payload,
-    rootPath: assertNonEmptyString(payload.rootPath, 'device root path'),
+    token: assertNonEmptyString(payload.token, 'device root authorization'),
   }
+}
+
+function assertDeviceRootReference(value: unknown): DeviceRootReference {
+  if (!value || typeof value !== 'object') throw new Error('Invalid device root reference')
+  const reference = value as Partial<Record<'token' | 'deviceId', unknown>>
+  if (reference.token !== undefined && reference.deviceId === undefined) {
+    return { token: assertNonEmptyString(reference.token, 'device root authorization') }
+  }
+  if (reference.deviceId !== undefined && reference.token === undefined) {
+    return { deviceId: assertNonEmptyString(reference.deviceId, 'device id') }
+  }
+  throw new Error('Invalid device root reference')
 }
 
 function assertPlanRequest(value: unknown): DeviceSyncPlanRequest {
@@ -190,13 +203,13 @@ export function registerDevicesChannel(): void {
 
   ipcMain.handle('devices:detectCandidates', () => service.detectCandidates())
   ipcMain.handle('devices:volumes', () => service.volumeSnapshot())
-  ipcMain.handle('devices:volumes:ignore', (_, rootPath: unknown) =>
-    service.ignoreVolume(assertNonEmptyString(rootPath, 'volume root path')),
+  ipcMain.handle('devices:volumes:ignore', (_, token: unknown) =>
+    service.ignoreVolume(assertNonEmptyString(token, 'volume authorization')),
   )
   ipcMain.handle('devices:pickRoot', () => service.pickRoot())
-  ipcMain.handle('devices:pickMusicRoot', (_, rootPath: unknown, currentMusicRoot: unknown) =>
+  ipcMain.handle('devices:pickMusicRoot', (_, reference: unknown, currentMusicRoot: unknown) =>
     service.pickMusicRoot(
-      assertNonEmptyString(rootPath, 'device root path'),
+      assertDeviceRootReference(reference),
       currentMusicRoot === undefined ? undefined : assertNonEmptyString(currentMusicRoot, 'device music root'),
     ),
   )

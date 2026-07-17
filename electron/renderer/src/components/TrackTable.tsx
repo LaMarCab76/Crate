@@ -16,6 +16,7 @@ import { toggleTrackFavorite } from '@renderer/stores/libraryStore'
 import { useQueueStore } from '@renderer/stores/queueStore'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
 import { useTrackActions } from './MediaActions'
+import { SourceBadge } from './SourceBadge'
 
 export interface TrackTableProps {
   tracks: Track[]
@@ -27,6 +28,7 @@ export interface TrackTableProps {
   showPlays?: boolean
   showPath?: boolean
   showTrackNo?: boolean
+  showSource?: boolean
   // Tighter, fixed row height — used by art-less listings (album/artist tracks)
   // so they don't read like the full-height library/playlist rows.
   compact?: boolean
@@ -103,6 +105,7 @@ export function TrackTable({
   showPlays = true,
   showPath = false,
   showTrackNo = false,
+  showSource = true,
   compact = false,
   onRefreshMetadata,
 }: TrackTableProps) {
@@ -260,7 +263,7 @@ export function TrackTable({
     if (h > 0) setMeasuredRowH(prev => (prev === h ? prev : h))
   }, [])
   const colCount =
-    3 + [showArt, showAlbum, showPath, showPlays, showFmt, showSize, showRefreshAction].filter(Boolean).length
+    3 + [showArt, showAlbum, showPath, showSource, showPlays, showFmt, showSize, showRefreshAction].filter(Boolean).length
 
   return (
     <>
@@ -272,6 +275,7 @@ export function TrackTable({
             <th className="title">Title</th>
             {showAlbum && <th>Album</th>}
             {showPath && <th className="path">Ruta</th>}
+            {showSource && <th className="source">Fuente</th>}
             {showPlays && <th className="plays">Plays</th>}
             {showFmt && <th className="fmt">Format</th>}
             {showSize && <th className="size">Size</th>}
@@ -290,7 +294,7 @@ export function TrackTable({
             const isP = t.id === playingId
             const album = showArt ? albumById.get(t.albumId) : undefined
             const pathValue = t.path ?? ''
-            const canRefresh = t.dbId != null
+            const canRefresh = t.dbId != null && t.provider !== 'onedrive'
             const displayTrackNumber = showTrackNo ? (t.no || i + 1) : null
             const isDeleting = t.dbId != null && deletingIds.has(t.dbId)
             return (
@@ -361,6 +365,7 @@ export function TrackTable({
                 </td>
                 {showAlbum && <td className="sec">{t.albumTitle}</td>}
                 {showPath && <td className="path" title={t.path}>{pathValue}</td>}
+                {showSource && <td className="source"><SourceBadge folderId={t.folderId} provider={t.provider} compact /></td>}
                 {showPlays && <td className="plays">{t.plays}</td>}
                 {showFmt && <td className="fmt"><CodecStrip track={t} compact /></td>}
                 {showSize && <td className="size">{fmtFileSize(t.fileSize)}</td>}

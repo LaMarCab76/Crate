@@ -1,5 +1,6 @@
 import { app } from 'electron'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 
 const SETTINGS_FILE = 'library-scan-settings.json'
@@ -53,7 +54,13 @@ class LibraryScanSettings {
     const target = this.settingsPath()
     try {
       mkdirSync(dirname(target), { recursive: true })
-      writeFileSync(target, JSON.stringify({ retentionDays: this.retentionDays }, null, 2))
+      const temp = `${target}.tmp-${randomUUID()}`
+      try {
+        writeFileSync(temp, JSON.stringify({ retentionDays: this.retentionDays }, null, 2), { flag: 'wx' })
+        renameSync(temp, target)
+      } finally {
+        rmSync(temp, { force: true })
+      }
     } catch (err) {
       console.warn(`[library-scan] failed to write settings: ${(err as Error).message}`)
     }

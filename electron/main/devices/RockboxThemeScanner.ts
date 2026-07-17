@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { access, lstat, readdir, readFile, stat } from 'node:fs/promises'
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { RockboxThemePreview } from '@shared/types/device-sync'
@@ -68,7 +69,10 @@ function keyForRelativePath(relPath: string): string {
 }
 
 function idForValue(value: string): string {
-  return keyForRelativePath(value).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'item'
+  const normalized = value.normalize('NFC')
+  const slug = keyForRelativePath(normalized).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'item'
+  const digest = createHash('sha256').update(normalized).digest('hex').slice(0, 10)
+  return `${slug}-${digest}`
 }
 
 function isInside(parent: string, child: string): boolean {

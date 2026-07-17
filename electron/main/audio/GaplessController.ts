@@ -16,9 +16,10 @@ const koffi = require('koffi') as typeof import('koffi')
 
 import { BASS_SYNC_END, BASS_SYNC_ONETIME } from './bass-constants'
 import { loadBass, SYNCPROC, type HSTREAM, type HSYNC } from './bass-ffi'
-import { PRELOAD_MEMORY_TIMEOUT_MS } from './progressiveBuffering'
+import { CLOUD_MEMORY_TIMEOUT_MS, PRELOAD_MEMORY_TIMEOUT_MS } from './progressiveBuffering'
 import type {
   AudioEngine,
+  CloudTrackRef,
   StreamCreateResult,
   StreamInfo,
 } from './AudioEngine'
@@ -98,6 +99,7 @@ function serializeStreamInfo(info: StreamInfo): StreamInfoPayload {
 
 export class GaplessController {
   private next: PreloadedStream | null = null
+  private preloadGeneration = 0
   // One callback attached to the *currently playing* stream. It performs the
   // gapless swap when a preloaded track exists, otherwise it emits the generic
   // track-ended event used by queueStore as fallback.
@@ -207,7 +209,10 @@ export class GaplessController {
   // Preload a track. Idempotent for the same path. The end-of-stream sync is
   // attached to the CURRENT stream so that when it finishes we swap to the
   // preloaded one and start playback in the same audio thread tick.
-  async preloadNext(path: string): Promise<PreloadNextResult> {
+  async preloadNext(
+    path: string,
+    cloud?: { cloudRef: CloudTrackRef; cloudSizeBytes: number },
+  ): Promise<PreloadNextResult> {
     if (this.next && this.next.path === path) {
       return {
         attempted: this.next.preload.attempted,
@@ -222,16 +227,24 @@ export class GaplessController {
         bufferComplete: this.next.preload.bufferComplete,
       }
     }
-    this.clearNext()
+    const generation = ++this.preloadGeneration
+    this.discardNext()
 
     const now = Date.now()
     const skipMemory = this.shouldSkipMemory(path, now)
     const created = await this.engine.createStream(path, {
       skipMemory,
       memoryOnly: false,
-      memoryReadTimeoutMs: PRELOAD_MEMORY_TIMEOUT_MS,
+      memoryReadTimeoutMs: cloud ? CLOUD_MEMORY_TIMEOUT_MS : PRELOAD_MEMORY_TIMEOUT_MS,
       isPreload: true,
+      cloudRef: cloud?.cloudRef,
+      cloudSizeBytes: cloud?.cloudSizeBytes,
     })
+
+    if (generation !== this.preloadGeneration) {
+      if (created.stream) this.engine.freeStream(created.stream.handle)
+      return this.toPreloadResult({ ...created, stream: null }, null)
+    }
     const preloadData = this.createTelemetryFromResult(created)
 
     if (created.attemptedMemory) {
@@ -263,6 +276,7 @@ export class GaplessController {
   swapToNext(expectedPath?: string | null): StreamLoadResult | null {
     if (!this.next) return null
     if (expectedPath && this.next.path !== expectedPath) return null
+    this.preloadGeneration += 1
     const preloaded = this.next
     this.next = null
     const endedRegistration = this.currentTrackEndRegistration
@@ -314,6 +328,11 @@ export class GaplessController {
 
   // Drop the preloaded stream without playing it (e.g. queue was modified).
   clearNext(): void {
+    this.preloadGeneration += 1
+    this.discardNext()
+  }
+
+  private discardNext(): void {
     if (!this.next) return
     this.engine.freeStream(this.next.handle)
     this.next = null

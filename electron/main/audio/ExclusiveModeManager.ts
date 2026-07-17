@@ -10,8 +10,15 @@
 // across the switch.
 
 import { broadcast } from '../ipc/events'
+import { getRepos } from '../db/repositories'
+import { getOneDriveClient } from '../cloud/OneDriveClient'
+import { resolveCloudLoadOptions } from '../cloud/cloudTrackRef'
 import { getAudioEngine, type AudioEngine } from './AudioEngine'
 import { getEQManager } from './EQManager'
+import {
+  restoreExclusivePlaybackSnapshot,
+  type ExclusivePlaybackSnapshot,
+} from './exclusivePlaybackSnapshot'
 import {
   coreAudioErrorName,
   enumerateOutputDevices,
@@ -21,13 +28,6 @@ import {
   type CoreAudioDevice,
 } from './coreaudio-ffi'
 import type { AudioOutputDevice, ExclusiveModeState } from '@shared/types/ipc-contract'
-
-interface PlaybackSnapshot {
-  path: string | null
-  positionSec: number
-  wasPlaying: boolean
-  volume: number
-}
 
 let manager: ExclusiveModeManager | null = null
 
@@ -209,19 +209,36 @@ export class ExclusiveModeManager {
       }
     }
 
-    const snapshot = this.snapshotPlayback()
+    let snapshot: ExclusivePlaybackSnapshot
+    try {
+      snapshot = await this.snapshotPlayback()
+    } catch (err) {
+      return { enabled: false, deviceId: null, reason: `Could not snapshot playback: ${errorMessage(err)}` }
+    }
 
-    // Free BASS before touching hog mode — CoreAudio rejects HogMode writes
-    // while an IOProc is attached to the device.
-    this.engine.teardownForReinit()
+    try {
+      // Free BASS before touching hog mode — CoreAudio rejects HogMode writes
+      // while an IOProc is attached to the device.
+      this.engine.teardownForReinit()
+    } catch (err) {
+      return { enabled: false, deviceId: null, reason: `Could not prepare audio for exclusive mode: ${errorMessage(err)}` }
+    }
 
     if (ownerPid !== process.pid) {
       const status = setHogOwner(caId, process.pid)
       if (status !== 0) {
         // Failed to take hog. Reinit BASS in normal mode so playback can
         // continue, then surface the error.
-        this.engine.reinitDevice(currentBass.id)
-        await this.restorePlayback(snapshot)
+        try {
+          this.engine.reinitDevice(currentBass.id)
+          await this.restorePlayback(snapshot)
+        } catch (rollbackErr) {
+          return {
+            enabled: false,
+            deviceId: null,
+            reason: `CoreAudio rejected hog request and normal playback could not be restored: ${errorMessage(rollbackErr)}`,
+          }
+        }
         return {
           enabled: false,
           deviceId: null,
@@ -232,8 +249,28 @@ export class ExclusiveModeManager {
 
     this.heldDeviceId = caId
     this.enabled = true
-    this.engine.reinitDevice(currentBass.id)
-    await this.restorePlayback(snapshot)
+    try {
+      this.engine.reinitDevice(currentBass.id)
+      await this.restorePlayback(snapshot)
+    } catch (err) {
+      // Taking hog is not success until BASS and the previous stream have both
+      // been restored. Release ownership and rebuild the normal output path.
+      try { setHogOwner(caId, -1) } catch { /* reported below */ }
+      this.heldDeviceId = null
+      this.enabled = false
+      try {
+        this.engine.teardownForReinit()
+        this.engine.reinitDevice(currentBass.id)
+        await this.restorePlayback(snapshot)
+      } catch (rollbackErr) {
+        return {
+          enabled: false,
+          deviceId: null,
+          reason: `Exclusive mode failed (${errorMessage(err)}); normal playback rollback also failed: ${errorMessage(rollbackErr)}`,
+        }
+      }
+      return { enabled: false, deviceId: null, reason: `Exclusive mode failed and was rolled back: ${errorMessage(err)}` }
+    }
 
     const next: ExclusiveModeState = { enabled: true, deviceId: currentBass.id }
     broadcast('audio:exclusive-changed', next)
@@ -245,20 +282,52 @@ export class ExclusiveModeManager {
       return { enabled: false, deviceId: null }
     }
     const currentBass = this.engine.getOutputDevice()
-    const snapshot = this.snapshotPlayback()
+    let snapshot: ExclusivePlaybackSnapshot
+    try {
+      snapshot = await this.snapshotPlayback()
+    } catch (err) {
+      return {
+        enabled: true,
+        deviceId: currentBass?.id ?? null,
+        reason: `Could not snapshot playback before leaving exclusive mode: ${errorMessage(err)}`,
+      }
+    }
 
     // Same ordering as enable: free BASS, mutate hog, re-init.
     this.engine.teardownForReinit()
 
-    if (this.heldDeviceId !== null) {
-      setHogOwner(this.heldDeviceId, -1)
+    const heldDeviceId = this.heldDeviceId
+    if (heldDeviceId !== null) {
+      const releaseStatus = setHogOwner(heldDeviceId, -1)
+      if (releaseStatus !== 0) {
+        this.engine.reinitDevice(currentBass?.id ?? -1)
+        await this.restorePlayback(snapshot)
+        return {
+          enabled: true,
+          deviceId: currentBass?.id ?? null,
+          reason: `CoreAudio rejected exclusive-mode release: ${coreAudioErrorName(releaseStatus)}`,
+        }
+      }
       this.heldDeviceId = null
     }
     this.enabled = false
 
     if (currentBass) {
-      this.engine.reinitDevice(currentBass.id)
-      await this.restorePlayback(snapshot)
+      try {
+        this.engine.reinitDevice(currentBass.id)
+        await this.restorePlayback(snapshot)
+      } catch (err) {
+        // Restore the previous exclusive state if normal reinitialization failed.
+        if (heldDeviceId !== null && setHogOwner(heldDeviceId, process.pid) === 0) {
+          this.heldDeviceId = heldDeviceId
+          this.enabled = true
+          this.engine.teardownForReinit()
+          this.engine.reinitDevice(currentBass.id)
+          await this.restorePlayback(snapshot)
+          return { enabled: true, deviceId: currentBass.id, reason: `Normal-mode restore failed; exclusive mode was restored: ${errorMessage(err)}` }
+        }
+        throw err
+      }
     }
 
     const next: ExclusiveModeState = { enabled: false, deviceId: null }
@@ -266,26 +335,32 @@ export class ExclusiveModeManager {
     return next
   }
 
-  private snapshotPlayback(): PlaybackSnapshot {
+  private async snapshotPlayback(): Promise<ExclusivePlaybackSnapshot> {
+    const path = this.engine.getCurrentPath()
+    const track = path ? getRepos().tracks.getByPath(path) : null
+    const cloud = track?.provider === 'onedrive'
+      ? await resolveCloudLoadOptions(track, getOneDriveClient())
+      : null
+    if (path?.startsWith('onedrive://') && !cloud) {
+      throw new Error('OneDrive track is no longer indexed with a valid cloud reference')
+    }
     return {
-      path: this.engine.getCurrentPath(),
+      path,
       positionSec: this.engine.getPosition(),
+      estimatedDurationSec: this.engine.getStreamInfo()?.duration ?? track?.duration ?? null,
       wasPlaying: this.engine.getStatus() === 'playing',
       volume: this.engine.getVolume(),
+      cloudRef: cloud?.cloudRef ?? null,
+      cloudSizeBytes: cloud?.cloudSizeBytes ?? null,
     }
   }
 
-  private async restorePlayback(snap: PlaybackSnapshot): Promise<void> {
-    if (!snap.path) return
-    try {
-      await this.engine.load(snap.path)
-      this.engine.setVolume(snap.volume)
-      getEQManager().reapply(this.engine.getCurrentStream())
-      if (snap.positionSec > 0) this.engine.seek(snap.positionSec)
-      if (snap.wasPlaying) this.engine.play()
-    } catch (err) {
-      console.warn('[exclusive] failed to restore playback after reinit:', err)
-    }
+  private async restorePlayback(snap: ExclusivePlaybackSnapshot): Promise<void> {
+    await restoreExclusivePlaybackSnapshot(
+      this.engine,
+      snap,
+      stream => getEQManager().reapply(stream),
+    )
   }
 
   private getCoreAudioDevices(): CoreAudioDevice[] {
@@ -293,6 +368,10 @@ export class ExclusiveModeManager {
     this.coreaudioCache = enumerateOutputDevices()
     return this.coreaudioCache
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 // Normalize a CoreAudio/BASS device name for loose comparison: lowercase,

@@ -1,5 +1,6 @@
 import { app, safeStorage } from 'electron'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type {
   DownloadSettings,
@@ -49,6 +50,17 @@ function normalizeSettings(value: Partial<DownloadSettings> | null): DownloadSet
   }
 }
 
+function writeJsonAtomic(path: string, value: unknown, mode = 0o600): void {
+  const tempPath = `${path}.${randomUUID()}.tmp`
+  try {
+    writeFileSync(tempPath, JSON.stringify(value, null, 2), { mode })
+    renameSync(tempPath, path)
+  } catch (err) {
+    try { unlinkSync(tempPath) } catch { /* best-effort cleanup */ }
+    throw err
+  }
+}
+
 export class CredentialStore {
   private dir: string
   private credentialsPath: string
@@ -75,7 +87,7 @@ export class CredentialStore {
     const current = this.getSettings()
     const next = normalizeSettings({ ...current, ...patch })
     mkdirSync(this.dir, { recursive: true })
-    writeFileSync(this.settingsPath, JSON.stringify(next, null, 2))
+    writeJsonAtomic(this.settingsPath, next)
     return next
   }
 
@@ -101,7 +113,7 @@ export class CredentialStore {
         : typeof patch.lastShownAt === 'number' ? patch.lastShownAt : null,
     }
     mkdirSync(this.dir, { recursive: true })
-    writeFileSync(this.tutorialPath, JSON.stringify(next, null, 2))
+    writeJsonAtomic(this.tutorialPath, next)
     return next
   }
 
@@ -176,7 +188,7 @@ export class CredentialStore {
       qobuz: value.qobuz ? this.encrypt(value.qobuz) : undefined,
       tidal: value.tidal ? this.encrypt(value.tidal) : undefined,
     }
-    writeFileSync(this.credentialsPath, JSON.stringify(out, null, 2))
+    writeJsonAtomic(this.credentialsPath, out)
   }
 
   private encrypt(value: unknown): string {

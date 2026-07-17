@@ -345,6 +345,7 @@ function LyricsPanelContent({
   const displayLineIndex = parsed ? findCurrentLineIndex(parsed.lines, displayLyricsTimeSec) : currentLineIndex
   const waitRange = parsed ? activeWaitRange(parsed.lines, displayLyricsTimeSec, displayLineIndex) : null
   const hasTrack = currentTrack?.dbId != null
+  const isCloudTrack = currentTrack?.provider === 'onedrive'
   const hasLyrics = status === 'found_synced' || status === 'found_plain' || status === 'low_confidence'
   const showSynced = !!parsed && (status === 'found_synced' || status === 'low_confidence')
   const showPlain = !showSynced && !!plainLines && (status === 'found_plain' || status === 'low_confidence')
@@ -638,6 +639,7 @@ function LyricsPanelContent({
   const onDrop = async (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault()
     setDragOver(false)
+    if (isCloudTrack) return
     const file = e.dataTransfer.files?.[0]
     if (!file || !/\.(lrc|txt)$/i.test(file.name)) return
     const text = await file.text()
@@ -692,6 +694,15 @@ function LyricsPanelContent({
 
   function renderBody() {
     if (!hasTrack) return <div className="lyr-empty"><div className="lyr-empty-title">Nada en reproducción</div></div>
+    if (isCloudTrack) {
+      return (
+        <div className="lyr-empty">
+          <Icon name="cloud" size={26} />
+          <div className="lyr-empty-title">Letras no disponibles</div>
+          <div className="lyr-empty-sub">Las letras y etiquetas se editan únicamente en bibliotecas locales.</div>
+        </div>
+      )
+    }
 
     if (status === 'loading') {
       return (
@@ -843,7 +854,7 @@ function LyricsPanelContent({
   return (
     <div
       className={`lyr-panel lyr-${variant} lyr-status-${status}`}
-      onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+      onDragOver={e => { e.preventDefault(); if (!isCloudTrack) setDragOver(true) }}
       onDragLeave={() => setDragOver(false)}
       onDrop={e => { void onDrop(e) }}
     >
@@ -852,7 +863,7 @@ function LyricsPanelContent({
       {renderCompactHeader()}
       <div className="lyr-body">{renderBody()}</div>
 
-      {showActions && hasTrack && hasLyrics && (
+      {showActions && hasTrack && !isCloudTrack && hasLyrics && (
         <div className="lyr-bottom-bar">
           {toolbarOpen && offsetOpen && showSynced && parsed && (
             <LyricsOffsetControl

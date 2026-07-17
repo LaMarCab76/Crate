@@ -93,7 +93,22 @@ export function PlayerStage() {
 
       <div className="np-progress">
         <span className="time">{displayTimes.elapsedText}</span>
-        <div className="np-bar-track" onMouseDown={onProgressMouseDown} role="slider" tabIndex={0}>
+        <div
+          className="np-bar-track"
+          onMouseDown={onProgressMouseDown}
+          onKeyDown={event => {
+            if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+            event.preventDefault()
+            void seek(Math.max(0, Math.min(durationSec, positionSec + (event.key === 'ArrowRight' ? 5 : -5))))
+          }}
+          role="slider"
+          tabIndex={0}
+          aria-label="Posición de reproducción"
+          aria-valuemin={0}
+          aria-valuemax={Math.max(0, durationSec)}
+          aria-valuenow={Math.max(0, displayPositionSec)}
+          aria-valuetext={displayTimes.elapsedText}
+        >
           <div className="np-bar-fill" style={{ width: `${displayProgress * 100}%` }} />
         </div>
         <span className="time">-{displayTimes.remainingText}</span>
@@ -102,7 +117,23 @@ export function PlayerStage() {
       <div className="np-stage-volume pp-volume">
         <span className="ic"><Icon name={volume === 0 ? 'volumeM' : 'volume'} size={15} /></span>
         <div className="slider-wrap" style={{ '--pct': `${volume * 100}%` } as CSSProperties}>
-          <div className="track" onMouseDown={onVolumeMouseDown} role="slider" tabIndex={0}>
+          <div
+            className="track"
+            onMouseDown={onVolumeMouseDown}
+            onKeyDown={event => {
+              if (!['ArrowLeft', 'ArrowDown', 'ArrowRight', 'ArrowUp'].includes(event.key)) return
+              event.preventDefault()
+              const direction = event.key === 'ArrowRight' || event.key === 'ArrowUp' ? 0.05 : -0.05
+              void setVolume(Math.max(0, Math.min(1, volume + direction)))
+            }}
+            role="slider"
+            tabIndex={0}
+            aria-label="Volumen"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(volume * 100)}
+            aria-valuetext={`${Math.round(volume * 100)}%`}
+          >
             <div className="fill" style={{ width: `${volume * 100}%` }} />
           </div>
           <div className="dot" aria-hidden="true" />

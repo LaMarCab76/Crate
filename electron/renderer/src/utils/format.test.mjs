@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { fmtTime, formatPlaybackTimePair } from './format.ts'
+import { fmtTime, formatPlaybackTimePair } from './playbackTime.ts'
 
 test('fmtTime keeps the existing floored minute-second format', () => {
   assert.equal(fmtTime(99.9), '1:39')

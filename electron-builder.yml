@@ -29,9 +29,11 @@ mac:
   category: public.app-category.music
   hardenedRuntime: true
   gatekeeperAssess: false
+  forceCodeSigning: true
+  identity: Developer ID Application
   entitlements: electron-build/entitlements.mac.plist
   entitlementsInherit: electron-build/entitlements.mac.plist
-  notarize: false
+  notarize: true
   target:
     - target: dmg
       arch:

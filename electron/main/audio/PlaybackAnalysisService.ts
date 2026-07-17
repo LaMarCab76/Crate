@@ -4,6 +4,8 @@ import { PLAYBACK_ANALYSIS_VERSION, type TrackCacheFingerprint } from '../db/rep
 import { getAudioEngine } from './AudioEngine'
 import type { DbTrack } from '@shared/types/db'
 import type { PlaybackAnalysisResult, PlaybackCacheStats, PlaybackTableBarsResult } from '@shared/types/ipc-contract'
+import { requireLocalLibraryTrackPath } from '../library/localLibraryTrackGuard'
+import { requireFilesystemPlaybackAnalysisPath } from './playbackAnalysisSafety'
 
 const DEFAULT_BUCKETS = 1200
 
@@ -16,6 +18,7 @@ function normalizeBuckets(buckets: number | undefined): number {
 }
 
 function fingerprintFor(track: DbTrack): TrackCacheFingerprint {
+  requireFilesystemPlaybackAnalysisPath(track.path, track.provider)
   try {
     const st = statSync(track.path)
     return {
@@ -37,23 +40,27 @@ export class PlaybackAnalysisService {
   private tableBarsInflight = new Map<string, Promise<PlaybackTableBarsResult>>()
 
   getCached(path: string, buckets?: number, trackId?: number | null): PlaybackAnalysisResult | null {
+    requireFilesystemPlaybackAnalysisPath(path)
     const resolved = this.resolveTrack(path, trackId)
     if (!resolved) return null
+    const current = this.requireCurrentLocalTrack(resolved)
     return getRepos().playbackAnalysis.getValid(
-      resolved,
+      current,
       normalizeBuckets(buckets),
-      fingerprintFor(resolved),
+      fingerprintFor(current),
     )
   }
 
   async ensure(path: string, buckets?: number, trackId?: number | null): Promise<PlaybackAnalysisResult> {
+    requireFilesystemPlaybackAnalysisPath(path)
     const resolved = this.resolveTrack(path, trackId)
     const normalizedBuckets = normalizeBuckets(buckets)
     if (!resolved) {
       return getAudioEngine().decodePlaybackAnalysis(path, normalizedBuckets)
     }
 
-    const cached = getRepos().playbackAnalysis.getValid(resolved, normalizedBuckets, fingerprintFor(resolved))
+    const current = this.requireCurrentLocalTrack(resolved)
+    const cached = getRepos().playbackAnalysis.getValid(current, normalizedBuckets, fingerprintFor(current))
     if (cached) return cached
 
     const key = `${resolved.id}:${normalizedBuckets}`
@@ -67,21 +74,25 @@ export class PlaybackAnalysisService {
   }
 
   getCachedTableBars(path: string, trackId?: number | null): PlaybackTableBarsResult | null {
+    requireFilesystemPlaybackAnalysisPath(path)
     const resolved = this.resolveTrack(path, trackId)
     if (!resolved) return null
+    const current = this.requireCurrentLocalTrack(resolved)
     return getRepos().playbackAnalysis.getValidTableBars(
-      resolved,
-      fingerprintFor(resolved),
+      current,
+      fingerprintFor(current),
     )
   }
 
   async ensureTableBars(path: string, trackId?: number | null): Promise<PlaybackTableBarsResult> {
+    requireFilesystemPlaybackAnalysisPath(path)
     const resolved = this.resolveTrack(path, trackId)
     if (!resolved) {
       return getAudioEngine().decodeTableBars(path)
     }
 
-    const cached = getRepos().playbackAnalysis.getValidTableBars(resolved, fingerprintFor(resolved))
+    const current = this.requireCurrentLocalTrack(resolved)
+    const cached = getRepos().playbackAnalysis.getValidTableBars(current, fingerprintFor(current))
     if (cached) return cached
 
     const key = `${resolved.id}:table-bars`
@@ -107,26 +118,28 @@ export class PlaybackAnalysisService {
   }
 
   private async decodeAndStore(track: DbTrack, buckets: number): Promise<PlaybackAnalysisResult> {
-    const fingerprint = fingerprintFor(track)
-    const decoded = await getAudioEngine().decodePlaybackAnalysis(track.path, buckets)
+    const current = this.requireCurrentLocalTrack(track)
+    const fingerprint = fingerprintFor(current)
+    const decoded = await getAudioEngine().decodePlaybackAnalysis(current.path, buckets)
     const normalized: PlaybackAnalysisResult = {
       ...decoded,
       analysisVersion: PLAYBACK_ANALYSIS_VERSION,
       source: 'decoded',
     }
-    getRepos().playbackAnalysis.save(track, fingerprint, normalized, [track.id, this.currentTrackId()])
+    getRepos().playbackAnalysis.save(current, fingerprint, normalized, [current.id, this.currentTrackId()])
     return normalized
   }
 
   private async decodeAndStoreTableBars(track: DbTrack): Promise<PlaybackTableBarsResult> {
-    const fingerprint = fingerprintFor(track)
-    const decoded = await getAudioEngine().decodeTableBars(track.path)
+    const current = this.requireCurrentLocalTrack(track)
+    const fingerprint = fingerprintFor(current)
+    const decoded = await getAudioEngine().decodeTableBars(current.path)
     const normalized: PlaybackTableBarsResult = {
       ...decoded,
       analysisVersion: PLAYBACK_ANALYSIS_VERSION,
       source: 'decoded',
     }
-    getRepos().playbackAnalysis.saveTableBars(track, fingerprint, normalized, [track.id, this.currentTrackId()])
+    getRepos().playbackAnalysis.saveTableBars(current, fingerprint, normalized, [current.id, this.currentTrackId()])
     return normalized
   }
 
@@ -140,6 +153,22 @@ export class PlaybackAnalysisService {
       return byId
     }
     return repos.tracks.getByPath(path) ?? null
+  }
+
+  private requireCurrentLocalTrack(expected: DbTrack): DbTrack {
+    const repos = getRepos()
+    const current = repos.tracks.getById(expected.id)
+    if (!current || current.folder_id !== expected.folder_id) {
+      throw new Error('Playback analysis track changed while the request was queued')
+    }
+    requireFilesystemPlaybackAnalysisPath(current.path, current.provider)
+    requireLocalLibraryTrackPath({
+      track: current,
+      folder: repos.folders.getById(current.folder_id),
+      expectedPath: expected.path,
+      label: 'Playback analysis track',
+    })
+    return current
   }
 
   private currentTrackId(): number | null {

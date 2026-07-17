@@ -110,7 +110,17 @@ export function ImportView() {
         </div>
       )}
 
-      <div className="import-drop" onClick={pickAndAdd} role="button" tabIndex={0}>
+      <div
+        className="import-drop"
+        onClick={pickAndAdd}
+        onKeyDown={event => {
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          event.preventDefault()
+          void pickAndAdd()
+        }}
+        role="button"
+        tabIndex={0}
+      >
         <div className="ic"><Icon name="drop" size={32} stroke={1.3} /></div>
         <h3>Drop audio files here</h3>
         <p>FLAC, ALAC, AAC, MP3, AIFF, WAV · or use Add Folder above</p>

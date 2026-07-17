@@ -82,7 +82,9 @@ export function PlayerPane({
   const setVolume = useQueueStore(s => s.setVolume)
   const isTrackTransitioning = useQueueStore(s => s.isTrackTransitioning)
   const shuffle = useQueueStore(s => s.shuffle)
+  const repeat = useQueueStore(s => s.repeat)
   const toggleShuffle = useQueueStore(s => s.toggleShuffle)
+  const setRepeat = useQueueStore(s => s.setRepeat)
   const album = useAlbumByUiId(track?.albumId)
   const artist = useArtistByUiId(track?.artistId)
   const [lastAlbum, setLastAlbum] = useState<Album | null>(null)
@@ -305,6 +307,10 @@ export function PlayerPane({
     setQueueMenuOpen(false)
   }
 
+  const cycleRepeat = () => {
+    setRepeat(repeat === 'off' ? 'all' : repeat === 'all' ? 'one' : 'off')
+  }
+
   useEffect(() => {
     if (!isOpen) {
       setDeviceMenuOpen(false)
@@ -332,7 +338,10 @@ export function PlayerPane({
     : null
 
   useEffect(() => {
-    void window.api.audio.getExclusiveMode().then(setExclusiveState).catch(() => { /* main not ready */ })
+    void window.api.audio.getExclusiveMode().then(state => {
+      setExclusiveState(state)
+      setExclusiveError(state.reason && !state.enabled ? state.reason : null)
+    }).catch(() => { /* main not ready */ })
     return window.api.audio.onExclusiveModeChanged(state => {
       setExclusiveState(state)
       setExclusiveBusy(false)
@@ -546,7 +555,11 @@ export function PlayerPane({
             >
               <div className="pp-player">
                 <div className="pp-player-top">
-                  <div className="art" onClick={onExpand} role="button" tabIndex={0}>
+                  <div className="art" onClick={onExpand} onKeyDown={event => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return
+                    event.preventDefault()
+                    onExpand()
+                  }} role="button" tabIndex={0}>
                     <CrossfadeArtwork album={displayAlbum} radius={8} objectFit="contain" />
                     <TrackLoadingOverlay />
                   </div>
@@ -625,7 +638,22 @@ export function PlayerPane({
                 <div className="pp-player-bottom">
                   <div className="pp-progress">
                     <div className="slider-wrap" style={{ '--pct': `${displayProgress * 100}%` } as CSSProperties}>
-                      <div className="track" onMouseDown={onProgressMouseDown} role="slider" tabIndex={0}>
+                      <div
+                        className="track"
+                        onMouseDown={onProgressMouseDown}
+                        onKeyDown={event => {
+                          if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+                          event.preventDefault()
+                          void seek(Math.max(0, Math.min(durationSec, positionSec + (event.key === 'ArrowRight' ? 5 : -5))))
+                        }}
+                        role="slider"
+                        tabIndex={0}
+                        aria-label="Posición de reproducción"
+                        aria-valuemin={0}
+                        aria-valuemax={Math.max(0, durationSec)}
+                        aria-valuenow={Math.max(0, displayPositionSec)}
+                        aria-valuetext={displayTimes.elapsedText}
+                      >
                         <div className="fill" style={{ width: `${displayProgress * 100}%` }} />
                       </div>
                       <div className="dot" aria-hidden="true" />
@@ -637,19 +665,45 @@ export function PlayerPane({
                   </div>
 
                   <div className="pp-controls">
-                    <button className="sub" title="Shuffle"><Icon name="shuffle" size={15} /></button>
+                    <button
+                      className={`sub ${shuffle ? 'active' : ''}`}
+                      title="Shuffle"
+                      aria-pressed={shuffle}
+                      onClick={toggleShuffle}
+                    ><Icon name="shuffle" size={15} /></button>
                     <button title="Previous" onClick={() => { void previous() }}><Icon name="prev" size={20} /></button>
                     <button className="play" onClick={() => { void togglePlay() }} title={playing ? 'Pause' : 'Play'}>
                       <Icon name={playing ? 'pause' : 'play'} size={16} />
                     </button>
                     <button title="Next" disabled={isTrackTransitioning} onClick={() => { void next() }}><Icon name="next" size={20} /></button>
-                    <button className="sub active" title="Repeat"><Icon name="repeat" size={15} /></button>
+                    <button
+                      className={`sub ${repeat !== 'off' ? 'active' : ''}`}
+                      title={repeat === 'one' ? 'Repeat One' : repeat === 'all' ? 'Repeat All' : 'Repeat'}
+                      aria-pressed={repeat !== 'off'}
+                      onClick={cycleRepeat}
+                    ><Icon name="repeat" size={15} /></button>
                   </div>
 
                   <div className="pp-volume">
                     <span className="ic"><Icon name={volume === 0 ? 'volumeM' : 'volume'} size={14} /></span>
                     <div className="slider-wrap" style={{ '--pct': `${volume * 100}%` } as CSSProperties}>
-                      <div className="track" onMouseDown={onVolumeMouseDown} role="slider" tabIndex={0}>
+                      <div
+                        className="track"
+                        onMouseDown={onVolumeMouseDown}
+                        onKeyDown={event => {
+                          if (event.key !== 'ArrowLeft' && event.key !== 'ArrowDown' && event.key !== 'ArrowRight' && event.key !== 'ArrowUp') return
+                          event.preventDefault()
+                          const direction = event.key === 'ArrowRight' || event.key === 'ArrowUp' ? 0.05 : -0.05
+                          void setVolume(Math.max(0, Math.min(1, volume + direction)))
+                        }}
+                        role="slider"
+                        tabIndex={0}
+                        aria-label="Volumen"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={Math.round(volume * 100)}
+                        aria-valuetext={`${Math.round(volume * 100)}%`}
+                      >
                         <div className="fill" style={{ width: `${volume * 100}%` }} />
                       </div>
                       <div className="dot" aria-hidden="true" />

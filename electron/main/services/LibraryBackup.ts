@@ -8,13 +8,15 @@
 // payload is small (~tens of KB for thousands of tracks), so the writes are
 // also sync. That lets `flushAll()` run reliably from `app.on('before-quit')`.
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
 import type { Database as BetterSqliteDatabase } from 'better-sqlite3'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import type { Repos } from '../db/repositories'
 import { getDatabase } from '../db/database'
 import { getRepos } from '../db/repositories'
+import { isLibraryLocationMigrationLocked } from '../library-migration/locationLocks'
 import type {
   BackupArtist,
   BackupAlbum,
@@ -22,9 +24,21 @@ import type {
   BackupTrack,
 } from '@shared/types/library-backup'
 import { BACKUP_DIRNAME, BACKUP_FILENAME, BACKUP_VERSION } from '@shared/types/library-backup'
+import {
+  mergedPortableTrackState,
+  portableTrackState,
+  resolvePortableTrackPath,
+} from './libraryBackupSafety'
 
 const DEBOUNCE_MS = 2000
 const APP_NAME = 'Crate'
+const MAX_BACKUP_BYTES = 10 * 1024 * 1024
+
+export type BackupReadResult =
+  | { status: 'missing' }
+  | { status: 'ready'; backup: BackupFile }
+  | { status: 'incompatible'; version: number | null; message: string }
+  | { status: 'invalid'; message: string }
 
 function toPosixRelative(folderPath: string, absPath: string): string {
   return relative(folderPath, absPath).split(sep).join('/')
@@ -34,19 +48,31 @@ function backupPathForFolder(folderPath: string): string {
   return join(folderPath, BACKUP_DIRNAME, BACKUP_FILENAME)
 }
 
-// Lexicographic max of two ISO-8601 timestamps (or null). Used to merge
-// `last_played_date` without parsing it — ISO 8601 sorts correctly as text.
-function pickMaxIso(a: string | null, b: string | null): string | null {
-  if (!a) return b
-  if (!b) return a
-  return a > b ? a : b
-}
-
 function writeYamlAtomic(target: string, payload: BackupFile): void {
-  const tmp = target + '.tmp'
+  const tmp = `${target}.tmp-${randomUUID()}`
   mkdirSync(dirname(target), { recursive: true })
-  writeFileSync(tmp, stringifyYaml(payload), 'utf8')
-  renameSync(tmp, target)
+  try {
+    writeFileSync(tmp, stringifyYaml(payload), 'utf8')
+    try {
+      renameSync(tmp, target)
+    } catch (err) {
+      // Windows does not reliably replace an existing target with rename.
+      // Stage the previous good file and restore it if publishing fails.
+      if (!existsSync(target)) throw err
+      const previous = `${target}.previous-${randomUUID()}`
+      renameSync(target, previous)
+      try {
+        renameSync(tmp, target)
+      } catch (publishErr) {
+        if (!existsSync(target)) renameSync(previous, target)
+        throw publishErr
+      }
+      try { unlinkSync(previous) } catch { /* published target is authoritative */ }
+    }
+  } catch (err) {
+    try { unlinkSync(tmp) } catch { /* best-effort temp cleanup */ }
+    throw err
+  }
 }
 
 class LibraryBackupService {
@@ -73,18 +99,56 @@ class LibraryBackupService {
   // ----- READ -----
 
   readForFolder(folderPath: string): BackupFile | null {
+    const result = this.readForFolderDetailed(folderPath)
+    return result.status === 'ready' ? result.backup : null
+  }
+
+  readForFolderDetailed(folderPath: string): BackupReadResult {
     const target = backupPathForFolder(folderPath)
-    if (!existsSync(target)) return null
+    if (!existsSync(target)) return { status: 'missing' }
     try {
+      const size = statSync(target).size
+      if (size > MAX_BACKUP_BYTES) {
+        return { status: 'invalid', message: `backup exceeds ${MAX_BACKUP_BYTES} bytes` }
+      }
       const raw = readFileSync(target, 'utf8')
-      const parsed = parseYaml(raw) as BackupFile
+      const parsed = parseYaml(raw) as Partial<BackupFile> | null
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { status: 'invalid', message: 'backup root must be an object' }
+      }
       if (parsed.version !== BACKUP_VERSION) {
         console.warn(`[backup] ${target} has unsupported version ${parsed.version}, ignoring`)
-        return null
+        return {
+          status: 'incompatible',
+          version: typeof parsed.version === 'number' ? parsed.version : null,
+          message: `unsupported backup version ${String(parsed.version)}`,
+        }
       }
-      return parsed
+      if (
+        (parsed.tracks != null && (typeof parsed.tracks !== 'object' || Array.isArray(parsed.tracks))) ||
+        (parsed.artists != null && (typeof parsed.artists !== 'object' || Array.isArray(parsed.artists))) ||
+        (parsed.albums != null && (typeof parsed.albums !== 'object' || Array.isArray(parsed.albums)))
+      ) {
+        return { status: 'invalid', message: 'backup collections must be objects' }
+      }
+      return { status: 'ready', backup: parsed as BackupFile }
     } catch (err) {
       console.warn(`[backup] failed to read ${target}: ${(err as Error).message}`)
+      return { status: 'invalid', message: (err as Error).message }
+    }
+  }
+
+  preserveForRecovery(folderPath: string, reason: 'merge-failed' | 'incompatible' | 'invalid'): string | null {
+    const target = backupPathForFolder(folderPath)
+    if (!existsSync(target)) return null
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const recovery = `${target}.recovery-${reason}-${stamp}-${randomUUID()}`
+    try {
+      renameSync(target, recovery)
+      console.warn(`[backup] preserved ${target} as ${recovery}`)
+      return recovery
+    } catch (err) {
+      console.error(`[backup] could not preserve ${target}:`, err)
       return null
     }
   }
@@ -108,36 +172,17 @@ class LibraryBackupService {
     `)
 
     for (const [relPath, jt] of Object.entries(tracks)) {
-      const absPath = join(folderPath, relPath)
+      const absPath = resolvePortableTrackPath(folderPath, relPath)
+      if (!absPath || !jt || typeof jt !== 'object' || Array.isArray(jt)) {
+        console.warn(`[backup] rejected unsafe or invalid track key ${JSON.stringify(relPath)}`)
+        continue
+      }
       const dbTrack = this.repos.tracks.getByPath(absPath)
       if (!dbTrack) continue
 
-      const backupTs = jt.stateUpdatedAt ? Date.parse(jt.stateUpdatedAt) || 0 : 0
-      const dbTs = dbTrack.state_updated_at ?? 0
-      const backupWins = backupTs > dbTs
-
-      const nextPlayCount = Math.max(dbTrack.play_count ?? 0, jt.playCount ?? 0)
-      const nextLastPlayed = pickMaxIso(dbTrack.last_played_date, jt.lastPlayedAt ?? null)
-      const nextFavorite =
-        backupWins && jt.favorite !== undefined ? (jt.favorite ? 1 : 0) : dbTrack.is_favorite
-      const nextRating =
-        backupWins && jt.rating !== undefined ? jt.rating : dbTrack.rating
-
-      let nextExtMeta = dbTrack.extended_metadata
-      // Keep existing extended_metadata untouched. Old eqOverride values are no
-      // longer read anywhere, so we leave legacy values untouched for DB
-      // compatibility.
-
-      const nextStateTs = Math.max(dbTs, backupTs)
-      update.run(
-        nextPlayCount,
-        nextLastPlayed,
-        nextFavorite,
-        nextRating,
-        nextExtMeta,
-        nextStateTs > 0 ? nextStateTs : null,
-        dbTrack.id,
-      )
+      const merged = mergedPortableTrackState(dbTrack, jt)
+      // Five SET values plus the row id exactly match the six SQL parameters.
+      update.run(...merged, dbTrack.id)
     }
   }
 
@@ -251,7 +296,7 @@ class LibraryBackupService {
   writeForFolderImmediate(folderId: number): void {
     if (!this.enabled) return
     const folder = this.repos.folders.getById(folderId)
-    if (!folder) return
+    if (!folder || folder.provider !== 'local' || folder.role !== 'library') return
     this.cancelForFolder(folderId)
     this.doWrite(folder.id, folder.path)
   }
@@ -262,7 +307,7 @@ class LibraryBackupService {
     const timer = setTimeout(() => {
       this.timers.delete(folderId)
       const folder = this.repos.folders.getById(folderId)
-      if (folder) this.doWrite(folder.id, folder.path)
+      if (folder?.provider === 'local' && folder.role === 'library') this.doWrite(folder.id, folder.path)
     }, delayMs)
     this.timers.set(folderId, timer)
   }
@@ -296,6 +341,7 @@ class LibraryBackupService {
   scheduleWriteAll(): void {
     if (!this.enabled) return
     for (const folder of this.repos.folders.list()) {
+      if (folder.provider !== 'local' || folder.role !== 'library') continue
       this.scheduleWriteForFolder(folder.id)
     }
   }
@@ -307,7 +353,7 @@ class LibraryBackupService {
     for (const folderId of Array.from(this.timers.keys())) {
       const folder = this.repos.folders.getById(folderId)
       this.cancelForFolder(folderId)
-      if (folder) this.doWrite(folder.id, folder.path)
+      if (folder?.provider === 'local' && folder.role === 'library') this.doWrite(folder.id, folder.path)
     }
   }
 
@@ -327,7 +373,15 @@ class LibraryBackupService {
   // ----- INTERNAL -----
 
   private doWrite(folderId: number, folderPath: string): void {
+    if (isLibraryLocationMigrationLocked(folderId, this.db)) return
     try {
+      // Never overwrite bytes we could not safely understand. ImportService
+      // will preserve such a file under a recovery suffix first.
+      const current = this.readForFolderDetailed(folderPath)
+      if (current.status === 'invalid' || current.status === 'incompatible') {
+        console.warn(`[backup] refusing to overwrite ${backupPathForFolder(folderPath)}: ${current.message}`)
+        return
+      }
       const payload = this.buildBackupFor(folderId, folderPath)
       const target = backupPathForFolder(folderPath)
       writeYamlAtomic(target, payload)
@@ -379,19 +433,9 @@ class LibraryBackupService {
 
     const tracks: Record<string, BackupTrack> = {}
     for (const row of trackRows) {
-      const isDefault =
-        (row.play_count ?? 0) === 0 &&
-        !row.last_played_date &&
-        (row.is_favorite ?? 0) === 0 &&
-        row.rating == null
-      if (isDefault) continue
+      const entry = portableTrackState(row)
+      if (!entry) continue
       const rel = toPosixRelative(folderPath, row.path)
-      const entry: BackupTrack = {}
-      if (row.play_count > 0) entry.playCount = row.play_count
-      if (row.last_played_date) entry.lastPlayedAt = row.last_played_date
-      if (row.is_favorite) entry.favorite = true
-      if (row.rating != null) entry.rating = row.rating
-      if (row.state_updated_at) entry.stateUpdatedAt = new Date(row.state_updated_at).toISOString()
       tracks[rel] = entry
     }
 
@@ -410,7 +454,8 @@ class LibraryBackupService {
     for (const ar of artistRows) {
       if (!ar.is_favorite && !ar.state_updated_at) continue
       const entry: BackupArtist = {}
-      if (ar.is_favorite) entry.favorite = true
+      if (ar.state_updated_at) entry.favorite = Boolean(ar.is_favorite)
+      else if (ar.is_favorite) entry.favorite = true
       if (ar.state_updated_at) entry.stateUpdatedAt = new Date(ar.state_updated_at).toISOString()
       artists[ar.name] = entry
     }
@@ -438,7 +483,8 @@ class LibraryBackupService {
       if (!a.is_favorite && !a.state_updated_at) continue
       const key = JSON.stringify([a.title, a.album_artist, a.year])
       const entry: BackupAlbum = {}
-      if (a.is_favorite) entry.favorite = true
+      if (a.state_updated_at) entry.favorite = Boolean(a.is_favorite)
+      else if (a.is_favorite) entry.favorite = true
       if (a.state_updated_at) entry.stateUpdatedAt = new Date(a.state_updated_at).toISOString()
       albums[key] = entry
     }

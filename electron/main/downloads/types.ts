@@ -37,8 +37,9 @@ export class ProviderDownloadUnavailableError extends Error {
 
 export interface OnlineProvider {
   provider: DownloadProvider
+  invalidateCredentials?(): void
   authState(): Promise<ProviderAuthState>
   search(query: string, limit: number): Promise<OnlineTrackResult[]>
-  getTrack(providerTrackId: string): Promise<OnlineTrackResult>
+  getTrack(providerTrackId: string, signal?: AbortSignal): Promise<OnlineTrackResult>
   resolveDownload(track: OnlineTrackResult, quality: DownloadQuality, signal: AbortSignal): Promise<DownloadResolution>
 }

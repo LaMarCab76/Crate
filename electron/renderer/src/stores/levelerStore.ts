@@ -96,7 +96,7 @@ if (typeof window !== 'undefined' && window.api?.leveler) {
 
   // Live updates: the current gain changes as tracks change and as background
   // loudness analysis warms up.
-  window.api.leveler.onChanged(state => {
+  const offChanged = window.api.leveler.onChanged(state => {
     useLevelerStore.setState({
       enabled: state.enabled,
       targetLufs: state.targetLufs,
@@ -104,4 +104,5 @@ if (typeof window !== 'undefined' && window.api?.leveler) {
       currentGainDb: state.currentGainDb,
     })
   })
+  import.meta.hot?.dispose(offChanged)
 }

@@ -14,6 +14,10 @@ import { buildTrackInsert, collectAudioFiles, collectLrcFiles, isAudioPath } fro
 import { getLibraryScanSettings } from './LibraryScanSettings'
 import { readTrackMetadata, type TrackMetadata } from './MetadataExtractor'
 import { isOrphanLrc } from './orphanLrc'
+import { LibraryCollectionError } from './libraryFileCollector'
+import { requireCurrentLocalLibraryFolder, requirePathInsideLocalLibrary } from './libraryRootGuards'
+import { requireLocalLibraryTrackPath } from './localLibraryTrackGuard'
+import { assertLibraryLocationMigrationUnlocked, isLibraryLocationMigrationLocked } from '../library-migration/locationLocks'
 
 const BACKGROUND_SCAN_INTERVAL_MS = 5 * 60 * 1000
 const WATCH_DEBOUNCE_MS = 1000
@@ -91,6 +95,8 @@ class LibraryReconciler {
   async scanAll(reason: LibraryScanReason): Promise<LibraryScanRun[]> {
     const runs: LibraryScanRun[] = []
     for (const folder of this.repos.folders.list()) {
+      if (folder.provider !== 'local' || folder.role !== 'library') continue
+      if (isLibraryLocationMigrationLocked(folder.id)) continue
       runs.push(await this.scanFolder(folder.id, reason))
     }
     this.purgeOldLogs()
@@ -98,6 +104,7 @@ class LibraryReconciler {
   }
 
   async scanFolder(folderId: number, reason: LibraryScanReason): Promise<LibraryScanRun> {
+    assertLibraryLocationMigrationUnlocked(folderId, 'el indexado local')
     const current = this.running.get(folderId)
     if (current) return current
 
@@ -107,6 +114,11 @@ class LibraryReconciler {
       })
     this.running.set(folderId, task)
     return task
+  }
+
+  async waitForFolderIdle(folderId: number): Promise<void> {
+    const running = this.running.get(folderId)
+    if (running) await Promise.allSettled([running])
   }
 
   async scanLog(folderId: number | null, limit: number) {
@@ -120,13 +132,16 @@ class LibraryReconciler {
   private async scanFolderNow(folderId: number, reason: LibraryScanReason): Promise<LibraryScanRun> {
     const folder = this.repos.folders.getById(folderId)
     if (!folder) throw new Error(`Folder ${folderId} no longer exists`)
+    if (folder.provider !== 'local' || folder.role !== 'library') {
+      throw new Error(`Folder ${folderId} is not a local library`)
+    }
 
     const run = this.repos.libraryScanLog.startRun({ folderId: folder.id, reason })
     const counts = emptyCounts()
 
     try {
       if (!existsSync(folder.path)) {
-        this.removeMissingRoot(folder, run.id, counts)
+        this.recordUnavailableRoot(folder, run.id)
       } else {
         await this.reconcileExistingRoot(folder, run.id, counts)
       }
@@ -143,6 +158,16 @@ class LibraryReconciler {
       return finished
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
+      if (err instanceof LibraryCollectionError) {
+        this.repos.libraryScanLog.addEvent({
+          runId: run.id,
+          folderId: folder.id,
+          type: 'root_unavailable',
+          path: err.path,
+          title: folder.name,
+          detail: 'Scan was incomplete; the existing catalog was preserved',
+        })
+      }
       this.repos.libraryScanLog.addEvent({
         runId: run.id,
         folderId: folder.id,
@@ -162,30 +187,16 @@ class LibraryReconciler {
     }
   }
 
-  private removeMissingRoot(folder: DbFolder, runId: number, counts: ScanCounts): void {
+  private recordUnavailableRoot(folder: DbFolder, runId: number): void {
     const tracks = this.repos.tracks.getByFolder(folder.id)
-    counts.removed = tracks.length
-    if (tracks.length > 0) {
-      this.repos.libraryScanLog.addEvents(tracks.slice(0, 1000).map(track => ({
-        runId,
-        folderId: folder.id,
-        type: 'removed',
-        path: track.path,
-        title: track.title,
-        detail: 'Library root is missing',
-      })))
-      this.repos.tracks.deleteByFolder(folder.id)
-    }
-    this.repos.folders.updateTrackCount(folder.id, 0)
     this.repos.libraryScanLog.addEvent({
       runId,
       folderId: folder.id,
-      type: 'missing_root',
+      type: 'root_unavailable',
       path: folder.path,
       title: folder.name,
-      detail: `${tracks.length} tracks removed from the local catalog`,
+      detail: `${tracks.length} tracks preserved until the library root is available again`,
     })
-    getLibraryBackup().cancelForFolder(folder.id)
   }
 
   private async reconcileExistingRoot(folder: DbFolder, runId: number, counts: ScanCounts): Promise<void> {
@@ -197,12 +208,61 @@ class LibraryReconciler {
       phase: 'discovering',
     })
     const files = await collectAudioFiles(folder.path)
+    // Discovery yields to the event loop. Re-read the DB before the scan starts
+    // its catalog-mutating phase so a newly assigned backup is never treated as
+    // an empty/changed source library.
+    this.requireCurrentFolder(folder)
     const filesOnDisk = new Set(files)
     const tracks = this.repos.tracks.getByFolder(folder.id)
     const tracksByPath = new Map(tracks.map(track => [track.path, track]))
     const total = files.length
 
-    const removed = tracks.filter(track => !filesOnDisk.has(track.path))
+    // Preserve track identity for case-only / Unicode-normalization renames.
+    // We only accept an unambiguous normalized path and matching size; broader
+    // content-based rename detection belongs in a fingerprinted scan.
+    const normalized = (path: string): string => path.normalize('NFC').toLocaleLowerCase('en-US')
+    const untrackedByNormalized = new Map<string, string[]>()
+    for (const file of files) {
+      if (tracksByPath.has(file)) continue
+      const key = normalized(file)
+      const bucket = untrackedByNormalized.get(key) ?? []
+      bucket.push(file)
+      untrackedByNormalized.set(key, bucket)
+    }
+    const renamedIds = new Set<number>()
+    for (const track of tracks) {
+      if (filesOnDisk.has(track.path)) continue
+      const candidates = untrackedByNormalized.get(normalized(track.path)) ?? []
+      if (candidates.length !== 1) continue
+      const candidate = candidates[0]
+      try {
+        const stats = statSync(candidate)
+        if (track.file_size != null && track.file_size !== stats.size) continue
+      } catch {
+        continue
+      }
+      const lyricsIndex = getLyricsIndexService()
+      const indexedLyrics = lyricsIndex.lookup(folder.id, folder.path, track.path)
+      this.repos.tracks.updatePath(track.id, candidate, basename(candidate))
+      if (indexedLyrics) {
+        lyricsIndex.remove(folder.id, folder.path, track.path)
+        lyricsIndex.set(folder.id, folder.path, candidate, indexedLyrics)
+      }
+      tracksByPath.delete(track.path)
+      tracksByPath.set(candidate, { ...track, path: candidate, filename: basename(candidate) })
+      renamedIds.add(track.id)
+      counts.updated += 1
+      this.repos.libraryScanLog.addEvent({
+        runId,
+        folderId: folder.id,
+        type: 'updated',
+        path: candidate,
+        title: track.title,
+        detail: `Path rename detected from ${track.path}`,
+      })
+    }
+
+    const removed = tracks.filter(track => !filesOnDisk.has(track.path) && !renamedIds.has(track.id))
     if (removed.length > 0) {
       counts.removed += removed.length
       this.repos.libraryScanLog.addEvents(removed.map(track => ({
@@ -253,6 +313,8 @@ class LibraryReconciler {
     // single-owner; only the heavy readTrackMetadata + artwork save move off-thread.
     const applyItem = (path: string, md: TrackMetadata | null, error?: string): void => {
       try {
+        // Worker results can arrive after the destination was reclassified.
+        this.requireCurrentFolder(folder)
         if (error || !md) {
           const existing = refreshByPath.get(path)
           if (existing) this.recordRefreshSkip(existing, runId, counts, error ?? 'metadata read failed')
@@ -286,6 +348,7 @@ class LibraryReconciler {
       // applyImportedMetadata's getByPath guard makes the re-walk safe.
       scanned = total - work.length
       for (const file of work) {
+        this.requireCurrentFolder(folder)
         const existing = refreshByPath.get(file)
         if (existing) await this.refreshExistingTrack(existing, runId, counts)
         else await this.importNewTrack(folder.id, file, runId, counts)
@@ -296,6 +359,7 @@ class LibraryReconciler {
 
     // Best-effort: never let lyrics cleanup abort a scan.
     try {
+      this.requireCurrentFolder(folder)
       await this.cleanupOrphanLrc(folder, runId, files)
     } catch (err) {
       console.warn(`[lyrics-cleanup] folder ${folder.id} failed:`, (err as Error).message)
@@ -330,6 +394,9 @@ class LibraryReconciler {
     }
 
     const lrcFiles = await collectLrcFiles(folder.path)
+    // Collection is asynchronous; revalidate immediately before the
+    // destructive, synchronous unlink phase.
+    this.requireCurrentFolder(folder)
     for (const lrc of lrcFiles) {
       const siblings = stemsByDir.get(dirname(lrc))
       if (!isOrphanLrc(basename(lrc), siblings ?? EMPTY_STEMS)) continue
@@ -377,6 +444,9 @@ class LibraryReconciler {
     runId: number,
     counts: ScanCounts,
   ): void {
+    const folder = this.repos.folders.getById(folderId)
+    if (!folder) throw new Error(`Folder ${folderId} no longer exists`)
+    requirePathInsideLocalLibrary(folder, filePath)
     // Idempotency guard: if the worker crashes mid-stream the in-main fallback
     // re-processes the whole work list, including files it already imported.
     // Never insert the same (UNIQUE) path twice.
@@ -424,13 +494,21 @@ class LibraryReconciler {
   }
 
   private applyRefreshedMetadata(track: DbTrack, md: TrackMetadata, runId: number, counts: ScanCounts): void {
-    this.updateTrackMetadata(track, md)
+    const current = this.repos.tracks.getById(track.id)
+    if (!current) throw new Error(`Track ${track.id} no longer exists`)
+    requireLocalLibraryTrackPath({
+      track: current,
+      folder: this.repos.folders.getById(current.folder_id),
+      expectedPath: track.path,
+      label: 'Library scan track',
+    })
+    this.updateTrackMetadata(current, md)
     counts.updated += 1
     this.repos.libraryScanLog.addEvent({
       runId,
-      folderId: track.folder_id,
+      folderId: current.folder_id,
       type: 'updated',
-      path: track.path,
+      path: current.path,
       title: md.title,
     })
   }
@@ -484,6 +562,10 @@ class LibraryReconciler {
       albumId: album.id,
       genreId: genre?.id ?? null,
     })
+  }
+
+  private requireCurrentFolder(expected: DbFolder): void {
+    requireCurrentLocalLibraryFolder(expected, this.repos.folders.getById(expected.id))
   }
 
   private purgeOldLogs(): void {

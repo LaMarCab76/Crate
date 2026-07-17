@@ -1,4 +1,5 @@
-import { dialog, ipcMain } from 'electron'
+import { dialog } from 'electron'
+import { secureIpcMain as ipcMain } from './secureIpc'
 import { readFileSync } from 'node:fs'
 import { getLyricsBackfillService } from '../lyrics/LyricsBackfillService'
 import { getLyricsService } from '../lyrics/LyricsService'

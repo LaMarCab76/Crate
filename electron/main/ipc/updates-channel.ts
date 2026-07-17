@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { secureIpcMain as ipcMain } from './secureIpc'
 import { getAppUpdateService } from '../updates/AppUpdateService'
 
 export function registerUpdatesChannel(): void {

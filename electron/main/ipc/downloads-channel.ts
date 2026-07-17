@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { secureIpcMain as ipcMain } from './secureIpc'
 import { getDownloadManager } from '../downloads/DownloadManager'
 import { assertId, assertNonEmptyString } from './validation'
 import type {
@@ -37,12 +37,49 @@ function assertSettingsPatch(value: unknown): Partial<DownloadSettings> {
 function assertCredentialsPayload(value: unknown): ProviderCredentialsPayload {
   if (!value || typeof value !== 'object') throw new Error('Invalid credentials payload')
   const payload = value as ProviderCredentialsPayload
-  return { ...payload, provider: assertProvider(payload.provider) } as ProviderCredentialsPayload
+  const provider = assertProvider(payload.provider)
+  const credential = (field: unknown, label: string, max = 16_384): string | undefined => {
+    if (field == null || field === '') return undefined
+    if (typeof field !== 'string' || field.trim().length === 0 || field.length > max) {
+      throw new Error(`Invalid ${label}`)
+    }
+    return field.trim()
+  }
+  if (provider === 'qobuz') {
+    const qobuz = payload as Extract<ProviderCredentialsPayload, { provider: 'qobuz' }>
+    return {
+      provider,
+      appId: credential(qobuz.appId, 'Qobuz app id'),
+      appSecret: credential(qobuz.appSecret, 'Qobuz app secret'),
+      userAuthToken: credential(qobuz.userAuthToken, 'Qobuz user token'),
+      source: 'manual',
+      importedAt: Date.now(),
+    }
+  }
+  const tidal = payload as Extract<ProviderCredentialsPayload, { provider: 'tidal' }>
+  const countryCode = credential(tidal.countryCode, 'TIDAL country code', 2)
+  if (countryCode && !/^[A-Za-z]{2}$/.test(countryCode)) throw new Error('Invalid TIDAL country code')
+  return {
+    provider,
+    clientId: credential(tidal.clientId, 'TIDAL client id'),
+    clientSecret: credential(tidal.clientSecret, 'TIDAL client secret'),
+    accessToken: credential(tidal.accessToken, 'TIDAL access token'),
+    refreshToken: credential(tidal.refreshToken, 'TIDAL refresh token'),
+    webToken: credential(tidal.webToken, 'TIDAL web token'),
+    countryCode: countryCode?.toUpperCase(),
+    source: 'manual',
+    importedAt: Date.now(),
+  }
 }
 
 function assertPathList(value: unknown): string[] {
   if (!Array.isArray(value)) throw new Error('Invalid HAR file list')
-  return value.map(path => assertNonEmptyString(path, 'HAR file path'))
+  if (value.length > 8) throw new Error('Too many HAR files')
+  return value.map(path => {
+    const result = assertNonEmptyString(path, 'HAR file path')
+    if (result.length > 4096) throw new Error('HAR file path is too long')
+    return result
+  })
 }
 
 function assertTutorialPatch(value: unknown): Partial<ServiceTutorialState> {
@@ -57,9 +94,11 @@ function assertTutorialPatch(value: unknown): Partial<ServiceTutorialState> {
 function assertSearchRequest(value: unknown): DownloadSearchRequest {
   if (!value || typeof value !== 'object') throw new Error('Invalid search request')
   const payload = value as DownloadSearchRequest
+  const query = assertNonEmptyString(payload.query, 'search query')
+  if (query.length > 500) throw new Error('Search query is too long')
   return {
     provider: assertProvider(payload.provider),
-    query: assertNonEmptyString(payload.query, 'search query'),
+    query,
     limit: typeof payload.limit === 'number' ? Math.max(1, Math.min(50, Math.round(payload.limit))) : undefined,
   }
 }
@@ -68,9 +107,16 @@ function assertEnqueueRequest(value: unknown): EnqueueDownloadRequest {
   if (!value || typeof value !== 'object') throw new Error('Invalid enqueue request')
   const payload = value as EnqueueDownloadRequest
   if (!Array.isArray(payload.providerTrackIds)) throw new Error('Invalid provider track ids')
+  if (payload.providerTrackIds.length === 0 || payload.providerTrackIds.length > 100) {
+    throw new Error('Invalid provider track id count')
+  }
   return {
     provider: assertProvider(payload.provider),
-    providerTrackIds: payload.providerTrackIds.map(id => assertNonEmptyString(id, 'provider track id')),
+    providerTrackIds: payload.providerTrackIds.map(id => {
+      const trackId = assertNonEmptyString(id, 'provider track id')
+      if (trackId.length > 256) throw new Error('Provider track id is too long')
+      return trackId
+    }),
     folderId: payload.folderId == null ? null : assertId(payload.folderId, 'folder id'),
     quality: assertQuality(payload.quality),
   }

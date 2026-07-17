@@ -89,8 +89,18 @@ function resetForTrack(trackId: number | null): void {
   if (trackId != null) listenAccumByTrack.delete(trackId)
 }
 
+// A playback session starts on every successful stream adoption, even when
+// the same track is loaded again (repeat-one or an explicit replay). Comparing
+// only track ids cannot observe that boundary, so queueStore calls this at the
+// exact load/swap handoff.
+export function beginPlaybackSession(trackId: number | null): void {
+  if (trackId != null) countedThisSession.delete(trackId)
+  resetForTrack(trackId)
+}
+
 if (typeof window !== 'undefined' && window.api?.audio) {
-  window.api.audio.onProgress(({ positionSec, durationSec }) => {
+  const playbackListenerCleanups: Array<() => void> = []
+  playbackListenerCleanups.push(window.api.audio.onProgress(({ positionSec, durationSec }) => {
     usePlaybackStore.getState().setProgress(positionSec, durationSec)
 
     const track = usePlaybackStore.getState().currentTrack
@@ -123,21 +133,21 @@ if (typeof window !== 'undefined' && window.api?.audio) {
       }
       lastTickPositionSec = positionSec
     }
-  })
-  window.api.audio.onStateChanged(({ status }) => {
+  }))
+  playbackListenerCleanups.push(window.api.audio.onStateChanged(({ status }) => {
     const state = usePlaybackStore.getState()
     state.setStatus(status)
     if (status !== 'loading') state.setTrackLoading(false)
-  })
-  window.api.audio.onStreamSourceChanged(({ source, currentPath }) => {
+  }))
+  playbackListenerCleanups.push(window.api.audio.onStreamSourceChanged(({ source, currentPath }) => {
     const state = usePlaybackStore.getState()
     if (currentPath && state.currentTrack?.path && state.currentTrack.path !== currentPath) return
     state.setStreamSource(source)
     if (source !== 'file' || state.streamSourceState !== 'promoting') {
       state.setStreamSourceState('idle')
     }
-  })
-  window.api.audio.onBufferProgress(({
+  }))
+  playbackListenerCleanups.push(window.api.audio.onBufferProgress(({
     currentPath,
     source,
     bufferedBytes,
@@ -157,17 +167,17 @@ if (typeof window !== 'undefined' && window.api?.audio) {
     } else if (bufferComplete || source === 'memory') {
       state.setStreamSourceState('idle')
     }
-  })
+  }))
 
   // When the in-store currentTrack changes, reset the play-count window so a
   // fresh listen of the same song can be credited again.
-  usePlaybackStore.subscribe((state, prev) => {
+  playbackListenerCleanups.push(usePlaybackStore.subscribe((state, prev) => {
     if (state.currentTrack?.dbId !== prev.currentTrack?.dbId) {
       const newId = state.currentTrack?.dbId ?? null
       countedThisSession.delete(prev.currentTrack?.dbId ?? -1)
       resetForTrack(newId)
     }
-  })
+  }))
 
   // Refresh on boot in case there was a playback session before reload (dev).
   window.api.audio.getStatus().then(s => {
@@ -187,6 +197,10 @@ if (typeof window !== 'undefined' && window.api?.audio) {
       store.setProgress(s.positionSec, s.streamInfo?.duration ?? 0)
     }
   }).catch(() => { /* main not ready yet, ignore */ })
+
+  import.meta.hot?.dispose(() => {
+    for (const cleanup of playbackListenerCleanups) cleanup()
+  })
 }
 
 // Hooks

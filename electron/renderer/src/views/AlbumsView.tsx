@@ -9,6 +9,7 @@ import { useListPrefs } from '@renderer/stores/settingsStore'
 import { createListPrefsDefaults, albumMatchesQuery, sortAlbums } from '@renderer/utils/listSort'
 import { useQueueStore } from '@renderer/stores/queueStore'
 import { useAlbumActions } from '@renderer/components/MediaActions'
+import { SourceBadge } from '@renderer/components/SourceBadge'
 
 type AlbumsViewMode = 'albums' | 'recent'
 
@@ -168,6 +169,11 @@ export function AlbumsView({
             key={al.id}
             className="card"
             onClick={() => onSelect?.(al)}
+            onKeyDown={event => {
+              if (event.key !== 'Enter' && event.key !== ' ') return
+              event.preventDefault()
+              onSelect?.(al)
+            }}
             onContextMenu={e => albumActions.openAlbumMenu(e, al)}
             role="button"
             tabIndex={0}
@@ -189,6 +195,11 @@ export function AlbumsView({
             </div>
             <div className="ti">{al.title}</div>
             <div className="su">{al.artist}</div>
+            <SourceBadge
+              folderIds={al.tracks.map(track => track.folderId)}
+              provider={al.tracks[0]?.provider}
+              compact
+            />
           </div>
         ))}
       </div>

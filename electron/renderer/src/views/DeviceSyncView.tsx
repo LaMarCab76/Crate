@@ -12,6 +12,7 @@ import { DEVICE_ARTWORK_EDGE_MAX, DEVICE_ARTWORK_EDGE_MIN } from '@shared/consta
 import { fmtFileSize } from '@renderer/utils/format'
 import { artworkOptimizationOwnsSyncProgress } from '@renderer/utils/artworkProgressOwnership'
 import { artworkOptimizeActionState } from '@renderer/utils/artworkOptimizeAction'
+import { isLocalLibraryDestination } from '@renderer/utils/libraryDestinations'
 import {
   filterArtworkItemsForSearch,
   groupArtworkItems,
@@ -634,13 +635,19 @@ function PendingJournalList({
           <div>
             <strong>{journal.status === 'failed' ? 'Sync fallida' : 'Sync interrumpida'}</strong>
             <span>{journal.completedActions}/{journal.totalActions} operaciones · {formatDate(journal.updatedAt)}</span>
+            {journal.blockedReason && <span role="status">{journal.blockedReason}</span>}
           </div>
           <div className="device-journal-actions">
-            <button className="btn" type="button" disabled={loading} onClick={() => onResume(journal.id)}>
-              Continue
+            <button
+              className="btn"
+              type="button"
+              disabled={loading || journal.resumeDisposition !== 'ready'}
+              onClick={() => onResume(journal.id)}
+            >
+              {journal.resumeDisposition === 'ready' ? 'Continuar' : 'Requiere replanificar'}
             </button>
             <button className="btn ghost" type="button" disabled={loading} onClick={() => onDiscard(journal.id)}>
-              Discard
+              Descartar
             </button>
           </div>
         </div>
@@ -1177,8 +1184,11 @@ export function DeviceSyncView({
     setSourceLibraryIds(nextSourceIds)
     // Destination = the included library whose root matches the saved pcTargetPath,
     // otherwise the first included library.
-    const match = folders.find(folder => nextSourceIds.includes(folder.id) && folder.path === selectedDevice.pcTargetPath)
-    setDestinationFolderId(match?.id ?? nextSourceIds[0] ?? null)
+    const localDestinations = folders.filter(
+      folder => nextSourceIds.includes(folder.id) && isLocalLibraryDestination(folder),
+    )
+    const match = localDestinations.find(folder => folder.path === selectedDevice.pcTargetPath)
+    setDestinationFolderId(match?.id ?? localDestinations[0]?.id ?? null)
     setLibraryPickerOpen(false)
     setPathError(null)
   }, [
@@ -1246,11 +1256,15 @@ export function DeviceSyncView({
   )
   const sourceLibrariesValid = selectedSourceFolders.length > 0
   const selectedSourceTrackCount = selectedSourceFolders.reduce((sum, folder) => sum + folder.track_count, 0)
+  const localDestinationFolders = useMemo(
+    () => selectedSourceFolders.filter(isLocalLibraryDestination),
+    [selectedSourceFolders],
+  )
 
   const needsDestination = mode === 'device_to_pc' || mode === 'bidirectional_safe'
   const destinationFolder = useMemo(
-    () => selectedSourceFolders.find(folder => folder.id === destinationFolderId) ?? null,
-    [selectedSourceFolders, destinationFolderId],
+    () => localDestinationFolders.find(folder => folder.id === destinationFolderId) ?? null,
+    [localDestinationFolders, destinationFolderId],
   )
   const planPcTargetPath = destinationFolder?.path ?? selectedDevice?.pcTargetPath ?? ''
   const activeSyncModeLabel = selectedDevice?.lastSyncAt && !planRequestedFullSync
@@ -1258,11 +1272,11 @@ export function DeviceSyncView({
     : 'Resync completo'
   const lastSyncLabel = selectedDevice?.lastSyncAt ? formatDate(selectedDevice.lastSyncAt) : 'No registrado'
 
-  // Keep the destination pointing at an included library.
+  // Keep the destination pointing at an included, normal local library.
   useEffect(() => {
-    if (destinationFolderId != null && selectedSourceFolders.some(folder => folder.id === destinationFolderId)) return
-    setDestinationFolderId(selectedSourceFolders[0]?.id ?? null)
-  }, [selectedSourceFolders, destinationFolderId])
+    if (destinationFolderId != null && localDestinationFolders.some(folder => folder.id === destinationFolderId)) return
+    setDestinationFolderId(localDestinationFolders[0]?.id ?? null)
+  }, [localDestinationFolders, destinationFolderId])
 
   useEffect(() => {
     if (!visiblePlan) {
@@ -1303,7 +1317,7 @@ export function DeviceSyncView({
   const indexBlocked = visiblePlan?.deviceIndexWarning ?? null
   const applyBlockedReason = portableBlocked ?? destinationBlocked ?? indexBlocked
 
-  const configValid = artworkMaxEdgeValid && musicRootValid && sourceLibrariesValid
+  const configValid = artworkMaxEdgeValid && musicRootValid && sourceLibrariesValid && (!needsDestination || destinationFolder != null)
 
   const addSourceLibrary = (folderId: number) => {
     setSourceLibraryIds(current => (current.includes(folderId) ? current : [...current, folderId]))
@@ -1318,7 +1332,10 @@ export function DeviceSyncView({
     if (!selectedDevice) return
     setPathError(null)
     try {
-      const picked = await window.api.devices.pickMusicRoot(selectedDevice.rootPath, normalizedMusicRoot)
+      const picked = await window.api.devices.pickMusicRoot(
+        { deviceId: selectedDevice.id },
+        normalizedMusicRoot,
+      )
       if (!picked.canceled && picked.musicRoot) setMusicRoot(picked.musicRoot)
     } catch (err) {
       setPathError(err instanceof Error ? err.message : String(err))
@@ -1563,11 +1580,11 @@ export function DeviceSyncView({
                 <select
                   className="device-select"
                   value={destinationFolderId ?? ''}
-                  disabled={loading || selectedSourceFolders.length === 0}
+                  disabled={loading || localDestinationFolders.length === 0}
                   onChange={event => setDestinationFolderId(event.target.value ? Number(event.target.value) : null)}
                 >
-                  {selectedSourceFolders.length === 0 && <option value="">Sin bibliotecas</option>}
-                  {selectedSourceFolders.map(folder => (
+                  {localDestinationFolders.length === 0 && <option value="">Sin bibliotecas locales</option>}
+                  {localDestinationFolders.map(folder => (
                     <option key={folder.id} value={folder.id}>{folderLabel(folder)}</option>
                   ))}
                 </select>

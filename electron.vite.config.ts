@@ -30,6 +30,10 @@ export default defineConfig({
       outDir: 'out/preload',
       rollupOptions: {
         input: resolve(__dirname, 'electron/preload/index.ts'),
+        output: {
+          format: 'cjs',
+          entryFileNames: '[name].cjs',
+        },
       },
     },
     resolve: {

@@ -1,5 +1,8 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
+import packageJson from '../../package.json'
 import type {
+  AddLocalLibraryLocationRequest,
+  AddOneDriveLibraryLocationRequest,
   AddFolderResult,
   AppUpdateState,
   Api,
@@ -14,6 +17,7 @@ import type {
   ImportCompleteEvent,
   ImportProgressEvent,
   LevelsEvent,
+  LibraryBackupStatePayload,
   LibraryScanLogPayload,
   LibraryScanRun,
   ListTracksOpts,
@@ -22,6 +26,7 @@ import type {
   MetadataCompletionPreview,
   MetadataCompletionTargetsPayload,
   PickFolderResult,
+  PlaybackSource,
   PlaybackAnalysisResult,
   PlaybackCacheStats,
   PreloadNextResult,
@@ -52,6 +57,7 @@ import type {
   DeviceLibraryOptions,
   DeviceLibraryResult,
   DeviceMusicRootPickResult,
+  DeviceRootReference,
   DeviceOverviewResult,
   DevicePendingJournal,
   DeviceRecord,
@@ -99,6 +105,22 @@ import type {
   ProviderCredentialsPayload,
   ServiceTutorialState,
 } from '@shared/types/downloads'
+import type {
+  CloudAccountStatus,
+  CloudFolderRef,
+  CloudMoveProgressEvent,
+  CloudPrefs,
+  CloudSyncProgressEvent,
+  MoveToCloudRequest,
+  RemoteFolderEntry,
+} from '@shared/types/cloud'
+import type {
+  BackupProgressEvent,
+  CreateLibraryMigrationRequest,
+  LibraryLocation,
+  LibraryMigrationProgressEvent,
+  LibraryMigrationState,
+} from '@shared/types/library-locations'
 
 function subscribe<T>(channel: string, handler: (payload: T) => void): EventOff {
   const listener = (_event: IpcRendererEvent, payload: T) => handler(payload)
@@ -110,7 +132,7 @@ function subscribe<T>(channel: string, handler: (payload: T) => void): EventOff 
 
 const api: Api = {
   meta: {
-    version: '2.0.0-alpha.3',
+    version: packageJson.version,
   },
   library: {
     tracks: (opts?: ListTracksOpts) =>
@@ -145,8 +167,8 @@ const api: Api = {
       ipcRenderer.invoke('library:search', query, limit) as Promise<SearchResultsPayload>,
     folders: () => ipcRenderer.invoke('library:folders') as Promise<DbFolder[]>,
     pickFolder: () => ipcRenderer.invoke('library:folders:pick') as Promise<PickFolderResult>,
-    addFolder: (path: string) =>
-      ipcRenderer.invoke('library:folders:add', path) as Promise<AddFolderResult>,
+    addFolder: (token: string) =>
+      ipcRenderer.invoke('library:folders:add', token) as Promise<AddFolderResult>,
     removeFolder: (id: number, options?: RemoveFolderOptions) =>
       ipcRenderer.invoke('library:folders:remove', id, options ?? {}) as Promise<void>,
     scanNow: (folderId?: number) =>
@@ -164,8 +186,8 @@ const api: Api = {
     load: () => ipcRenderer.invoke('queue:load') as Promise<QueueSnapshotPayload>,
   },
   audio: {
-    load: (path: string, trackId?: number | null) =>
-      ipcRenderer.invoke('audio:load', { path, trackId: trackId ?? null }) as Promise<StreamLoadResult>,
+    load: (source: PlaybackSource) =>
+      ipcRenderer.invoke('audio:load', source) as Promise<StreamLoadResult>,
     play: () => ipcRenderer.invoke('audio:play') as Promise<void>,
     pause: () => ipcRenderer.invoke('audio:pause') as Promise<void>,
     stop: () => ipcRenderer.invoke('audio:stop') as Promise<void>,
@@ -177,27 +199,28 @@ const api: Api = {
       ipcRenderer.invoke('audio:setFftMode', { mode }) as Promise<void>,
     setMeterEnabled: (enabled: boolean) =>
       ipcRenderer.invoke('audio:setMeterEnabled', { enabled }) as Promise<void>,
-    getWaveform: (path: string, buckets?: number, trackId?: number | null) =>
-      ipcRenderer.invoke('audio:getWaveform', { path, buckets, trackId: trackId ?? null }) as Promise<PlaybackAnalysisResult>,
-    getCachedAnalysis: (path: string, buckets?: number, trackId?: number | null) =>
-      ipcRenderer.invoke('audio:getCachedAnalysis', { path, buckets, trackId: trackId ?? null }) as Promise<PlaybackAnalysisResult | null>,
-    ensurePlaybackAnalysis: (path: string, trackId?: number | null, buckets?: number) =>
-      ipcRenderer.invoke('audio:ensurePlaybackAnalysis', { path, trackId: trackId ?? null, buckets }) as Promise<PlaybackAnalysisResult>,
-    getCachedTableBars: (path: string, trackId?: number | null) =>
-      ipcRenderer.invoke('audio:getCachedTableBars', { path, trackId: trackId ?? null }) as Promise<PlaybackTableBarsResult | null>,
-    ensureTableBars: (path: string, trackId?: number | null) =>
-      ipcRenderer.invoke('audio:ensureTableBars', { path, trackId: trackId ?? null }) as Promise<PlaybackTableBarsResult>,
+    getWaveform: (source: PlaybackSource, buckets?: number) =>
+      ipcRenderer.invoke('audio:getWaveform', { source, buckets }) as Promise<PlaybackAnalysisResult>,
+    getCachedAnalysis: (source: PlaybackSource, buckets?: number) =>
+      ipcRenderer.invoke('audio:getCachedAnalysis', { source, buckets }) as Promise<PlaybackAnalysisResult | null>,
+    ensurePlaybackAnalysis: (source: PlaybackSource, buckets?: number) =>
+      ipcRenderer.invoke('audio:ensurePlaybackAnalysis', { source, buckets }) as Promise<PlaybackAnalysisResult>,
+    getCachedTableBars: (source: PlaybackSource) =>
+      ipcRenderer.invoke('audio:getCachedTableBars', { source }) as Promise<PlaybackTableBarsResult | null>,
+    ensureTableBars: (source: PlaybackSource) =>
+      ipcRenderer.invoke('audio:ensureTableBars', { source }) as Promise<PlaybackTableBarsResult>,
     getPlaybackCacheStats: () =>
       ipcRenderer.invoke('audio:playbackCache:stats') as Promise<PlaybackCacheStats>,
     setPlaybackCacheLimit: (maxBytes: number) =>
       ipcRenderer.invoke('audio:playbackCache:setLimit', { maxBytes }) as Promise<PlaybackCacheStats>,
     clearPlaybackCache: () =>
       ipcRenderer.invoke('audio:playbackCache:clear') as Promise<PlaybackCacheStats>,
-    preloadNext: (path: string, trackId?: number | null) =>
-      ipcRenderer.invoke('audio:preloadNext', { path, trackId: trackId ?? null }) as Promise<PreloadNextResult>,
+    preloadNext: (source: PlaybackSource) =>
+      ipcRenderer.invoke('audio:preloadNext', source) as Promise<PreloadNextResult>,
+    setGaplessEnabled: (enabled: boolean) =>
+      ipcRenderer.invoke('audio:setGaplessEnabled', { enabled }) as Promise<void>,
     clearNext: () => ipcRenderer.invoke('audio:clearNext') as Promise<void>,
-    swapNow: (expectedPath?: string | null) =>
-      ipcRenderer.invoke('audio:swapNow', { expectedPath: expectedPath ?? null }) as Promise<StreamLoadResult | null>,
+    swapNow: () => ipcRenderer.invoke('audio:swapNow') as Promise<StreamLoadResult | null>,
     promoteCurrentToMemory: () => ipcRenderer.invoke('audio:promoteCurrentToMemory') as Promise<StreamLoadResult>,
     getStatus: () => ipcRenderer.invoke('audio:getStatus') as Promise<PlaybackStatePayload>,
     listOutputDevices: () => ipcRenderer.invoke('audio:devices:list'),
@@ -314,12 +337,12 @@ const api: Api = {
       ipcRenderer.invoke('devices:detectCandidates') as Promise<DeviceCandidate[]>,
     volumes: () =>
       ipcRenderer.invoke('devices:volumes') as Promise<DeviceVolumeSnapshot>,
-    ignoreVolume: (rootPath: string) =>
-      ipcRenderer.invoke('devices:volumes:ignore', rootPath) as Promise<DeviceVolumeSnapshot>,
+    ignoreVolume: (token: string) =>
+      ipcRenderer.invoke('devices:volumes:ignore', token) as Promise<DeviceVolumeSnapshot>,
     pickRoot: () =>
       ipcRenderer.invoke('devices:pickRoot') as Promise<PickFolderResult>,
-    pickMusicRoot: (rootPath: string, currentMusicRoot?: string) =>
-      ipcRenderer.invoke('devices:pickMusicRoot', rootPath, currentMusicRoot) as Promise<DeviceMusicRootPickResult>,
+    pickMusicRoot: (reference: DeviceRootReference, currentMusicRoot?: string) =>
+      ipcRenderer.invoke('devices:pickMusicRoot', reference, currentMusicRoot) as Promise<DeviceMusicRootPickResult>,
     connect: (payload: DeviceConnectPayload) =>
       ipcRenderer.invoke('devices:connect', payload) as Promise<DeviceRecord>,
     updateSettings: (deviceId: string, settings: DeviceSettingsUpdate) =>
@@ -409,6 +432,91 @@ const api: Api = {
       ipcRenderer.invoke('downloads:retry', jobId) as Promise<DownloadJob | null>,
     onProgress: (h) => subscribe<DownloadProgressEvent>('downloads:progress', h),
     onJobsChanged: (h) => subscribe<DownloadJobsChangedEvent>('downloads:jobs-changed', h),
+  },
+  cloud: {
+    accountStatus: () =>
+      ipcRenderer.invoke('cloud:account:status') as Promise<CloudAccountStatus>,
+    connect: () =>
+      ipcRenderer.invoke('cloud:account:connect') as Promise<CloudAccountStatus>,
+    disconnect: () =>
+      ipcRenderer.invoke('cloud:account:disconnect') as Promise<CloudAccountStatus>,
+    setClientId: (clientId: string) =>
+      ipcRenderer.invoke('cloud:account:setClientId', clientId) as Promise<CloudAccountStatus>,
+    getPrefs: () =>
+      ipcRenderer.invoke('cloud:prefs:get') as Promise<CloudPrefs>,
+    setPrefs: (patch: Partial<CloudPrefs>) =>
+      ipcRenderer.invoke('cloud:prefs:set', patch) as Promise<CloudPrefs>,
+    listRemoteFolders: (driveId: string | null, itemId: string | null) =>
+      ipcRenderer.invoke('cloud:folders:listRemote', driveId, itemId) as Promise<RemoteFolderEntry[]>,
+    addFolder: (driveId: string, itemId: string, name: string, remotePath?: string) =>
+      ipcRenderer.invoke('cloud:folders:add', driveId, itemId, name, remotePath) as Promise<CloudFolderRef>,
+    syncFolder: (folderId: number) =>
+      ipcRenderer.invoke('cloud:folders:sync', folderId) as Promise<void>,
+    moveToCloud: (req: MoveToCloudRequest) =>
+      ipcRenderer.invoke('cloud:track:moveToCloud', req) as Promise<void>,
+    onAccountChanged: (h) => subscribe<CloudAccountStatus>('cloud:account:changed', h),
+    onSyncProgress: (h) => subscribe<CloudSyncProgressEvent>('cloud:sync:progress', h),
+    onMoveProgress: (h) => subscribe<CloudMoveProgressEvent>('cloud:move:progress', h),
+  },
+  libraryLocations: {
+    list: () =>
+      ipcRenderer.invoke('library-locations:list') as Promise<LibraryLocation[]>,
+    pickLocal: () =>
+      ipcRenderer.invoke('library-locations:pick-local') as Promise<PickFolderResult>,
+    addLocal: (input: AddLocalLibraryLocationRequest) =>
+      ipcRenderer.invoke('library-locations:add-local', input) as Promise<LibraryLocation>,
+    getOneDriveStatus: () =>
+      ipcRenderer.invoke('cloud:account:status') as Promise<CloudAccountStatus>,
+    setOneDriveClientId: (clientId: string) =>
+      ipcRenderer.invoke('cloud:account:setClientId', clientId) as Promise<CloudAccountStatus>,
+    connectOneDrive: () =>
+      ipcRenderer.invoke('cloud:account:connect') as Promise<CloudAccountStatus>,
+    disconnectOneDrive: () =>
+      ipcRenderer.invoke('cloud:account:disconnect') as Promise<CloudAccountStatus>,
+    listOneDriveFolders: (driveId: string | null, itemId: string | null) =>
+      ipcRenderer.invoke('cloud:folders:listRemote', driveId, itemId) as Promise<RemoteFolderEntry[]>,
+    addOneDrive: (input: AddOneDriveLibraryLocationRequest) =>
+      ipcRenderer.invoke('library-locations:add-onedrive', input) as Promise<LibraryLocation>,
+    updatePresentation: (folderId: number, input: { name: string; displayIcon: string | null }) =>
+      ipcRenderer.invoke('library-locations:update-presentation', folderId, input) as Promise<LibraryLocation>,
+    remove: (folderId: number) =>
+      ipcRenderer.invoke('library-locations:remove', folderId) as Promise<void>,
+  },
+  libraryBackups: {
+    list: () =>
+      ipcRenderer.invoke('library-backups:list') as Promise<LibraryBackupStatePayload[]>,
+    assign: (input: { sourceFolderId: number; backupFolderId: number }) =>
+      ipcRenderer.invoke('library-backups:assign', input) as Promise<LibraryBackupStatePayload>,
+    remove: (backupFolderId: number) =>
+      ipcRenderer.invoke('library-backups:remove', backupFolderId) as Promise<void>,
+    promote: (backupFolderId: number) =>
+      ipcRenderer.invoke('library-backups:promote', backupFolderId) as Promise<LibraryLocation>,
+    start: (backupFolderId: number) =>
+      ipcRenderer.invoke('library-backups:start', backupFolderId) as Promise<LibraryBackupStatePayload>,
+    pause: (backupFolderId: number) =>
+      ipcRenderer.invoke('library-backups:pause', backupFolderId) as Promise<LibraryBackupStatePayload>,
+    resume: (backupFolderId: number) =>
+      ipcRenderer.invoke('library-backups:resume', backupFolderId) as Promise<LibraryBackupStatePayload>,
+    approveDiff: (backupFolderId: number, runId: string) =>
+      ipcRenderer.invoke('library-backups:approve-diff', { backupFolderId, runId }) as Promise<LibraryBackupStatePayload>,
+    onProgress: (h) => subscribe<BackupProgressEvent>('library-backups:progress', h),
+  },
+  libraryMigrations: {
+    list: () =>
+      ipcRenderer.invoke('library-migrations:list') as Promise<LibraryMigrationState[]>,
+    create: (input: CreateLibraryMigrationRequest) =>
+      ipcRenderer.invoke('library-migrations:create', input) as Promise<LibraryMigrationState>,
+    approve: (runId: string) =>
+      ipcRenderer.invoke('library-migrations:approve', runId) as Promise<LibraryMigrationState>,
+    pause: (runId: string) =>
+      ipcRenderer.invoke('library-migrations:pause', runId) as Promise<LibraryMigrationState>,
+    resume: (runId: string) =>
+      ipcRenderer.invoke('library-migrations:resume', runId) as Promise<LibraryMigrationState>,
+    cancel: (runId: string) =>
+      ipcRenderer.invoke('library-migrations:cancel', runId) as Promise<LibraryMigrationState>,
+    retryCleanup: (runId: string) =>
+      ipcRenderer.invoke('library-migrations:retry-cleanup', runId) as Promise<LibraryMigrationState>,
+    onProgress: h => subscribe<LibraryMigrationProgressEvent>('library-migrations:progress', h),
   },
   updates: {
     getState: () =>

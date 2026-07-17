@@ -32,6 +32,7 @@ import { LrclibProvider, type LrclibQuery, type LrclibRaw } from './providers/Lr
 import { readEmbeddedLyrics } from './providers/EmbeddedLyricsProvider'
 import { readSidecarLrc } from './providers/SidecarLrcProvider'
 import { writeSidecarLrc, removeSidecarLrc } from './writers/SidecarLrcWriter'
+import { requireLocalLibraryTrackPath } from '../library/localLibraryTrackGuard'
 
 const NOT_FOUND_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -97,7 +98,7 @@ export class LyricsService {
 
   getForTrack(trackId: number): LyricsView {
     const track = this.repos.tracks.getById(trackId)
-    if (!track) return emptyView(trackId, 'none')
+    if (!track || track.provider !== 'local') return emptyView(trackId, 'none')
 
     // Sidecar is the source of truth; embedded tags are a secondary read source.
     // Shared with the library worker via viewFromDiskReads so both paths agree.
@@ -119,6 +120,7 @@ export class LyricsService {
   async libraryOverview(opts?: { force?: boolean }): Promise<LyricsLibraryOverview> {
     const force = opts?.force === true
     const tracks = this.repos.tracks.getAll({ orderBy: 'artist' })
+      .filter(track => track.provider === 'local')
 
     const folderPaths = new Map<number, string | null>()
     const folderPathFor = (folderId: number): string | null => {
@@ -195,7 +197,7 @@ export class LyricsService {
 
   async fetchOnline(trackId: number, opts?: { force?: boolean }): Promise<LyricsView> {
     const track = this.repos.tracks.getById(trackId)
-    if (!track) return emptyView(trackId, 'none')
+    if (!track || track.provider !== 'local') return emptyView(trackId, 'none')
 
     // Local lyrics mean the track is resolved — never hit the
     // network for it unless the user explicitly forces a re-fetch.
@@ -272,7 +274,7 @@ export class LyricsService {
 
   async searchOnline(trackId: number): Promise<LyricsCandidate[]> {
     const track = this.repos.tracks.getById(trackId)
-    if (!track || !track.title.trim() || !track.artist.trim()) return []
+    if (!track || track.provider !== 'local' || !track.title.trim() || !track.artist.trim()) return []
     let results: LrclibRaw[]
     try {
       results = await this.lookupQueue.enqueue(() => this.lrclib.search(trackToQuery(track)))
@@ -297,7 +299,7 @@ export class LyricsService {
 
   async importCandidate(trackId: number, lrclibId: string): Promise<LyricsView> {
     const track = this.repos.tracks.getById(trackId)
-    if (!track) return emptyView(trackId, 'none')
+    if (!track || track.provider !== 'local') return emptyView(trackId, 'none')
     let raw: LrclibRaw | null
     try {
       raw = this.cachedSearchResult(trackId, lrclibId)
@@ -313,7 +315,7 @@ export class LyricsService {
 
   importLrcText(trackId: number, lrcText: string): LyricsView {
     const track = this.repos.tracks.getById(trackId)
-    if (!track) return emptyView(trackId, 'none')
+    if (!track || track.provider !== 'local') return emptyView(trackId, 'none')
     const synced = isSyncedLrc(lrcText)
     const written = this.writeSidecar(track, lrcText, 'user')
     this.notFound.delete(trackId)
@@ -322,12 +324,13 @@ export class LyricsService {
 
   saveUserEdit(trackId: number, plain: string | null, synced: string | null): LyricsView {
     const track = this.repos.tracks.getById(trackId)
-    if (!track) return emptyView(trackId, 'none')
+    if (!track || track.provider !== 'local') return emptyView(trackId, 'none')
     const content = synced ?? plain
     if (!content) {
       // Empty save clears the lyrics: remove the assigned sidecar file.
-      removeSidecarLrc(track.path)
-      this.index.removeEntryForTrack(track)
+      const current = this.requireCurrentWritableTrack(track)
+      removeSidecarLrc(current.path)
+      this.index.removeEntryForTrack(current)
       return emptyView(trackId, 'none')
     }
     const written = this.writeSidecar(track, content, 'user')
@@ -337,7 +340,7 @@ export class LyricsService {
 
   setOffset(trackId: number, offsetMs: number): LyricsView {
     const track = this.repos.tracks.getById(trackId)
-    if (!track) return emptyView(trackId, 'none')
+    if (!track || track.provider !== 'local') return emptyView(trackId, 'none')
     const current = readSidecarLrc(track.path) ?? readEmbeddedLyrics(track.path)
     const synced = current?.syncedLyricsLrc ?? null
     if (!synced || !isSyncedLrc(synced)) {
@@ -350,7 +353,7 @@ export class LyricsService {
 
   async exportLrc(trackId: number): Promise<{ canceled: boolean; path: string | null }> {
     const track = this.repos.tracks.getById(trackId)
-    if (!track) return { canceled: true, path: null }
+    if (!track || track.provider !== 'local') return { canceled: true, path: null }
     const res = readSidecarLrc(track.path) ?? readEmbeddedLyrics(track.path)
     const content = res?.syncedLyricsLrc ?? res?.plainLyrics ?? null
     if (!content) return { canceled: true, path: null }
@@ -368,9 +371,10 @@ export class LyricsService {
 
   remove(trackId: number): void {
     const track = this.repos.tracks.getById(trackId)
-    if (track) {
-      removeSidecarLrc(track.path)
-      this.index.removeEntryForTrack(track)
+    if (track?.provider === 'local') {
+      const current = this.requireCurrentWritableTrack(track)
+      removeSidecarLrc(current.path)
+      this.index.removeEntryForTrack(current)
     }
     this.notFound.delete(trackId)
   }
@@ -455,13 +459,15 @@ export class LyricsService {
   // success the per-folder lyrics index entry is refreshed (best-effort) so the
   // library overview stays accurate without a disk rescan.
   private writeSidecar(track: DbTrack, content: string, source: LyricsSource = 'sidecar'): boolean {
+    // Online lookup and picker dialogs yield to the event loop. Re-read the
+    // exact track/folder relationship at the filesystem boundary so a stale
+    // local row can never write into a location that is now a backup/cloud.
+    const current = this.requireCurrentWritableTrack(track)
+    // Sidecars are canonical. Propagate filesystem failures so callers never
+    // report content as saved when the disk write did not happen.
+    writeSidecarLrc(current.path, content)
     try {
-      writeSidecarLrc(track.path, content)
-    } catch {
-      return false
-    }
-    try {
-      this.index.setForTrack(track, {
+      this.index.setForTrack(current, {
         status: isSyncedLrc(content) ? 'found_synced' : 'found_plain',
         source,
         hasLyrics: true,
@@ -472,6 +478,20 @@ export class LyricsService {
       /* index is a best-effort cache; never fail the write because of it */
     }
     return true
+  }
+
+  private requireCurrentWritableTrack(expected: DbTrack): DbTrack {
+    const current = this.repos.tracks.getById(expected.id)
+    if (!current || current.folder_id !== expected.folder_id) {
+      throw new Error('Lyrics track changed after the operation started')
+    }
+    requireLocalLibraryTrackPath({
+      track: current,
+      folder: this.repos.folders.getById(current.folder_id),
+      expectedPath: expected.path,
+      label: 'Lyrics track',
+    })
+    return current
   }
 
   private rememberSearchResults(trackId: number, results: LrclibRaw[]): void {

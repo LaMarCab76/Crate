@@ -8,6 +8,63 @@ export function albumMoveSidecarPathFor(audioPath: string): string {
   return join(dirname(audioPath), `${p.name}.lrc`)
 }
 
+export interface AlbumMoveReplacementStage {
+  audioBackupPath: string
+  sidecarBackupPath: string | null
+  rollback(): Promise<void>
+  retire(retireItem: (path: string) => Promise<void>): Promise<void>
+}
+
+// Temporarily moves an occupied destination out of the way on the same
+// filesystem. The caller can restore it if metadata/files/DB fail, or retire it
+// only after the new track and DB transaction have both committed.
+export async function stageAlbumMoveReplacement(
+  audioPath: string,
+  id: () => string = randomUUID,
+): Promise<AlbumMoveReplacementStage> {
+  const sidecarPath = albumMoveSidecarPathFor(audioPath)
+  const audioBackupPath = join(dirname(audioPath), `.${parse(audioPath).base}.crate-replaced-${id()}`)
+  const sidecarBackupPath = existsSync(sidecarPath)
+    ? join(dirname(sidecarPath), `.${parse(sidecarPath).base}.crate-replaced-${id()}`)
+    : null
+  let audioStaged = false
+  let sidecarStaged = false
+
+  try {
+    await rename(audioPath, audioBackupPath)
+    audioStaged = true
+    if (sidecarBackupPath) {
+      await rename(sidecarPath, sidecarBackupPath)
+      sidecarStaged = true
+    }
+  } catch (err) {
+    if (sidecarStaged && sidecarBackupPath && !existsSync(sidecarPath)) {
+      await rename(sidecarBackupPath, sidecarPath).catch(() => undefined)
+    }
+    if (audioStaged && !existsSync(audioPath)) {
+      await rename(audioBackupPath, audioPath).catch(() => undefined)
+    }
+    throw err
+  }
+
+  return {
+    audioBackupPath,
+    sidecarBackupPath,
+    async rollback() {
+      if (sidecarBackupPath && existsSync(sidecarBackupPath) && !existsSync(sidecarPath)) {
+        await rename(sidecarBackupPath, sidecarPath)
+      }
+      if (existsSync(audioBackupPath) && !existsSync(audioPath)) {
+        await rename(audioBackupPath, audioPath)
+      }
+    },
+    async retire(retireItem) {
+      await retireItem(audioBackupPath)
+      if (sidecarBackupPath && existsSync(sidecarBackupPath)) await retireItem(sidecarBackupPath)
+    },
+  }
+}
+
 export async function applyAlbumMoveFileOperation(args: {
   sourcePath: string
   destinationPath: string

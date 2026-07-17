@@ -16,6 +16,8 @@ import { DiscGroupedTrackTable } from '@renderer/components/TrackTable'
 import { fmtFileSize, fmtTotal } from '@renderer/utils/format'
 import { toggleArtistFavorite, useArtistByUiId } from '@renderer/stores/libraryStore'
 import { extractDominantColor } from '@renderer/utils/colorExtract'
+import { useQueueStore } from '@renderer/stores/queueStore'
+import { SourceBadge } from '@renderer/components/SourceBadge'
 
 interface Props {
   artist: Artist
@@ -58,6 +60,8 @@ function ArtistAlbumBlock({
   trackSortBy,
   trackSortDir,
 }: ArtistAlbumBlockProps) {
+  const playNow = useQueueStore(state => state.playNow)
+  const playShuffled = useQueueStore(state => state.playShuffled)
   const [tint, setTint] = useState(al.palette[1])
   const tracks = useMemo(
     () => sortTracks(al.tracks, trackSortBy, trackSortDir),
@@ -65,6 +69,7 @@ function ArtistAlbumBlock({
   )
   const total = tracks.reduce((s, t) => s + t.d, 0)
   const totalSize = tracks.reduce((s, t) => s + (t.fileSize ?? 0), 0)
+  const sourceIds = [...new Set(tracks.map(track => track.folderId).filter((id): id is number => id != null))]
 
   useEffect(() => {
     setTint(al.palette[1])
@@ -86,19 +91,28 @@ function ArtistAlbumBlock({
       onContextMenu={e => onOpenAlbumMenu(e, al)}
     >
       <div className="aa-head">
-        <div className="aa-art" onClick={() => onSelectAlbum?.(al)} role="button" tabIndex={0}>
+        <div className="aa-art" onClick={() => onSelectAlbum?.(al)} onKeyDown={event => {
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          event.preventDefault()
+          onSelectAlbum?.(al)
+        }} role="button" tabIndex={0}>
           <Artwork album={al} radius={6} />
         </div>
         <div className="aa-meta">
           <div className="aa-kicker">{al.genre} · {al.year}</div>
-          <div className="aa-title" onClick={() => onSelectAlbum?.(al)} role="button" tabIndex={0}>
+          <div className="aa-title" onClick={() => onSelectAlbum?.(al)} onKeyDown={event => {
+            if (event.key !== 'Enter' && event.key !== ' ') return
+            event.preventDefault()
+            onSelectAlbum?.(al)
+          }} role="button" tabIndex={0}>
             {al.title}
           </div>
           <div className="aa-sub">{tracks.length} tracks · {fmtTotal(total)} · {fmtFileSize(totalSize)}</div>
+          <SourceBadge folderIds={sourceIds} provider={tracks[0]?.provider} compact />
         </div>
         <div className="aa-actions">
-          <button className="btn sm"><Icon name="play" size={11} /> Play</button>
-          <button className="btn ghost icon sm" title="Shuffle"><Icon name="shuffle" size={13} /></button>
+          <button className="btn sm" type="button" onClick={() => { if (tracks[0]) void playNow(tracks[0], tracks) }}><Icon name="play" size={11} /> Play</button>
+          <button className="btn ghost icon sm" type="button" title="Shuffle" onClick={() => { void playShuffled(tracks) }}><Icon name="shuffle" size={13} /></button>
           <button
             className="btn ghost icon sm"
             title="More"
@@ -108,7 +122,16 @@ function ArtistAlbumBlock({
           </button>
         </div>
       </div>
-      <DiscGroupedTrackTable tracks={tracks} showArt={false} showAlbum={false} showPlays={false} showSize showTrackNo compact />
+      <DiscGroupedTrackTable
+        tracks={tracks}
+        showArt={false}
+        showAlbum={false}
+        showPlays={false}
+        showSize
+        showTrackNo
+        showSource={sourceIds.length > 1}
+        compact
+      />
     </div>
   )
 }
@@ -121,6 +144,8 @@ export function ArtistView({ artist, onSelectAlbum }: Props) {
   const [prefs, setPrefs] = useListPrefs('artist')
   const defaults = useMemo(() => createListPrefsDefaults(), [])
   const allTracks = ar.albums.flatMap(a => a.tracks)
+  const playNow = useQueueStore(state => state.playNow)
+  const playShuffled = useQueueStore(state => state.playShuffled)
 
   const sortedAlbums = useMemo(
     () => sortArtistAlbums(ar.albums, prefs.albumSortBy, prefs.albumSortDir),
@@ -128,6 +153,7 @@ export function ArtistView({ artist, onSelectAlbum }: Props) {
   )
 
   const totalPlays = allTracks.reduce((s, t) => s + t.plays, 0)
+  const artistSourceIds = [...new Set(allTracks.map(track => track.folderId).filter((id): id is number => id != null))]
 
   if (!ar) return null
 
@@ -156,9 +182,12 @@ export function ArtistView({ artist, onSelectAlbum }: Props) {
             {` · Álbumes ordenadas por ${albumSortLabel(prefs.albumSortBy)} (${prefs.albumSortDir})`}
             {` · Tracks ordenados por ${trackSortLabel(prefs.trackSortBy)} (${prefs.trackSortDir})`}
           </div>
+          <div style={{ marginTop: 9 }}>
+            <SourceBadge folderIds={artistSourceIds} provider={allTracks[0]?.provider} />
+          </div>
           <div style={{ display: 'flex', gap: 8, marginTop: 14, alignItems: 'center', flexWrap: 'wrap' }}>
-            <button className="btn primary"><Icon name="play" size={12} /> Play</button>
-            <button className="btn"><Icon name="shuffle" size={14} /> Shuffle</button>
+            <button className="btn primary" type="button" onClick={() => { if (allTracks[0]) void playNow(allTracks[0], allTracks) }}><Icon name="play" size={12} /> Play</button>
+            <button className="btn" type="button" onClick={() => { void playShuffled(allTracks) }}><Icon name="shuffle" size={14} /> Shuffle</button>
             <div className="view-toggle" style={{ marginLeft: 'auto' }}>
               <button className={mode === 'discography' ? 'on' : ''} onClick={() => setMode('discography')} title="Albums with tracks">
                 <Icon name="list" size={13} /> Discography
@@ -245,6 +274,11 @@ export function ArtistView({ artist, onSelectAlbum }: Props) {
               </div>
               <div className="ti">{al.title}</div>
               <div className="su">{al.year} · {al.tracks.length} tracks</div>
+              <SourceBadge
+                folderIds={al.tracks.map(track => track.folderId)}
+                provider={al.tracks[0]?.provider}
+                compact
+              />
             </div>
           ))}
         </div>

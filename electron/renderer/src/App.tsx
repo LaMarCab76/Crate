@@ -11,6 +11,7 @@ import { NowPlayingFull } from './components/NowPlayingFull'
 import { LyricsCandidates } from './components/LyricsCandidates'
 import { ActivityCenter } from './components/ActivityCenter'
 import { DeviceConnectModal, type DeviceConnectTarget } from './components/DeviceConnectModal'
+import { LibrarySetupWizard } from './components/LibrarySetupWizard'
 import { LibraryView } from './views/LibraryView'
 import { AlbumsView } from './views/AlbumsView'
 import { AlbumView } from './views/AlbumView'
@@ -31,6 +32,8 @@ import { useMetadataFixIntent, useNavIntentStore } from './stores/navIntentStore
 import { useAlbumByUiId, useFavoriteTracks, useLibraryStore } from './stores/libraryStore'
 import { usePlaybackStore } from './stores/playbackStore'
 import { useDeviceStore } from './stores/deviceStore'
+import { useLibraryLocationsStore } from './stores/libraryLocationsStore'
+import { useMigrationStore } from './stores/migrationStore'
 import {
   isActiveActivityStatus,
   useActivityCenterStore,
@@ -288,6 +291,12 @@ export default function App() {
   const refresh = useLibraryStore(s => s.refresh)
   const loaded = useLibraryStore(s => s.loaded)
   const addFolder = useLibraryStore(s => s.addFolder)
+  const libraryLocations = useLibraryLocationsStore(s => s.locations)
+  const locationsInitialized = useLibraryLocationsStore(s => s.initialized)
+  const locationsError = useLibraryLocationsStore(s => s.error)
+  const loadLibraryLocations = useLibraryLocationsStore(s => s.load)
+  const loadMigrations = useMigrationStore(s => s.load)
+  const subscribeMigrations = useMigrationStore(s => s.subscribe)
   const loadPendingDeviceJournals = useDeviceStore(s => s.loadPendingJournals)
   const refreshDeviceVolumes = useDeviceStore(s => s.refreshVolumes)
   const ignoreVolume = useDeviceStore(s => s.ignoreVolume)
@@ -326,6 +335,8 @@ export default function App() {
   const [albumTint, setAlbumTint] = useState<string | null>(null)
   const [albumPalette, setAlbumPalette] = useState<string[] | null>(null)
   const [connectTarget, setConnectTarget] = useState<DeviceConnectTarget | null>(null)
+  const [setupWizardOpen, setSetupWizardOpen] = useState(false)
+  const setupDecisionMadeRef = useRef(false)
   const playingArtworkPath = nowAlbum?.artworkPath ?? nowTrack?.artworkPath ?? null
   const isPlaying = playbackStatus === 'playing'
   // The color the player chrome (--np-tint) is currently showing: dominant
@@ -463,6 +474,25 @@ export default function App() {
   }, [loaded, refresh])
 
   useEffect(() => {
+    void loadLibraryLocations()
+  }, [loadLibraryLocations])
+
+  useEffect(() => {
+    void loadMigrations()
+    return subscribeMigrations()
+  }, [loadMigrations, subscribeMigrations])
+
+  // Decide once from the persisted location list. This avoids flashing the
+  // wizard before IPC responds and never interrupts an already configured user.
+  useEffect(() => {
+    if (setupDecisionMadeRef.current || !locationsInitialized || locationsError) return
+    setupDecisionMadeRef.current = true
+    if (!libraryLocations.some(location => location.role === 'library')) {
+      setSetupWizardOpen(true)
+    }
+  }, [libraryLocations, locationsError, locationsInitialized])
+
+  useEffect(() => {
     void loadPendingDeviceJournals()
     void refreshDeviceVolumes()
   }, [loadPendingDeviceJournals, refreshDeviceVolumes])
@@ -550,6 +580,7 @@ export default function App() {
   const handleActivityAction = async (actionId: ActivityActionId, item: ActivityItem) => {
     const deviceId = typeof item.metadata.deviceId === 'string' ? item.metadata.deviceId : null
     const rootPath = typeof item.metadata.rootPath === 'string' ? item.metadata.rootPath : null
+    const pathToken = typeof item.metadata.pathToken === 'string' ? item.metadata.pathToken : null
     const volumeName = typeof item.metadata.volumeName === 'string' ? item.metadata.volumeName : undefined
 
     switch (actionId) {
@@ -583,25 +614,25 @@ export default function App() {
         openSettingsFromActivity('actualizaciones')
         break
       case 'connect-device':
-        if (rootPath) {
+        if (rootPath && pathToken) {
           setActivityFullscreen(false)
-          setConnectTarget({ rootPath, name: volumeName })
+          setConnectTarget({ token: pathToken, displayPath: rootPath, name: volumeName })
         }
         break
       case 'add-library':
-        if (!rootPath) break
+        if (!pathToken) break
         try {
-          await addFolder(rootPath)
-          await ignoreVolume(rootPath)
+          await addFolder(pathToken)
+          await refreshDeviceVolumes()
           completeActivity(item.id, 'Volumen agregado como biblioteca.')
         } catch (err) {
           activityError(item, err)
         }
         break
       case 'ignore-volume':
-        if (!rootPath) break
+        if (!pathToken) break
         try {
-          await ignoreVolume(rootPath)
+          await ignoreVolume(pathToken)
           completeActivity(item.id, 'Volumen ignorado.')
         } catch (err) {
           activityError(item, err)
@@ -1143,6 +1174,14 @@ export default function App() {
         )}
 
         <LyricsCandidates />
+        {setupWizardOpen && (
+          <LibrarySetupWizard
+            onComplete={async () => {
+              await Promise.all([loadLibraryLocations(), refresh()])
+              setSetupWizardOpen(false)
+            }}
+          />
+        )}
         {connectTarget && (
           <DeviceConnectModal
             target={connectTarget}

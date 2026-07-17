@@ -1,4 +1,5 @@
-import { dialog, ipcMain, shell } from 'electron'
+import { dialog, shell } from 'electron'
+import { secureIpcMain as ipcMain } from './secureIpc'
 import { existsSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
 import { getRepos, type Repos } from '../db/repositories'
@@ -11,6 +12,8 @@ import { getMetadataCompletionService } from '../library/MetadataCompletionServi
 import { getTrackAlbumMoveService } from '../library/TrackAlbumMoveService'
 import { writeTrackMetadata } from '../library/MetadataWriter'
 import { getLibraryBackup } from '../services/LibraryBackup'
+import { getCloudManifestService } from '../cloud/CloudManifestService'
+import { getPathAuthorizationService } from '../security/PathAuthorizationService'
 import { sidecarPathFor } from '../lyrics/providers/SidecarLrcProvider'
 import { broadcast } from './events'
 import { assertId, assertNonEmptyString, sanitizeIds } from './validation'
@@ -78,6 +81,7 @@ function resolveAlbumFromFolderHints(track: DbTrack, candidates: DbTrack[]): num
 async function refreshTrackMetadataInDb(repos: Repos, trackId: number): Promise<DbTrack | null> {
   const track = repos.tracks.getById(trackId)
   if (!track) return null
+  if (track.provider !== 'local') throw new Error('Metadata operations are unavailable for cloud tracks')
 
   const md = await readTrackMetadata(track.path)
   const parsedArtist = parseArtistName(md.artist)
@@ -178,14 +182,23 @@ export function registerLibraryChannel(): void {
     repos.search.search(query, limit ?? 20),
   )
 
-  ipcMain.handle('library:folders', () => repos.folders.list())
+  ipcMain.handle('library:folders', () => repos.folders.list().filter(folder => folder.role === 'library'))
   ipcMain.handle('library:folders:remove', async (_, id: number, options?: RemoveFolderOptions) => {
     const folderId = assertId(id, 'folderId')
     const folder = repos.folders.getById(folderId)
     if (!folder) throw new Error('La carpeta ya no existe en la biblioteca.')
+    if (folder.backup_source_folder_id != null) {
+      throw new Error('Desvinculá o promové este backup antes de quitarlo.')
+    }
+    if (repos.folders.listAll().some(candidate => candidate.backup_source_folder_id === folderId)) {
+      throw new Error('Esta biblioteca tiene un backup vinculado. Desvinculalo o promovelo primero.')
+    }
 
     const deleteMusic = options?.deleteMusic === true
-    const folderPath = resolve(folder.path)
+    if (deleteMusic && folder.provider !== 'local') {
+      throw new Error('Los archivos de una biblioteca cloud no se eliminan desde esta acción.')
+    }
+    const folderPath = folder.provider === 'local' ? resolve(folder.path) : folder.path
     if (deleteMusic) {
       if (!existsSync(folderPath)) {
         throw new Error('La carpeta ya no existe en disco. Se mantuvo la conexión en Crate.')
@@ -212,15 +225,19 @@ export function registerLibraryChannel(): void {
       properties: ['openDirectory'],
     })
     if (result.canceled || result.filePaths.length === 0) {
-      return { canceled: true, path: null }
+      return { canceled: true, token: null, displayPath: null }
     }
-    return { canceled: false, path: result.filePaths[0] }
+    const displayPath = resolve(result.filePaths[0])
+    const token = getPathAuthorizationService().issue(displayPath, ['library:add'])
+    return { canceled: false, token, displayPath }
   })
 
-  ipcMain.handle('library:folders:add', async (_, path: string): Promise<AddFolderResult> => {
-    // The renderer normally passes a path from the system folder picker, but the
-    // boundary is untrusted: require a real, existing directory before scanning.
-    const folderPath = resolve(assertNonEmptyString(path, 'folder path'))
+  ipcMain.handle('library:folders:add', async (_, token: unknown): Promise<AddFolderResult> => {
+    const folderPath = getPathAuthorizationService().resolve(
+      assertNonEmptyString(token, 'folder authorization'),
+      'library:add',
+      { consume: true },
+    )
     if (!existsSync(folderPath)) throw new Error('Folder does not exist')
     const result = await importer.addFolder(folderPath)
     watcher.start(result.folder.id, result.folder.path)
@@ -245,8 +262,9 @@ export function registerLibraryChannel(): void {
   })
 
   // Queue persistence
-  ipcMain.handle('queue:save', (_, payload: { trackIds: number[]; currentIndex: number }) => {
-    repos.queue.save(payload.trackIds, payload.currentIndex)
+  ipcMain.handle('queue:save', (_, payload: { trackIds: number[]; currentIndex: number; shuffle: boolean; repeat: 'off' | 'all' | 'one' }) => {
+    const repeat = payload.repeat === 'all' || payload.repeat === 'one' ? payload.repeat : 'off'
+    repos.queue.save(payload.trackIds, payload.currentIndex, payload.shuffle === true, repeat)
   })
   ipcMain.handle('queue:load', () => repos.queue.load())
 
@@ -255,24 +273,28 @@ export function registerLibraryChannel(): void {
   ipcMain.handle('track:countPlay', (_, trackId: number) => {
     repos.tracks.updatePlays(trackId)
     getLibraryBackup().scheduleWriteForTrack(trackId)
+    getCloudManifestService().scheduleWriteForTrack(trackId)
     broadcast('library:changed', { reason: 'play-count' })
   })
 
   ipcMain.handle('track:setFavorite', (_, payload: { id: number; favorite: boolean }) => {
     repos.tracks.setFavorite(payload.id, payload.favorite)
     getLibraryBackup().scheduleWriteForTrack(payload.id)
+    getCloudManifestService().scheduleWriteForTrack(payload.id)
     broadcast('library:changed', { reason: 'track-favorite' })
   })
 
   ipcMain.handle('album:setFavorite', (_, payload: { id: number; favorite: boolean }) => {
     repos.albums.setFavorite(payload.id, payload.favorite)
     getLibraryBackup().scheduleWriteForAlbum(payload.id)
+    getCloudManifestService().scheduleWriteForAlbum(payload.id)
     broadcast('library:changed', { reason: 'album-favorite' })
   })
 
   ipcMain.handle('track:updateMetadata', async (_, payload: { trackId: number; metadata: TrackMetadataUpdatePayload }) => {
     const track = repos.tracks.getById(payload.trackId)
     if (!track) return
+    if (track.provider !== 'local') throw new Error('Metadata editing is unavailable for cloud tracks')
 
     writeTrackMetadata(track.path, payload.metadata)
     await refreshTrackMetadataInDb(repos, track.id)
@@ -280,6 +302,8 @@ export function registerLibraryChannel(): void {
   })
 
   ipcMain.handle('track:refreshMetadata', async (_, trackId: number) => {
+    const track = repos.tracks.getById(trackId)
+    if (track?.provider !== 'local') throw new Error('Metadata refresh is unavailable for cloud tracks')
     await refreshTrackMetadataInDb(repos, trackId)
     broadcast('library:changed', { reason: 'track-refresh' })
   })
@@ -347,6 +371,9 @@ export function registerLibraryChannel(): void {
       }
 
       try {
+        if (track.provider !== 'local') {
+          throw new Error('Cloud tracks cannot be moved to the local Trash')
+        }
         await shell.trashItem(resolve(track.path))
         repos.tracks.deleteById(track.id)
         trashedTrackIds.push(track.id)
@@ -387,6 +414,7 @@ export function registerLibraryChannel(): void {
   ipcMain.handle('artist:setFavorite', (_, payload: { id: number; favorite: boolean }) => {
     repos.artists.setFavorite(payload.id, payload.favorite)
     getLibraryBackup().scheduleWriteForArtist(payload.id)
+    getCloudManifestService().scheduleWriteForArtist(payload.id)
     broadcast('library:changed', { reason: 'artist-favorite' })
   })
 

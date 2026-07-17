@@ -4,14 +4,17 @@ import { BrowserWindow } from 'electron'
 // in the app receives the message; this is currently used by the main UI window.
 export function broadcast(channel: string, payload?: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) {
+    if (win.isDestroyed() || win.webContents.isDestroyed()) continue
+    try {
       win.webContents.send(channel, payload)
+    } catch {
+      // render frame was disposed; skip silently
     }
   }
 }
 
 // Targeted send for events that should not fan out to every window — pass
-// a specific BrowserWindow or its webContents id.
+// a specific BrowserWindow or its BrowserWindow id.
 export function broadcastTo(
   target: BrowserWindow | number,
   channel: string,
@@ -19,6 +22,10 @@ export function broadcastTo(
 ): void {
   const win =
     typeof target === 'number' ? BrowserWindow.fromId(target) : target
-  if (!win || win.isDestroyed()) return
-  win.webContents.send(channel, payload)
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return
+  try {
+    win.webContents.send(channel, payload)
+  } catch {
+    // render frame was disposed; skip silently
+  }
 }

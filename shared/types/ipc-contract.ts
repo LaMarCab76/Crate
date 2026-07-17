@@ -21,6 +21,7 @@ import type {
   DeviceLibraryOptions,
   DeviceLibraryResult,
   DeviceMusicRootPickResult,
+  DeviceRootReference,
   DeviceOverviewResult,
   DevicePendingJournal,
   DeviceRecord,
@@ -51,6 +52,26 @@ import type {
   ProviderCredentialsPayload,
   ServiceTutorialState,
 } from './downloads'
+import type {
+  CloudAccountStatus,
+  CloudFolderRef,
+  CloudMoveProgressEvent,
+  CloudPrefs,
+  CloudSyncProgressEvent,
+  MoveToCloudRequest,
+  RemoteFolderEntry,
+} from './cloud'
+import type {
+  BackupPlanSummary,
+  BackupProgressEvent,
+  BackupProgressPhase,
+  BackupRunStatus,
+  CreateLibraryMigrationRequest,
+  LibraryMigrationProgressEvent,
+  LibraryMigrationState,
+  LibraryLocation,
+  LibraryRole,
+} from './library-locations'
 
 export interface ListTracksOpts {
   limit?: number
@@ -75,7 +96,8 @@ export interface RemoveFolderOptions {
 
 export interface PickFolderResult {
   canceled: boolean
-  path: string | null
+  token: string | null
+  displayPath: string | null
 }
 
 export interface ImportProgressEvent {
@@ -94,7 +116,7 @@ export interface ImportCompleteEvent {
 
 export type LibraryScanReason = 'startup' | 'watch' | 'background' | 'manual' | 'import'
 export type LibraryScanStatus = 'running' | 'completed' | 'failed'
-export type LibraryScanEventType = 'added' | 'updated' | 'removed' | 'missing_root' | 'skipped' | 'error' | 'orphan_lrc_removed'
+export type LibraryScanEventType = 'added' | 'updated' | 'removed' | 'missing_root' | 'root_unavailable' | 'skipped' | 'error' | 'orphan_lrc_removed'
 
 export interface LibraryScanRun {
   id: number
@@ -130,6 +152,8 @@ export interface LibraryScanLogPayload {
 export interface QueueSnapshotPayload {
   trackIds: number[]
   currentIndex: number
+  shuffle: boolean
+  repeat: 'off' | 'all' | 'one'
 }
 
 export interface TrackMetadataUpdatePayload {
@@ -410,7 +434,7 @@ export interface LibraryApi {
   search(query: string, limit?: number): Promise<SearchResultsPayload>
   folders(): Promise<DbFolder[]>
   pickFolder(): Promise<PickFolderResult>
-  addFolder(path: string): Promise<AddFolderResult>
+  addFolder(token: string): Promise<AddFolderResult>
   removeFolder(id: number, options?: RemoveFolderOptions): Promise<void>
   scanNow(folderId?: number): Promise<LibraryScanRun>
   scanLog(folderId?: number, limit?: number): Promise<LibraryScanLogPayload>
@@ -493,6 +517,9 @@ export type StreamLoadFailureReason =
   | 'memory-read-failed'
   | 'memory-empty'
   | 'memory-stream-failed'
+  | 'cloud-size-unknown'
+  | 'cloud-auth-required'
+  | 'cloud-unreachable'
   | 'progressive-stream-failed'
   | 'progressive-read-failed'
   | 'file-stream-failed'
@@ -630,13 +657,17 @@ export interface PlaybackCacheStats {
   entries: number
 }
 
+export type PlaybackSource =
+  | { kind: 'library'; trackId: number }
+  | { kind: 'device'; deviceId: string; trackKey: string }
+
 export interface ArtistListMode {
   mode: 'manual' | 'topPlays'
   n?: number
 }
 
 export interface AudioApi {
-  load(path: string, trackId?: number | null): Promise<StreamLoadResult>
+  load(source: PlaybackSource): Promise<StreamLoadResult>
   play(): Promise<void>
   pause(): Promise<void>
   stop(): Promise<void>
@@ -644,17 +675,18 @@ export interface AudioApi {
   setVolume(value: number): Promise<void>
   setFftMode(mode: FftMode): Promise<void>
   setMeterEnabled(enabled: boolean): Promise<void>
-  getWaveform(path: string, buckets?: number, trackId?: number | null): Promise<PlaybackAnalysisResult>
-  getCachedAnalysis(path: string, buckets?: number, trackId?: number | null): Promise<PlaybackAnalysisResult | null>
-  ensurePlaybackAnalysis(path: string, trackId?: number | null, buckets?: number): Promise<PlaybackAnalysisResult>
-  getCachedTableBars(path: string, trackId?: number | null): Promise<PlaybackTableBarsResult | null>
-  ensureTableBars(path: string, trackId?: number | null): Promise<PlaybackTableBarsResult>
+  getWaveform(source: PlaybackSource, buckets?: number): Promise<PlaybackAnalysisResult>
+  getCachedAnalysis(source: PlaybackSource, buckets?: number): Promise<PlaybackAnalysisResult | null>
+  ensurePlaybackAnalysis(source: PlaybackSource, buckets?: number): Promise<PlaybackAnalysisResult>
+  getCachedTableBars(source: PlaybackSource): Promise<PlaybackTableBarsResult | null>
+  ensureTableBars(source: PlaybackSource): Promise<PlaybackTableBarsResult>
   getPlaybackCacheStats(): Promise<PlaybackCacheStats>
   setPlaybackCacheLimit(maxBytes: number): Promise<PlaybackCacheStats>
   clearPlaybackCache(): Promise<PlaybackCacheStats>
-  preloadNext(path: string, trackId?: number | null): Promise<PreloadNextResult>
+  preloadNext(source: PlaybackSource): Promise<PreloadNextResult>
+  setGaplessEnabled(enabled: boolean): Promise<void>
   clearNext(): Promise<void>
-  swapNow(expectedPath?: string | null): Promise<StreamLoadResult | null>
+  swapNow(): Promise<StreamLoadResult | null>
   promoteCurrentToMemory(): Promise<StreamLoadResult>
   getStatus(): Promise<PlaybackStatePayload>
   listOutputDevices(): Promise<AudioOutputDevice[]>
@@ -749,9 +781,9 @@ export interface SettingsApi {
 export interface DevicesApi {
   detectCandidates(): Promise<DeviceCandidate[]>
   volumes(): Promise<DeviceVolumeSnapshot>
-  ignoreVolume(rootPath: string): Promise<DeviceVolumeSnapshot>
+  ignoreVolume(token: string): Promise<DeviceVolumeSnapshot>
   pickRoot(): Promise<PickFolderResult>
-  pickMusicRoot(rootPath: string, currentMusicRoot?: string): Promise<DeviceMusicRootPickResult>
+  pickMusicRoot(reference: DeviceRootReference, currentMusicRoot?: string): Promise<DeviceMusicRootPickResult>
   connect(payload: DeviceConnectPayload): Promise<DeviceRecord>
   updateSettings(deviceId: string, settings: DeviceSettingsUpdate): Promise<DeviceRecord>
   list(): Promise<DeviceRecord[]>
@@ -798,6 +830,102 @@ export interface DownloadsApi {
   onJobsChanged(h: (e: DownloadJobsChangedEvent) => void): EventOff
 }
 
+export interface CloudApi {
+  accountStatus(): Promise<CloudAccountStatus>
+  connect(): Promise<CloudAccountStatus>
+  disconnect(): Promise<CloudAccountStatus>
+  setClientId(clientId: string): Promise<CloudAccountStatus>
+  getPrefs(): Promise<CloudPrefs>
+  setPrefs(patch: Partial<CloudPrefs>): Promise<CloudPrefs>
+  listRemoteFolders(driveId: string | null, itemId: string | null): Promise<RemoteFolderEntry[]>
+  addFolder(driveId: string, itemId: string, name: string, remotePath?: string): Promise<CloudFolderRef>
+  syncFolder(folderId: number): Promise<void>
+  moveToCloud(req: MoveToCloudRequest): Promise<void>
+
+  onAccountChanged(h: (e: CloudAccountStatus) => void): EventOff
+  onSyncProgress(h: (e: CloudSyncProgressEvent) => void): EventOff
+  onMoveProgress(h: (e: CloudMoveProgressEvent) => void): EventOff
+}
+
+export interface AddLocalLibraryLocationRequest {
+  token: string
+  role: LibraryRole
+  backupSourceFolderId?: number | null
+}
+
+export interface AddOneDriveLibraryLocationRequest {
+  driveId: string
+  itemId: string
+  name: string
+  remotePath?: string
+  role: LibraryRole
+  backupSourceFolderId?: number | null
+}
+
+export interface LibraryLocationsApi {
+  list(): Promise<LibraryLocation[]>
+  pickLocal(): Promise<PickFolderResult>
+  addLocal(input: AddLocalLibraryLocationRequest): Promise<LibraryLocation>
+  getOneDriveStatus(): Promise<CloudAccountStatus>
+  setOneDriveClientId(clientId: string): Promise<CloudAccountStatus>
+  connectOneDrive(): Promise<CloudAccountStatus>
+  disconnectOneDrive(): Promise<CloudAccountStatus>
+  listOneDriveFolders(driveId: string | null, itemId: string | null): Promise<RemoteFolderEntry[]>
+  addOneDrive(input: AddOneDriveLibraryLocationRequest): Promise<LibraryLocation>
+  updatePresentation(folderId: number, input: { name: string; displayIcon: string | null }): Promise<LibraryLocation>
+  remove(folderId: number): Promise<void>
+}
+
+export interface LibraryMigrationsApi {
+  list(): Promise<LibraryMigrationState[]>
+  create(input: CreateLibraryMigrationRequest): Promise<LibraryMigrationState>
+  approve(runId: string): Promise<LibraryMigrationState>
+  pause(runId: string): Promise<LibraryMigrationState>
+  resume(runId: string): Promise<LibraryMigrationState>
+  cancel(runId: string): Promise<LibraryMigrationState>
+  retryCleanup(runId: string): Promise<LibraryMigrationState>
+  onProgress(h: (e: LibraryMigrationProgressEvent) => void): EventOff
+}
+
+export interface BackupDiffEntry {
+  path: string
+  action: 'create' | 'update' | 'delete' | 'conflict'
+  reason: string | null
+}
+
+export interface BackupPlanDetails extends BackupPlanSummary {
+  entries: BackupDiffEntry[]
+}
+
+export interface LibraryBackupStatePayload {
+  backupFolderId: number
+  sourceFolderId: number
+  runId: string | null
+  status: BackupRunStatus | 'idle'
+  phase: BackupProgressPhase | null
+  completedActions: number
+  totalActions: number
+  completedBytes: number
+  totalBytes: number | null
+  relativePath: string | null
+  message: string | null
+  error: string | null
+  lastRunAt: string | null
+  plan: BackupPlanDetails | null
+}
+
+export interface LibraryBackupsApi {
+  list(): Promise<LibraryBackupStatePayload[]>
+  assign(input: { sourceFolderId: number; backupFolderId: number }): Promise<LibraryBackupStatePayload>
+  remove(backupFolderId: number): Promise<void>
+  promote(backupFolderId: number): Promise<LibraryLocation>
+  start(backupFolderId: number): Promise<LibraryBackupStatePayload>
+  pause(backupFolderId: number): Promise<LibraryBackupStatePayload>
+  resume(backupFolderId: number): Promise<LibraryBackupStatePayload>
+  approveDiff(backupFolderId: number, runId: string): Promise<LibraryBackupStatePayload>
+  onProgress(h: (e: BackupProgressEvent) => void): EventOff
+}
+
 export interface Api {
   meta: MetaApi
   library: LibraryApi
@@ -812,6 +940,10 @@ export interface Api {
   lyrics: LyricsApi
   devices: DevicesApi
   downloads: DownloadsApi
+  cloud: CloudApi
+  libraryLocations: LibraryLocationsApi
+  libraryBackups: LibraryBackupsApi
+  libraryMigrations: LibraryMigrationsApi
   updates: UpdatesApi
 }
 

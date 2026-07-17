@@ -45,12 +45,22 @@ test('preview auto-replaces only on better quality, and offers a confirm for equ
   assert.match(source, /Se reemplazará/, 'a better incoming file produces a replacement warning')
 })
 
-test('apply trashes the displaced track on better quality OR explicit lower-quality confirm', () => {
+test('apply stages the displaced track reversibly and retires it only after commit', () => {
   assert.match(source, /async apply\(previewId: string, confirmLowerQualityReplace = false\)/, 'apply accepts the explicit lower-quality confirmation')
   assert.match(source, /if \(replacement && \(replacement\.incomingIsBetter \|\| confirmLowerQualityReplace\)\)/, 'replacement runs on better quality or confirmed deletion')
   assert.match(source, /preview\.replacement\.incomingIsBetter \|\| confirmLowerQualityReplace/, 'validateStoredPreview honours the confirmation')
-  assert.match(source, /this\.deps\.trashItem\(replacedPath\)/, 'the replaced file is sent to the OS trash')
+  assert.match(source, /stageAlbumMoveReplacement\(replacedPath\)/, 'the replaced file is staged before the move')
+  assert.match(source, /replacementStage\.rollback\(\)/, 'a failed move restores the displaced file')
+  assert.match(source, /replacementStage\.retire\(path => this\.deps\.trashItem\(path\)\)/, 'staged files reach trash only after commit')
   assert.match(source, /this\.deps\.repos\.tracks\.deleteById\(replacedTrack\.id\)/, 'the replaced track row is removed in the move transaction')
+})
+
+test('apply revalidates replacement filesystem authority immediately before staging', () => {
+  assert.match(
+    source,
+    /const replacedPath = requireLocalLibraryTrackPath\(\{[\s\S]*?track: replacedTrack,[\s\S]*?expectedPath: replacement\.path,[\s\S]*?\}\)[\s\S]*?stageAlbumMoveReplacement\(replacedPath\)/,
+    'replacement must still be local, unchanged, and in a normal library before filesystem staging',
+  )
 })
 
 test('album move cleanup removes source albums orphaned by track album_id updates', () => {

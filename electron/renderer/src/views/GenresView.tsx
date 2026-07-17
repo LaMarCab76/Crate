@@ -137,6 +137,11 @@ export function GenresView({ onSelectAlbum }: { onSelectAlbum?: (al: Album) => v
                   key={al.id}
                   className="card"
                   onClick={() => onSelectAlbum?.(al)}
+                  onKeyDown={event => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return
+                    event.preventDefault()
+                    onSelectAlbum?.(al)
+                  }}
                   onContextMenu={e => albumActions.openAlbumMenu(e, al)}
                   role="button"
                   tabIndex={0}

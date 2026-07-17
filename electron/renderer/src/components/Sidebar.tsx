@@ -31,7 +31,11 @@ function SectionLabel({ label, onAdd, title }: { label: string; onAdd?: () => vo
     <div className="sb-section-label">
       <span>{label}</span>
       {onAdd && (
-        <span className="add" onClick={onAdd} title={title} role="button" tabIndex={0}>
+        <span className="add" onClick={onAdd} onKeyDown={event => {
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          event.preventDefault()
+          onAdd()
+        }} title={title} role="button" tabIndex={0}>
           <Icon name="plus" size={12} stroke={1.8} />
         </span>
       )}
@@ -72,7 +76,11 @@ export function Sidebar({
   const addDevice = () => setView({ kind: 'devices' })
 
   const Item = ({ id, icon, label, badge, onClick }: { id: string; icon: IconName; label: string; badge?: string | number; onClick: () => void }) => (
-    <div className={`sb-item ${selectedKey === id ? 'active' : ''}`} onClick={onClick} role="button" tabIndex={0}>
+    <div className={`sb-item ${selectedKey === id ? 'active' : ''}`} onClick={onClick} onKeyDown={event => {
+      if (event.key !== 'Enter' && event.key !== ' ') return
+      event.preventDefault()
+      onClick()
+    }} role="button" tabIndex={0}>
       <span className="ic"><Icon name={icon} size={14} /></span>
       <span>{label}</span>
       {badge != null && <span className="badge">{badge}</span>}
@@ -137,7 +145,7 @@ export function Sidebar({
           <div
             className="sb-item sb-candidate"
             key={candidate.rootPath}
-            onClick={() => onConnectDevice({ rootPath: candidate.rootPath, name: candidate.name })}
+            onClick={() => onConnectDevice({ token: candidate.token, displayPath: candidate.rootPath, name: candidate.name })}
             role="button"
             tabIndex={0}
             title={candidate.rootPath}
@@ -148,7 +156,7 @@ export function Sidebar({
           </div>
         ))}
 
-        <SectionLabel label="Playlists" onAdd={() => {}} title="New playlist" />
+        <SectionLabel label="Playlists" />
 
         <div
           className={`sb-item ${selectedKey === 'pfavorites' ? 'active' : ''}`}

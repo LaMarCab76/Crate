@@ -11,6 +11,7 @@ import {
   useAlbumByUiId,
 } from '@renderer/stores/libraryStore'
 import { useQueueStore } from '@renderer/stores/queueStore'
+import { SourceBadge } from '@renderer/components/SourceBadge'
 
 interface Props {
   album: Album
@@ -22,6 +23,7 @@ export function AlbumView({ album }: Props) {
   const fresh = useAlbumByUiId(album?.id)
   const a = fresh ?? album
   const playNow = useQueueStore(s => s.playNow)
+  const playShuffled = useQueueStore(s => s.playShuffled)
   const refreshedAlbumIds = useRef(new Set<string>())
   const albumActions = useAlbumActions()
 
@@ -32,13 +34,7 @@ export function AlbumView({ album }: Props) {
 
   const handleShuffleAlbum = async () => {
     if (!a || a.tracks.length === 0) return
-    const tracks = [...a.tracks]
-    for (let i = tracks.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1))
-      ;[tracks[i], tracks[j]] = [tracks[j], tracks[i]]
-    }
-
-    await playNow(tracks[0], tracks)
+    await playShuffled(a.tracks)
   }
 
   const isUnresolvedAlbum = a?.id.startsWith('a-unresolved-') ?? false
@@ -66,6 +62,7 @@ export function AlbumView({ album }: Props) {
   if (!a) return null
   const totalDur = a.tracks.reduce((s, t) => s + t.d, 0)
   const totalSize = a.tracks.reduce((s, t) => s + (t.fileSize ?? 0), 0)
+  const sourceIds = [...new Set(a.tracks.map(track => track.folderId).filter((id): id is number => id != null))]
   return (
     <>
       <div className="album-hero" onContextMenu={e => albumActions.openAlbumMenu(e, a)}>
@@ -75,6 +72,9 @@ export function AlbumView({ album }: Props) {
           <h1>{a.title}</h1>
           <div className="credits">
             <a>{a.artist}</a> · {a.year} · {a.tracks.length} tracks · {fmtTime(totalDur)} · {fmtFileSize(totalSize)}
+          </div>
+          <div className="album-source-summary">
+            <SourceBadge folderIds={sourceIds} provider={a.tracks[0]?.provider} />
           </div>
           {isUnresolvedAlbum && (
             <div className="meta-note">
@@ -105,7 +105,6 @@ export function AlbumView({ album }: Props) {
             >
               <Icon name={isFavorite ? 'heartF' : 'heart'} size={14} />
             </button>
-            <button className="btn ghost icon"><Icon name="plus" /></button>
             <button
               className="btn ghost icon"
               type="button"
@@ -126,6 +125,7 @@ export function AlbumView({ album }: Props) {
         showSize
         showTrackNo
         compact
+        showSource={sourceIds.length > 1}
       />
       {albumActions.elements}
     </>

@@ -9,7 +9,12 @@ on:
       tag:
         description: Existing tag to publish
         required: true
-        default: v0.5.0
+        default: v0.5.1
+      unsigned_macos:
+        description: Build macOS ad hoc without notarization
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -50,7 +55,6 @@ jobs:
               release/latest-linux.yml
     env:
       RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
-      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
     steps:
       - name: Checkout release tag
@@ -64,21 +68,133 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Validate macOS signing credentials
+        if: runner.os == 'macOS' && inputs.unsigned_macos != true
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+
+          missing=()
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("${name}")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing required macOS release secrets: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
       - name: Install dependencies
         run: npm ci
+
+      - name: Validate release version
+        shell: bash
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          if [[ "${RELEASE_TAG}" != "v${package_version}" ]]; then
+            echo "Release tag ${RELEASE_TAG} does not match package.json version v${package_version}" >&2
+            exit 1
+          fi
+
+      - name: Cache BASS native libraries
+        uses: actions/cache@v4
+        with:
+          path: native/libs
+          key: bass-libs-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-bass.mjs', 'scripts/verify-bass.mjs') }}
+
+      - name: Fetch BASS native libraries
+        run: npm run fetch:bass
+
+      - name: Verify and load BASS native libraries
+        run: npm run verify:bass -- --load
+
+      - name: Test
+        run: npm test
+
+      - name: Electron integration tests
+        run: npm run test:integration
 
       - name: Typecheck
         run: npm run typecheck
 
       - name: Build ${{ matrix.platform_name }} packages
+        if: runner.os != 'macOS' || inputs.unsigned_macos != true
+        env:
+          CSC_LINK: ${{ runner.os == 'macOS' && secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
         run: npm run ${{ matrix.build_script }}
+
+      - name: Build unsigned macOS packages
+        if: runner.os == 'macOS' && inputs.unsigned_macos == true
+        run: npm run verify:bass -- --platform=darwin && npm run build && npx electron-builder --mac --config electron-builder.unsigned.yml --publish never
+
+      - name: Smoke packaged BASS resources
+        run: npm run verify:bass -- --packaged-root=release --load
+
+      - name: Verify macOS signatures and notarization
+        if: runner.os == 'macOS' && inputs.unsigned_macos != true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          verify_app() {
+            local app="$1"
+            local expected_arch="$2"
+            local signature_info
+
+            [[ "$(lipo -archs "${app}/Contents/MacOS/Crate")" == "${expected_arch}" ]]
+            codesign --verify --deep --strict --verbose=4 "${app}"
+
+            signature_info="$(codesign --display --verbose=4 "${app}" 2>&1)"
+            [[ "${signature_info}" == *"Authority=Developer ID Application:"* ]]
+            [[ "${signature_info}" == *"runtime"* ]]
+
+            codesign --verify --deep --strict --check-notarization --verbose=4 "${app}"
+            xcrun stapler validate -v "${app}"
+            spctl --assess --type execute --verbose=4 "${app}"
+          }
+
+          verify_app "release/mac/Crate.app" "x86_64"
+          verify_app "release/mac-arm64/Crate.app" "arm64"
+
+      - name: Verify ad hoc macOS packages
+        if: runner.os == 'macOS' && inputs.unsigned_macos == true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          verify_app() {
+            local app="$1"
+            local expected_arch="$2"
+            local signature_info
+
+            [[ "$(lipo -archs "${app}/Contents/MacOS/Crate")" == "${expected_arch}" ]]
+            codesign --verify --deep --strict --verbose=4 "${app}"
+
+            signature_info="$(codesign --display --verbose=4 "${app}" 2>&1)"
+            [[ "${signature_info}" == *"Signature=adhoc"* ]]
+            [[ "${signature_info}" != *"Authority="* ]]
+          }
+
+          verify_app "release/mac/Crate.app" "x86_64"
+          verify_app "release/mac-arm64/Crate.app" "arm64"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: crate-${{ env.RELEASE_TAG }}-${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_paths }}
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   publish:
     name: Publish GitHub Release

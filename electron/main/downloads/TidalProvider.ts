@@ -48,6 +48,11 @@ export class TidalProvider implements OnlineProvider {
 
   constructor(private store: CredentialStore) {}
 
+  invalidateCredentials(): void {
+    this.accessToken = null
+    this.accessTokenExpiresAt = 0
+  }
+
   async authState(): Promise<ProviderAuthState> {
     const credentials = this.store.getTidalCredentials()
     const configured = Boolean(credentials.clientId && credentials.clientSecret)
@@ -88,17 +93,21 @@ export class TidalProvider implements OnlineProvider {
     return rows.map(item => this.mapTrack(item)).filter((item): item is OnlineTrackResult => item != null)
   }
 
-  async getTrack(providerTrackId: string): Promise<OnlineTrackResult> {
+  async getTrack(providerTrackId: string, signal?: AbortSignal): Promise<OnlineTrackResult> {
     const credentials = this.store.getTidalCredentials()
     if (credentials.webToken && !credentials.accessToken && !(credentials.clientId && credentials.clientSecret)) {
       const countryCode = normalizeCountryCode(credentials.countryCode)
-      const url = this.webUrl(`/v1/tracks/${providerTrackId}`, { countryCode })
-      const json = await this.fetchWebJson(url, credentials.webToken)
+      const url = this.webUrl(`/v1/tracks/${encodeURIComponent(providerTrackId)}`, { countryCode })
+      const json = await this.fetchWebJson(url, credentials.webToken, signal)
       return this.mapWebTrack(json) ?? this.unavailableTrack(providerTrackId)
     }
 
-    const token = await this.getAccessToken()
-    const json = await this.fetchJson(`${TIDAL_API_BASE}/tracks/${encodeURIComponent(providerTrackId)}?countryCode=${DEFAULT_COUNTRY}`, token)
+    const token = await this.getAccessToken(signal)
+    const json = await this.fetchJson(
+      `${TIDAL_API_BASE}/tracks/${encodeURIComponent(providerTrackId)}?countryCode=${DEFAULT_COUNTRY}`,
+      token,
+      signal,
+    )
     return this.mapTrack((json as { data?: unknown }).data ?? json) ?? this.unavailableTrack(providerTrackId)
   }
 
@@ -247,7 +256,7 @@ export class TidalProvider implements OnlineProvider {
     return url.toString()
   }
 
-  private async getAccessToken(): Promise<string> {
+  private async getAccessToken(signal?: AbortSignal): Promise<string> {
     if (this.accessToken && Date.now() < this.accessTokenExpiresAt - 60_000) return this.accessToken
 
     const credentials = this.requireCredentials()
@@ -264,6 +273,7 @@ export class TidalProvider implements OnlineProvider {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body: new URLSearchParams({ grant_type: 'client_credentials' }).toString(),
+      signal,
     })
     const json = await response.json() as { access_token?: string; expires_in?: number; error_description?: string; error?: string }
     if (!response.ok || !json.access_token) {
@@ -282,12 +292,13 @@ export class TidalProvider implements OnlineProvider {
     return credentials as TidalCredentials
   }
 
-  private async fetchJson(url: string, token: string): Promise<unknown> {
+  private async fetchJson(url: string, token: string, signal?: AbortSignal): Promise<unknown> {
     const response = await fetch(url, {
       headers: {
         Accept: 'application/vnd.tidal.v1+json',
         Authorization: `Bearer ${token}`,
       },
+      signal,
     })
     const text = await response.text()
     let json: unknown = null
@@ -302,13 +313,14 @@ export class TidalProvider implements OnlineProvider {
     return json
   }
 
-  private async fetchWebJson(url: string, webToken: string): Promise<unknown> {
+  private async fetchWebJson(url: string, webToken: string, signal?: AbortSignal): Promise<unknown> {
     if (!webToken) throw new Error('TIDAL web token is required before searching.')
     const response = await fetch(url, {
       headers: {
         Accept: 'application/json',
         'X-Tidal-Token': webToken,
       },
+      signal,
     })
     const text = await response.text()
     let json: unknown = null

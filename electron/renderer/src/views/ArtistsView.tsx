@@ -7,6 +7,7 @@ import { ListPrefsMenu, SortDirectionButton } from '@renderer/components/ListPre
 import { useListPrefs } from '@renderer/stores/settingsStore'
 import { createListPrefsDefaults, sortArtists } from '@renderer/utils/listSort'
 import { toggleArtistFavorite, useVisibleArtists } from '@renderer/stores/libraryStore'
+import { SourceBadge } from '@renderer/components/SourceBadge'
 
 const ARTISTS_SORT_OPTIONS: Array<{ value: ArtistsSortBy, label: string }> = [
   { value: 'name', label: 'Nombre' },
@@ -104,6 +105,11 @@ export function ArtistsView({ onSelect }: { onSelect?: (ar: Artist) => void }) {
             className="sb-item"
             style={{ height: 56, margin: '2px 0', padding: '0 12px', gap: 14 }}
             onClick={() => onSelect?.(ar)}
+            onKeyDown={event => {
+              if (event.key !== 'Enter' && event.key !== ' ') return
+              event.preventDefault()
+              onSelect?.(ar)
+            }}
             role="button"
             tabIndex={0}
           >
@@ -116,6 +122,11 @@ export function ArtistsView({ onSelect }: { onSelect?: (ar: Artist) => void }) {
                 {ar.albums.length} album{ar.albums.length === 1 ? '' : 'es'} · {ar.trackCount} tracks
               </div>
             </div>
+            <SourceBadge
+              folderIds={ar.albums.flatMap(album => album.tracks.map(track => track.folderId))}
+              provider={ar.albums[0]?.tracks[0]?.provider}
+              compact
+            />
             {ar.dbId != null && (
               <button
                 className="tb-icon-btn"

@@ -1,12 +1,16 @@
-import { BrowserWindow, ipcMain, screen, type WebContents } from 'electron'
+import { BrowserWindow, screen, type WebContents } from 'electron'
+import { secureIpcMain as ipcMain } from './secureIpc'
 import { getAudioEngine, type StreamInfo } from '../audio/AudioEngine'
 import { getEQManager } from '../audio/EQManager'
 import { getLevelerManager } from '../audio/LevelerManager'
 import { GaplessController } from '../audio/GaplessController'
 import { getExclusiveModeManager } from '../audio/ExclusiveModeManager'
 import { getPlaybackAnalysisService } from '../audio/PlaybackAnalysisService'
+import { getDeviceSyncService } from '../devices/DeviceSyncService'
 import { broadcast } from './events'
 import { getRepos } from '../db/repositories'
+import { getOneDriveClient } from '../cloud/OneDriveClient'
+import { resolveCloudLoadOptions } from '../cloud/cloudTrackRef'
 import { estimateLufsFromAnalysis, type LevelerLoudness } from '@shared/constants/leveler'
 import type { DbTrack } from '@shared/types/db'
 import type {
@@ -14,6 +18,7 @@ import type {
   FftMode,
   LevelerConfig,
   PlaybackCacheStats,
+  PlaybackSource,
   StreamLoadResult,
   StreamInfoPayload,
   StreamLoadSource,
@@ -35,6 +40,7 @@ type StreamLoadResultLike = {
 }
 
 let gapless: GaplessController | null = null
+let gaplessEnabled = true
 
 // Re-apply per-stream effects after a gapless swap (manual or native auto-
 // advance). EQ FX and the leveler gain are attached to a specific stream handle,
@@ -120,6 +126,9 @@ function resolveTrackLoudness(track: DbTrack | null | undefined): LevelerLoudnes
   if (!track) return { trackLufs: null, peakDb: null }
   let trackLufs = track.r128_integrated_loudness ?? null
   let peakDb: number | null = null
+  // Persistent analysis decodes a local path. Cloud tracks are played from a
+  // RAM buffer and must never send their onedrive:// identity to that service.
+  if (track.provider === 'onedrive') return { trackLufs, peakDb }
   let cached = null
   try {
     cached = getPlaybackAnalysisService().getCached(track.path, undefined, track.id)
@@ -157,7 +166,7 @@ function applyLevelerForCurrentTrack(): void {
   broadcastLevelerState()
 
   const cfg = leveler.getConfig()
-  if (!cfg.enabled || !track || track.r128_integrated_loudness != null) return
+  if (!cfg.enabled || !track || track.provider === 'onedrive' || track.r128_integrated_loudness != null) return
 
   const playbackAnalysis = getPlaybackAnalysisService()
   let alreadyCached = false
@@ -212,20 +221,32 @@ function normalizeBuckets(buckets: unknown): number | undefined {
   return Number.isInteger(buckets) && (buckets as number) > 0 ? buckets as number : undefined
 }
 
-function requirePath(value: unknown): string {
-  if (typeof value !== 'string' || value.trim().length === 0) throw new Error('Audio path is required')
-  return value
-}
-
-function assertTrackPathMatches(path: string, trackId: unknown, channel: string): { duration: number } | null {
-  const normalizedTrackId = normalizeTrackId(trackId)
-  if (normalizedTrackId == null) return null
-
-  const track = getRepos().tracks.getById(normalizedTrackId)
-  if (!track || track.path !== path) {
-    throw new Error(`${channel}: path does not match the track record`)
+async function resolvePlaybackSource(value: unknown, channel: string): Promise<{
+  path: string
+  duration: number
+  trackId: number | null
+  track: DbTrack | null
+}> {
+  if (!value || typeof value !== 'object') throw new Error(`${channel}: playback source is required`)
+  const source = value as Partial<PlaybackSource>
+  if (source.kind === 'library') {
+    const trackId = normalizeTrackId(source.trackId)
+    if (trackId == null) throw new Error(`${channel}: valid library track id is required`)
+    const track = getRepos().tracks.getById(trackId)
+    if (!track) throw new Error(`${channel}: library track does not exist`)
+    return { path: track.path, duration: track.duration, trackId, track }
   }
-  return { duration: track.duration }
+  if (source.kind === 'device') {
+    if (typeof source.deviceId !== 'string' || !source.deviceId.trim()) {
+      throw new Error(`${channel}: device id is required`)
+    }
+    if (typeof source.trackKey !== 'string' || !source.trackKey.trim()) {
+      throw new Error(`${channel}: device track key is required`)
+    }
+    const track = await getDeviceSyncService().resolvePlaybackTrack(source.deviceId, source.trackKey)
+    return { ...track, trackId: null, track: null }
+  }
+  throw new Error(`${channel}: unsupported playback source`)
 }
 
 export function registerAudioChannel(): void {
@@ -239,17 +260,21 @@ export function registerAudioChannel(): void {
   // missing a hog-transfer opportunity.
   getExclusiveModeManager()
 
-  ipcMain.handle('audio:load', async (_, payload: { path: string; trackId?: number | null }) => {
-    // Defense in depth: when a trackId is supplied, the path must match that track's
-    // DB record, so a compromised renderer can't point the engine at an arbitrary file.
-    const path = requirePath(payload?.path)
-    const track = assertTrackPathMatches(path, payload?.trackId, 'audio:load')
-    const loadResult = await engine.load(path, { estimatedDurationSec: track?.duration ?? null })
+  ipcMain.handle('audio:load', async (_, payload: unknown) => {
+    const source = await resolvePlaybackSource(payload, 'audio:load')
+    const cloud = source.track
+      ? await resolveCloudLoadOptions(source.track, getOneDriveClient())
+      : null
+    const loadResult = await engine.load(source.path, {
+      estimatedDurationSec: source.duration,
+      cloudRef: cloud?.cloudRef,
+      cloudSizeBytes: cloud?.cloudSizeBytes ?? null,
+    })
     getGapless().bindCurrentTrackEnd()
     eq.reapply(engine.getCurrentStream())
     broadcastEqState()
     applyLevelerForCurrentTrack()
-    if (loadResult.source === 'file') promoteCurrentFileStreamToMemory(path, track?.duration ?? null)
+    if (loadResult.source === 'file') promoteCurrentFileStreamToMemory(source.path, source.duration)
     return serializeStreamLoadResult(loadResult)
   })
 
@@ -270,39 +295,48 @@ export function registerAudioChannel(): void {
     return stats
   }
 
-  ipcMain.handle('audio:getWaveform', async (_, payload: { path: string; buckets?: number; trackId?: number | null }) => {
+  ipcMain.handle('audio:getWaveform', async (_, payload: { source?: unknown; buckets?: number }) => {
+    const source = await resolvePlaybackSource(payload?.source, 'audio:getWaveform')
+    if (source.track?.provider === 'onedrive') throw new Error('Waveform analysis is unavailable for cloud tracks')
     const result = await playbackAnalysis.ensure(
-      requirePath(payload?.path),
+      source.path,
       normalizeBuckets(payload?.buckets),
-      normalizeTrackId(payload?.trackId),
+      source.trackId,
     )
     broadcastPlaybackCacheStats()
     return result
   })
-  ipcMain.handle('audio:getCachedAnalysis', (_, payload: { path: string; buckets?: number; trackId?: number | null }) =>
-    playbackAnalysis.getCached(
-      requirePath(payload?.path),
+  ipcMain.handle('audio:getCachedAnalysis', async (_, payload: { source?: unknown; buckets?: number }) => {
+    const source = await resolvePlaybackSource(payload?.source, 'audio:getCachedAnalysis')
+    if (source.track?.provider === 'onedrive') return null
+    return playbackAnalysis.getCached(
+      source.path,
       normalizeBuckets(payload?.buckets),
-      normalizeTrackId(payload?.trackId),
-    ))
-  ipcMain.handle('audio:ensurePlaybackAnalysis', async (_, payload: { path: string; buckets?: number; trackId?: number | null }) => {
+      source.trackId,
+    )
+  })
+  ipcMain.handle('audio:ensurePlaybackAnalysis', async (_, payload: { source?: unknown; buckets?: number }) => {
+    const source = await resolvePlaybackSource(payload?.source, 'audio:ensurePlaybackAnalysis')
+    if (source.track?.provider === 'onedrive') throw new Error('Playback analysis is unavailable for cloud tracks')
     const result = await playbackAnalysis.ensure(
-      requirePath(payload?.path),
+      source.path,
       normalizeBuckets(payload?.buckets),
-      normalizeTrackId(payload?.trackId),
+      source.trackId,
     )
     broadcastPlaybackCacheStats()
     return result
   })
-  ipcMain.handle('audio:getCachedTableBars', (_, payload: { path: string; trackId?: number | null }) =>
-    playbackAnalysis.getCachedTableBars(
-      requirePath(payload?.path),
-      normalizeTrackId(payload?.trackId),
-    ))
-  ipcMain.handle('audio:ensureTableBars', async (_, payload: { path: string; trackId?: number | null }) => {
+  ipcMain.handle('audio:getCachedTableBars', async (_, payload: { source?: unknown }) => {
+    const source = await resolvePlaybackSource(payload?.source, 'audio:getCachedTableBars')
+    if (source.track?.provider === 'onedrive') return null
+    return playbackAnalysis.getCachedTableBars(source.path, source.trackId)
+  })
+  ipcMain.handle('audio:ensureTableBars', async (_, payload: { source?: unknown }) => {
+    const source = await resolvePlaybackSource(payload?.source, 'audio:ensureTableBars')
+    if (source.track?.provider === 'onedrive') throw new Error('Playback analysis is unavailable for cloud tracks')
     const result = await playbackAnalysis.ensureTableBars(
-      requirePath(payload?.path),
-      normalizeTrackId(payload?.trackId),
+      source.path,
+      source.trackId,
     )
     broadcastPlaybackCacheStats()
     return result
@@ -319,20 +353,24 @@ export function registerAudioChannel(): void {
     return stats
   })
 
-  ipcMain.handle('audio:preloadNext', async (_, payload: { path: string; trackId?: number | null }) => {
-    const path = requirePath(payload?.path)
-    assertTrackPathMatches(path, payload?.trackId, 'audio:preloadNext')
-    const result = await getGapless().preloadNext(path)
+  ipcMain.handle('audio:preloadNext', async (_, payload: unknown) => {
+    if (!gaplessEnabled) throw new Error('Gapless playback is disabled')
+    const source = await resolvePlaybackSource(payload, 'audio:preloadNext')
+    const cloud = source.track
+      ? await resolveCloudLoadOptions(source.track, getOneDriveClient())
+      : null
+    const result = await getGapless().preloadNext(source.path, cloud ?? undefined)
     return result
   })
+  ipcMain.handle('audio:setGaplessEnabled', (_, payload: { enabled?: unknown }) => {
+    gaplessEnabled = payload?.enabled === true
+    if (!gaplessEnabled) getGapless().clearNext()
+  })
   ipcMain.handle('audio:clearNext', () => getGapless().clearNext())
-  ipcMain.handle('audio:swapNow', (_, payload?: { expectedPath?: string | null }) => {
-    const expectedPath = typeof payload?.expectedPath === 'string' && payload.expectedPath.trim().length > 0
-      ? payload.expectedPath
-      : null
+  ipcMain.handle('audio:swapNow', () => {
     // swapToNext() re-applies EQ + leveler via the onAfterSwap hook (shared with
     // the native auto-advance path), so we don't repeat it here.
-    const result = getGapless().swapToNext(expectedPath)
+    const result = gaplessEnabled ? getGapless().swapToNext() : null
     getGapless().bindCurrentTrackEnd()
     return serializeStreamLoadResult(result)
   })

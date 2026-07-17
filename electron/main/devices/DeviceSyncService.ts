@@ -1,6 +1,6 @@
 import { app, dialog, shell } from 'electron'
-import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { constants as fsConstants, existsSync } from 'node:fs'
 import {
   access,
   copyFile,
@@ -9,6 +9,7 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  realpath,
   rename,
   rm,
   stat,
@@ -25,6 +26,8 @@ import { getDatabase } from '../db/database'
 import { getRepos } from '../db/repositories'
 import { getFolderWatcher } from '../library/FolderWatcher'
 import { getImportService } from '../library/ImportService'
+import { isLibraryLocationMigrationLocked } from '../library-migration/locationLocks'
+import { getPathAuthorizationService } from '../security/PathAuthorizationService'
 import { readTrackMetadata } from '../library/MetadataExtractor'
 import { broadcast } from '../ipc/events'
 import { createThrottledBroadcaster, type ThrottledBroadcaster } from '../ipc/throttle'
@@ -64,6 +67,10 @@ import {
   type DeviceScanInternalResult,
 } from './deviceScanCore'
 import { clampDeviceArtworkEdge } from '@shared/constants/device-sync'
+import { getOneDriveClient } from '../cloud/OneDriveClient'
+import { resolveCloudLoadOptions } from '../cloud/cloudTrackRef'
+import { cloudDeviceRelativePath, sanitizeSegment } from './cloudDeviceRelativePath'
+import { requireRegisteredLocalLibraryPath } from './pcTargetLibrary'
 import type { DbTrack } from '@shared/types/db'
 import type { PickFolderResult } from '@shared/types/ipc-contract'
 import type {
@@ -82,6 +89,7 @@ import type {
   DeviceLibraryOptions,
   DeviceLibraryResult,
   DeviceMusicRootPickResult,
+  DeviceRootReference,
   DeviceOverviewResult,
   DevicePlaylistSummary,
   DevicePendingJournal,
@@ -124,6 +132,8 @@ const DEVICE_STATE_VERSION = 1
 const DEFAULT_SYNC_MODE: DeviceSyncMode = 'bidirectional_safe'
 const VOLUME_MONITOR_INTERVAL_MS = 5000
 const TEXT_PROBE_LIMIT = 16 * 1024
+const MAX_YAML_BYTES = 8 * 1024 * 1024
+const MAX_JOURNAL_STEPS = 100_000
 
 function yieldToEventLoop(): Promise<void> {
   return new Promise(resolve => setImmediate(resolve))
@@ -282,6 +292,12 @@ interface SyncJournalYaml {
   result?: DeviceSyncApplyResult
 }
 
+interface PendingJournalEntry {
+  path: string
+  journal: SyncJournalYaml
+  trusted: boolean
+}
+
 interface DeviceCopyArtworkOutcome {
   optimized: boolean
   bytesSaved: number
@@ -338,6 +354,10 @@ function keyForRelativePath(relPath: string): string {
     .toLowerCase()
 }
 
+function isCloudSourcePath(path: string): boolean {
+  return path.startsWith('onedrive://')
+}
+
 function buildReusableDeviceTrackMetadata(state: LibraryStateYaml | null): Map<string, DeviceScanTrackMetadata> {
   const out = new Map<string, DeviceScanTrackMetadata>()
   if (!state?.device?.tracks) return out
@@ -388,7 +408,10 @@ function tracksChangedSince(tracks: Array<{ key: string, dateModified: string | 
 }
 
 function idForValue(value: string): string {
-  return keyForRelativePath(value).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'item'
+  const normalized = value.normalize('NFC')
+  const slug = keyForRelativePath(normalized).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'item'
+  const digest = createHash('sha256').update(normalized).digest('hex').slice(0, 10)
+  return `${slug}-${digest}`
 }
 
 function isInside(parent: string, child: string): boolean {
@@ -399,6 +422,33 @@ function isInside(parent: string, child: string): boolean {
 function assertInside(parent: string, child: string): void {
   if (!isInside(parent, child)) {
     throw new Error(`Refusing to operate outside ${parent}`)
+  }
+}
+
+async function assertNoSymlinkTraversal(parent: string, child: string): Promise<void> {
+  const root = resolve(parent)
+  const target = resolve(child)
+  assertInside(root, target)
+
+  const rootInfo = await lstat(root)
+  if (rootInfo.isSymbolicLink()) throw new Error(`Refusing symlink root: ${root}`)
+  const realRoot = await realpath(root)
+  const rel = relative(root, target)
+  let cursor = root
+  for (const segment of rel.split(sep).filter(Boolean)) {
+    cursor = join(cursor, segment)
+    try {
+      const info = await lstat(cursor)
+      if (info.isSymbolicLink()) throw new Error(`Refusing symlink path component: ${cursor}`)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') break
+      throw err
+    }
+  }
+
+  if (existsSync(target)) {
+    const realTarget = await realpath(target)
+    assertInside(realRoot, realTarget)
   }
 }
 
@@ -521,6 +571,10 @@ async function pathExists(p: string): Promise<boolean> {
 async function readYamlFile<T>(path: string): Promise<T | null> {
   if (!(await pathExists(path))) return null
   try {
+    const info = await stat(path)
+    if (!info.isFile() || info.size > MAX_YAML_BYTES) {
+      throw new Error(`YAML file is not a regular file or exceeds ${MAX_YAML_BYTES} bytes`)
+    }
     return parseYaml(await readFile(path, 'utf8')) as T
   } catch (err) {
     console.warn(`[devices] failed to read ${path}:`, (err as Error).message)
@@ -578,10 +632,15 @@ function isPortableWriteError(err: unknown): boolean {
 }
 
 async function writeYamlFile(path: string, payload: unknown): Promise<void> {
-  const tmp = `${path}.tmp`
+  const tmp = `${path}.${randomUUID()}.tmp`
   await mkdir(dirname(path), { recursive: true })
-  await writeFile(tmp, stringifyYaml(payload), 'utf8')
-  await rename(tmp, path)
+  try {
+    await writeFile(tmp, stringifyYaml(payload), 'utf8')
+    await rename(tmp, path)
+  } catch (err) {
+    await unlink(tmp).catch(() => undefined)
+    throw err
+  }
 }
 
 function emptyArtworkSummary(): DeviceArtworkOptimizationSummary {
@@ -620,11 +679,24 @@ function emptyCapacitySummary(error: string | null = null): DeviceCapacitySummar
 export class DeviceSyncService {
   private planCache = new Map<string, CachedPlan>()
   private activeDeviceScans = new Map<string, ActiveDeviceScan>()
+  private activeDeviceMutations = new Set<string>()
   private ignoredUnknownRoots = new Set<string>()
   private ignoredUnknownRootsLoaded = false
   private portableStateCache = new Map<string, DevicePortableState>()
   private volumeMonitorTimer: ReturnType<typeof setInterval> | null = null
   private lastVolumeSignature = ''
+
+  private async withDeviceMutation<T>(deviceId: string, operation: string, run: () => Promise<T>): Promise<T> {
+    if (this.activeDeviceMutations.has(deviceId)) {
+      throw new Error(`Another device operation is already running for ${deviceId} (${operation})`)
+    }
+    this.activeDeviceMutations.add(deviceId)
+    try {
+      return await run()
+    } finally {
+      this.activeDeviceMutations.delete(deviceId)
+    }
+  }
 
   async detectCandidates(): Promise<DeviceCandidate[]> {
     const roots = await this.candidateRoots()
@@ -634,6 +706,10 @@ export class DeviceSyncService {
       const hasCrateState = existsSync(join(rootPath, APP_STATE_DIR, 'device.yaml'))
       if (!hasRockbox && !hasCrateState) continue
       out.push({
+        token: getPathAuthorizationService().issue(rootPath, [
+          'device:connect',
+          'device:pick-music-root',
+        ]),
         rootPath,
         name: basename(rootPath) || rootPath,
         hasRockbox,
@@ -649,6 +725,7 @@ export class DeviceSyncService {
     const libraryRoots = getRepos()
       .folders
       .list()
+      .filter(folder => folder.provider === 'local' && folder.role === 'library')
       .map(folder => resolve(folder.path))
     const candidates: DeviceCandidate[] = []
     const unknownVolumes: DeviceUnknownVolume[] = []
@@ -661,6 +738,10 @@ export class DeviceSyncService {
       const hasCrateState = await pathExists(join(normalizedRoot, APP_STATE_DIR, 'device.yaml'))
       if (hasRockbox || hasCrateState) {
         candidates.push({
+          token: getPathAuthorizationService().issue(normalizedRoot, [
+            'device:connect',
+            'device:pick-music-root',
+          ]),
           rootPath: normalizedRoot,
           name: basename(normalizedRoot) || normalizedRoot,
           hasRockbox,
@@ -673,6 +754,12 @@ export class DeviceSyncService {
 
       if (!this.ignoredUnknownRoots.has(normalizedRoot)) {
         unknownVolumes.push({
+          token: getPathAuthorizationService().issue(normalizedRoot, [
+            'library:add',
+            'device:connect',
+            'device:pick-music-root',
+            'device:ignore',
+          ]),
           rootPath: normalizedRoot,
           name: basename(normalizedRoot) || normalizedRoot,
         })
@@ -686,8 +773,9 @@ export class DeviceSyncService {
     }
   }
 
-  async ignoreVolume(rootPath: string): Promise<DeviceVolumeSnapshot> {
+  async ignoreVolume(token: string): Promise<DeviceVolumeSnapshot> {
     await this.loadIgnoredUnknownRoots()
+    const rootPath = getPathAuthorizationService().resolve(token, 'device:ignore', { consume: true })
     this.ignoredUnknownRoots.add(resolve(rootPath))
     await this.saveIgnoredUnknownRoots()
     return this.publishVolumeSnapshot(true)
@@ -760,11 +848,17 @@ export class DeviceSyncService {
 
   private async saveIgnoredUnknownRoots(): Promise<void> {
     const target = this.ignoredVolumesPath()
+    const temp = `${target}.tmp-${randomUUID()}`
     await mkdir(dirname(target), { recursive: true })
-    await writeFile(target, JSON.stringify({
-      version: IGNORED_VOLUMES_SETTINGS_VERSION,
-      ignoredUnknownRoots: [...this.ignoredUnknownRoots].sort(),
-    }, null, 2), 'utf8')
+    try {
+      await writeFile(temp, JSON.stringify({
+        version: IGNORED_VOLUMES_SETTINGS_VERSION,
+        ignoredUnknownRoots: [...this.ignoredUnknownRoots].sort(),
+      }, null, 2), { encoding: 'utf8', flag: 'wx' })
+      await rename(temp, target)
+    } finally {
+      await rm(temp, { force: true }).catch(() => undefined)
+    }
   }
 
   async pickRoot(): Promise<PickFolderResult> {
@@ -773,13 +867,25 @@ export class DeviceSyncService {
       properties: ['openDirectory'],
     })
     if (result.canceled || result.filePaths.length === 0) {
-      return { canceled: true, path: null }
+      return { canceled: true, token: null, displayPath: null }
     }
-    return { canceled: false, path: result.filePaths[0] }
+    const displayPath = resolve(result.filePaths[0])
+    const token = getPathAuthorizationService().issue(displayPath, [
+      'device:connect',
+      'device:pick-music-root',
+    ])
+    return { canceled: false, token, displayPath }
   }
 
-  async pickMusicRoot(rootPath: string, currentMusicRoot?: string): Promise<DeviceMusicRootPickResult> {
-    const root = resolve(rootPath)
+  async pickMusicRoot(
+    reference: DeviceRootReference,
+    currentMusicRoot?: string,
+  ): Promise<DeviceMusicRootPickResult> {
+    const root = resolve(
+      'token' in reference
+        ? getPathAuthorizationService().resolve(reference.token, 'device:pick-music-root')
+        : (await this.requireDevice(reference.deviceId)).root_path,
+    )
     const rootStats = await stat(root)
     if (!rootStats.isDirectory()) throw new Error('Device root must be a directory')
 
@@ -791,7 +897,7 @@ export class DeviceSyncService {
       properties: ['openDirectory', 'createDirectory'],
     })
     if (result.canceled || result.filePaths.length === 0) {
-      return { canceled: true, absolutePath: null, musicRoot: null }
+      return { canceled: true, displayPath: null, musicRoot: null }
     }
 
     const absolutePath = resolve(result.filePaths[0])
@@ -799,7 +905,7 @@ export class DeviceSyncService {
     const relativePath = toPosixRelative(root, absolutePath)
     return {
       canceled: false,
-      absolutePath,
+      displayPath: absolutePath,
       musicRoot: relativePath === '' ? '.' : sanitizeMusicRoot(relativePath),
     }
   }
@@ -813,7 +919,11 @@ export class DeviceSyncService {
   }
 
   async connect(payload: DeviceConnectPayload): Promise<DeviceRecord> {
-    const rootPath = resolve(payload.rootPath)
+    const rootPath = getPathAuthorizationService().resolve(
+      payload.token,
+      'device:connect',
+      { consume: true },
+    )
     const rootStats = await stat(rootPath)
     if (!rootStats.isDirectory()) throw new Error('Device root must be a directory')
 
@@ -831,9 +941,18 @@ export class DeviceSyncService {
     const musicRoot = sanitizeMusicRoot(payload.musicRoot ?? existingDevice?.musicRoot ?? existingRootRow?.music_root ?? '.')
     const defaultMode = validateSyncMode(payload.defaultMode ?? existingDevice?.defaultSyncMode ?? existingRootRow?.sync_mode)
     const syncBase = validateSyncBase(existingRootRow?.sync_base ?? 'review')
-    const pcTargetPath = resolve(
-      payload.pcTargetPath ?? existingMachine?.pcTargetPath ?? existingRootRow?.pc_target_path ?? this.defaultPcTargetPath(name),
-    )
+    const requestedLibrary = payload.sourceLibraryIds
+      ?.map(id => getRepos().folders.getById(id))
+      .find((folder): folder is NonNullable<typeof folder> =>
+        folder?.provider === 'local' && folder.role === 'library',
+      )
+    const pcTargetPath = payload.pcTargetPath !== undefined
+      ? this.registeredLibraryPath(payload.pcTargetPath)
+      : existingRootRow?.pc_target_path
+        ? this.registeredLibraryPath(existingRootRow.pc_target_path)
+        : requestedLibrary?.path
+          ? this.registeredLibraryPath(requestedLibrary.path)
+          : (() => { throw new Error('Choose a registered library as the PC destination') })()
     const artworkMaxEdge = clampDeviceArtworkEdge(
       existingDevice?.artworkMaxEdge ?? existingRootRow?.artwork_max_edge ?? payload.artworkMaxEdge,
     )
@@ -914,8 +1033,8 @@ export class DeviceSyncService {
       ? row.music_root
       : sanitizeMusicRoot(settings.musicRoot)
     const pcTargetPath = settings.pcTargetPath === undefined
-      ? row.pc_target_path
-      : resolve(settings.pcTargetPath.trim() || row.pc_target_path)
+      ? this.registeredLibraryPath(row.pc_target_path)
+      : this.registeredLibraryPath(settings.pcTargetPath.trim() || row.pc_target_path)
     await this.ensureDeviceMusicRoot(row.root_path, musicRoot)
     const updatedAt = nowIso()
     const stateDir = join(row.root_path, APP_STATE_DIR)
@@ -998,6 +1117,19 @@ export class DeviceSyncService {
       summary: scan.summary,
       storage,
     }
+  }
+
+  async resolvePlaybackTrack(deviceId: string, trackKey: string): Promise<{ path: string; duration: number }> {
+    const row = await this.requireDevice(deviceId)
+    await this.assertDeviceIdentity(row)
+    const normalizedKey = keyForRelativePath(trackKey)
+    if (!normalizedKey) throw new Error('Device playback track key is required')
+    const scan = await this.scanDeviceRow(row, false)
+    const matches = scan.tracks.filter(track => track.key === normalizedKey)
+    if (matches.length !== 1) throw new Error('Device playback track is missing or ambiguous')
+    const track = matches[0]
+    await assertNoSymlinkTraversal(this.deviceMusicRoot(row), track.absolutePath)
+    return { path: track.absolutePath, duration: track.duration }
   }
 
   // Read-only artwork analysis for the device "Optimizar" section. Scans every
@@ -1105,72 +1237,70 @@ export class DeviceSyncService {
     deviceId: string,
     selection?: DeviceArtworkOptimizationSelection,
   ): Promise<DeviceArtworkOptimizationSummary> {
-    const row = await this.requireDevice(deviceId)
-    await this.assertPortableStateWritable(row)
-    const deviceMusicRoot = this.deviceMusicRoot(row)
-    const selectedDeviceFiles = selection
-      ? resolveArtworkOptimizationFiles(deviceMusicRoot, selection)
-      : undefined
-    const startedAt = nowIso()
-    const plan: DeviceSyncPlan = {
-      id: randomUUID(),
-      deviceId: row.id,
-      deviceName: row.name,
-      mode: row.sync_mode,
-      createdAt: startedAt,
-      pcTargetPath: row.pc_target_path,
-      actions: [],
-      summary: summaryFor([], row.track_count, row.track_count),
-      deviceIndexWarning: null,
-    }
-    const journal = this.createSyncJournal(
-      randomUUID(),
-      plan,
-      row.root_path,
-      deviceMusicRoot,
-      startedAt,
-      false,
-    )
-    const journalPath = this.journalPath(row.root_path, journal.id)
-
-    try {
-      await writeYamlFile(journalPath, journal)
-    } catch (err) {
-      throw this.syncPortableWriteError(err)
-    }
-
-    try {
-      await this.optimizeArtworkForJournal(
+    return this.withDeviceMutation(deviceId, 'optimize artwork', async () => {
+      const row = await this.requireDevice(deviceId)
+      await this.assertDeviceIdentity(row)
+      await this.assertPortableStateWritable(row)
+      const deviceMusicRoot = this.deviceMusicRoot(row)
+      const selectedDeviceFiles = selection
+        ? resolveArtworkOptimizationFiles(deviceMusicRoot, selection)
+        : undefined
+      const startedAt = nowIso()
+      const plan: DeviceSyncPlan = {
+        id: randomUUID(),
+        deviceId: row.id,
+        deviceName: row.name,
+        mode: row.sync_mode,
+        createdAt: startedAt,
+        pcTargetPath: row.pc_target_path,
+        actions: [],
+        summary: summaryFor([], row.track_count, row.track_count),
+        deviceIndexWarning: null,
+      }
+      const journal = this.createSyncJournal(
+        randomUUID(),
         plan,
+        row.root_path,
         deviceMusicRoot,
-        row.artwork_max_edge,
-        journalPath,
-        journal,
-        selectedDeviceFiles,
+        startedAt,
+        false,
       )
-      const summary = this.artworkSummaryFromJournal(journal)
-      const completedAt = nowIso()
-      journal.status = 'completed'
-      journal.phase = 'complete'
-      journal.completedAt = completedAt
-      journal.updatedAt = completedAt
-      await writeYamlFile(journalPath, journal).catch(() => undefined)
-      await unlink(journalPath).catch(() => undefined)
-      getDatabase()
-        .prepare(`UPDATE devices SET last_seen_at = ? WHERE id = ?`)
-        .run(completedAt, row.id)
-      await this.publishVolumeSnapshot(true)
-      this.broadcastSyncProgress(plan, 'complete', journal.artwork.length, journal.artwork.length)
-      return summary
-    } catch (err) {
-      const completedAt = nowIso()
-      journal.status = 'failed'
-      journal.phase = 'complete'
-      journal.completedAt = completedAt
-      journal.updatedAt = completedAt
-      await writeYamlFile(journalPath, journal).catch(() => undefined)
-      throw err
-    }
+      const journalPath = this.journalPath(row.id, journal.id)
+      await writeYamlFile(journalPath, journal)
+
+      try {
+        await this.optimizeArtworkForJournal(
+          plan,
+          deviceMusicRoot,
+          row.artwork_max_edge,
+          journalPath,
+          journal,
+          selectedDeviceFiles,
+        )
+        const summary = this.artworkSummaryFromJournal(journal)
+        const completedAt = nowIso()
+        journal.status = 'completed'
+        journal.phase = 'complete'
+        journal.completedAt = completedAt
+        journal.updatedAt = completedAt
+        await writeYamlFile(journalPath, journal).catch(() => undefined)
+        await unlink(journalPath).catch(() => undefined)
+        getDatabase()
+          .prepare(`UPDATE devices SET last_seen_at = ? WHERE id = ?`)
+          .run(completedAt, row.id)
+        await this.publishVolumeSnapshot(true)
+        this.broadcastSyncProgress(plan, 'complete', journal.artwork.length, journal.artwork.length)
+        return summary
+      } catch (err) {
+        const completedAt = nowIso()
+        journal.status = 'failed'
+        journal.phase = 'complete'
+        journal.completedAt = completedAt
+        journal.updatedAt = completedAt
+        await writeYamlFile(journalPath, journal).catch(() => undefined)
+        throw err
+      }
+    })
   }
 
   // Collapses a file's embedded pictures into a single track-level verdict: the
@@ -1302,7 +1432,7 @@ export class DeviceSyncService {
     }
     const rockboxRoot = join(row.root_path, ROCKBOX_DIR)
     const target = fromPosix(rockboxRoot, parts.join('/'))
-    assertInside(resolve(rockboxRoot), resolve(target))
+    await assertNoSymlinkTraversal(rockboxRoot, target)
     if (!(await pathExists(target))) throw new Error('Rockbox theme asset was not found')
     return target
   }
@@ -1314,12 +1444,18 @@ export class DeviceSyncService {
     const theme = before.themes.find(item => item.id === themeId)
     if (!theme) throw new Error('Rockbox theme was not found')
 
+    const referencedByOtherThemes = new Set(
+      before.themes
+        .filter(item => item.id !== themeId)
+        .flatMap(item => [item.configPath, item.wpsPath ?? '', item.sbsPath ?? '', item.fmsPath ?? ''])
+        .filter(Boolean),
+    )
     const candidatePaths = new Set<string>([
       theme.configPath,
       theme.wpsPath ?? '',
       theme.sbsPath ?? '',
       theme.fmsPath ?? '',
-    ].filter(Boolean))
+    ].filter(path => Boolean(path) && !referencedByOtherThemes.has(path)))
     const themeAssetDir = `wps/${sanitizeThemeName(theme.name)}`
     if (await pathExists(fromPosix(rockboxRoot, themeAssetDir))) candidatePaths.add(themeAssetDir)
 
@@ -1364,7 +1500,9 @@ export class DeviceSyncService {
   async planSync(request: DeviceSyncPlanRequest): Promise<DeviceSyncPlan> {
     const row = await this.requireDevice(request.deviceId)
     const mode = validateSyncMode(request.mode)
-    const pcTargetPath = resolve(request.pcTargetPath ?? row.pc_target_path)
+    const pcTargetPath = request.pcTargetPath === undefined
+      ? this.registeredLibraryPath(row.pc_target_path)
+      : this.registeredLibraryPath(request.pcTargetPath)
     const deviceMusicRoot = this.deviceMusicRoot(row)
     const libraryIds = this.deviceLibraryIds(row.id)
     const fullSync = request.fullSync === true
@@ -1379,6 +1517,8 @@ export class DeviceSyncService {
         reusableMetadataByKey: reusableMetadata,
       }),
     ])
+    this.assertUniqueTrackKeys(pcTracks, 'PC library')
+    this.assertUniqueTrackKeys(deviceScan.tracks, 'device')
 
     const changedPcTracks = useIncremental
       ? tracksChangedSince(pcTracks, lastSyncAtMs)
@@ -1523,76 +1663,89 @@ export class DeviceSyncService {
     const cached = this.planCache.get(planId)
     if (!cached) throw new Error('Sync plan expired. Create a new plan before applying.')
 
-    const { plan, deviceRoot, deviceMusicRoot } = cached
-    const row = await this.requireDevice(plan.deviceId)
-    await this.assertPortableStateWritable(row)
-    const executablePlan = this.planForSelection(plan, selection, deviceMusicRoot)
-    const writeCompleteState = this.selectionCoversPlan(plan, selection)
-    const runId = randomUUID()
-    const startedAt = nowIso()
-    const journal = this.createSyncJournal(
-      runId,
-      executablePlan,
-      deviceRoot,
-      deviceMusicRoot,
-      startedAt,
-      writeCompleteState,
-    )
-    const journalPath = this.journalPath(deviceRoot, journal.id)
-    try {
+    const { plan } = cached
+    return this.withDeviceMutation(plan.deviceId, 'sync', async () => {
+      const row = await this.requireDevice(plan.deviceId)
+      const validatedPlan: DeviceSyncPlan = {
+        ...plan,
+        pcTargetPath: this.registeredLibraryPath(plan.pcTargetPath),
+      }
+      await this.assertDeviceIdentity(row)
+      await this.assertPortableStateWritable(row)
+      const deviceMusicRoot = this.deviceMusicRoot(row)
+      if (resolve(cached.deviceRoot) !== resolve(row.root_path)) {
+        throw new Error('Device mount path changed after planning. Create a new sync plan.')
+      }
+      const executablePlan = this.planForSelection(validatedPlan, selection, deviceMusicRoot)
+      await this.assertPlanCapacity(row, executablePlan)
+      const writeCompleteState = this.selectionCoversPlan(plan, selection)
+      const runId = randomUUID()
+      const startedAt = nowIso()
+      const journal = this.createSyncJournal(
+        runId,
+        executablePlan,
+        row.root_path,
+        deviceMusicRoot,
+        startedAt,
+        writeCompleteState,
+      )
+      const journalPath = this.journalPath(plan.deviceId, journal.id)
       await writeYamlFile(journalPath, journal)
-    } catch (err) {
-      throw this.syncPortableWriteError(err)
-    }
-    this.upsertSyncRun(runId, executablePlan, startedAt)
+      this.upsertSyncRun(runId, executablePlan, startedAt)
 
-    const result = await this.executeJournal(
-      row,
-      executablePlan,
-      deviceRoot,
-      deviceMusicRoot,
-      journalPath,
-      journal,
-      cached.deviceFiles,
-    )
-    if (result.failed.length === 0) this.planCache.delete(plan.id)
-    return result
+      const result = await this.executeJournal(
+        row,
+        executablePlan,
+        row.root_path,
+        deviceMusicRoot,
+        journalPath,
+        journal,
+        cached.deviceFiles,
+      )
+      if (result.failed.length === 0) this.planCache.delete(plan.id)
+      return result
+    })
   }
 
   async listPendingJournals(): Promise<DevicePendingJournal[]> {
     const journals = await this.loadPendingJournals()
     return journals
-      .map(entry => this.toPendingJournal(entry.journal))
+      .map(entry => this.toPendingJournal(entry.journal, entry.trusted))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   }
 
   async resumeJournal(journalId: string): Promise<DeviceSyncApplyResult> {
     const found = await this.findPendingJournal(journalId)
     if (!found) throw new Error('Pending sync journal was not found')
-
-    const row = await this.requireDevice(found.journal.plan.deviceId)
-    const deviceMusicRoot = this.deviceMusicRoot(row)
-    const journal = found.journal
-    journal.status = 'running'
-    journal.phase = null
-    journal.deviceRoot = row.root_path
-    journal.deviceMusicRoot = deviceMusicRoot
-    journal.updatedAt = nowIso()
-    for (const step of [...journal.actions, ...journal.artwork]) {
-      if (step.status === 'running') step.status = 'pending'
+    if (!found.trusted) {
+      throw new Error('This legacy device journal is untrusted. Discard it and create a new sync plan.')
     }
-    await writeYamlFile(found.path, journal)
-    this.upsertSyncRun(journal.runId, journal.plan, journal.startedAt)
 
-    return this.executeJournal(
-      row,
-      journal.plan,
-      row.root_path,
-      deviceMusicRoot,
-      found.path,
-      journal,
-      undefined,
-    )
+    const deviceId = found.journal.plan.deviceId
+    return this.withDeviceMutation(deviceId, 'resume', async () => {
+      const row = await this.requireDevice(deviceId)
+      await this.assertDeviceIdentity(row)
+      const deviceMusicRoot = this.deviceMusicRoot(row)
+      const journal = await this.rebuildJournalForResume(found.journal, row)
+      await this.assertPlanCapacity(row, journal.plan)
+      journal.status = 'running'
+      journal.phase = null
+      journal.deviceRoot = row.root_path
+      journal.deviceMusicRoot = deviceMusicRoot
+      journal.updatedAt = nowIso()
+      await writeYamlFile(found.path, journal)
+      this.upsertSyncRun(journal.runId, journal.plan, journal.startedAt)
+
+      return this.executeJournal(
+        row,
+        journal.plan,
+        row.root_path,
+        deviceMusicRoot,
+        found.path,
+        journal,
+        undefined,
+      )
+    })
   }
 
   async discardJournal(journalId: string): Promise<void> {
@@ -1636,8 +1789,12 @@ export class DeviceSyncService {
     return [...new Set(roots.map(root => resolve(root)))]
   }
 
-  private journalPath(deviceRoot: string, journalId: string): string {
-    return join(deviceRoot, APP_STATE_DIR, JOURNAL_DIR, `sync-${journalId}.yaml`)
+  private hostJournalDir(deviceId: string): string {
+    return join(app.getPath('userData'), 'device-sync-journals', deviceId)
+  }
+
+  private journalPath(deviceId: string, journalId: string): string {
+    return join(this.hostJournalDir(deviceId), `sync-${journalId}.yaml`)
   }
 
   private createSyncJournal(
@@ -1680,41 +1837,111 @@ export class DeviceSyncService {
       journal &&
       journal.version === DEVICE_STATE_VERSION &&
       journal.kind === 'device-sync' &&
+      typeof journal.id === 'string' &&
+      typeof journal.runId === 'string' &&
+      journal.plan &&
+      typeof journal.plan.deviceId === 'string' &&
+      Array.isArray(journal.plan.actions) &&
+      Array.isArray(journal.actions) &&
+      journal.actions.length <= MAX_JOURNAL_STEPS &&
+      (journal.artwork === undefined || (Array.isArray(journal.artwork) && journal.artwork.length <= MAX_JOURNAL_STEPS)) &&
       (journal.status === 'running' || journal.status === 'failed')
     )
   }
 
-  private async loadPendingJournals(): Promise<Array<{ path: string; journal: SyncJournalYaml }>> {
-    const out: Array<{ path: string; journal: SyncJournalYaml }> = []
-    for (const row of this.listDeviceRows()) {
-      if (!existsSync(row.root_path)) continue
-      const dir = join(row.root_path, APP_STATE_DIR, JOURNAL_DIR)
-      if (!existsSync(dir)) continue
-      let entries
-      try {
-        entries = await readdir(dir, { withFileTypes: true })
-      } catch {
-        continue
+  private async readJournalDirectory(dir: string, trusted: boolean): Promise<PendingJournalEntry[]> {
+    const out: PendingJournalEntry[] = []
+    if (!existsSync(dir)) return out
+    let entries
+    try {
+      entries = await readdir(dir, { withFileTypes: true })
+    } catch {
+      return out
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.startsWith('sync-') || !entry.name.endsWith('.yaml')) continue
+      const path = join(dir, entry.name)
+      const journal = await readYamlFile<SyncJournalYaml>(path)
+      if (!this.isPendingJournal(journal)) continue
+      journal.artwork ??= []
+      if (trusted && sanitizeLegacyDeviceSyncJournal(journal)) {
+        await writeYamlFile(path, journal).catch(() => undefined)
       }
-      for (const entry of entries) {
-        if (!entry.isFile() || !entry.name.startsWith('sync-') || !entry.name.endsWith('.yaml')) continue
-        const path = join(dir, entry.name)
-        const journal = await readYamlFile<SyncJournalYaml>(path)
-        if (this.isPendingJournal(journal)) {
-          journal.artwork ??= []
-          if (sanitizeLegacyDeviceSyncJournal(journal)) {
-            await writeYamlFile(path, journal).catch(() => undefined)
-          }
-          out.push({ path, journal })
+      out.push({ path, journal, trusted })
+    }
+    return out
+  }
+
+  private async loadPendingJournals(): Promise<PendingJournalEntry[]> {
+    const out: PendingJournalEntry[] = []
+    for (const row of this.listDeviceRows()) {
+      out.push(...await this.readJournalDirectory(this.hostJournalDir(row.id), true))
+      if (existsSync(row.root_path)) {
+        const legacy = await this.readJournalDirectory(join(row.root_path, APP_STATE_DIR, JOURNAL_DIR), false)
+        for (const item of legacy) {
+          if (!out.some(existing => existing.journal.id === item.journal.id)) out.push(item)
         }
       }
     }
     return out
   }
 
-  private async findPendingJournal(journalId: string): Promise<{ path: string; journal: SyncJournalYaml } | null> {
+  private async findPendingJournal(journalId: string): Promise<PendingJournalEntry | null> {
     const pending = await this.loadPendingJournals()
     return pending.find(entry => entry.journal.id === journalId || entry.journal.runId === journalId) ?? null
+  }
+
+  private async rebuildJournalForResume(journal: SyncJournalYaml, row: DeviceRow): Promise<SyncJournalYaml> {
+    const pendingKeys = new Set(
+      journal.actions
+        .filter(step => step.status !== 'completed')
+        .map(step => `${step.kind}:${keyForRelativePath(step.relativePath)}`),
+    )
+    const fresh = await this.planSync({
+      deviceId: row.id,
+      mode: journal.plan.mode,
+      pcTargetPath: journal.plan.pcTargetPath,
+      fullSync: true,
+    })
+    if (fresh.deviceIndexWarning) throw new Error(fresh.deviceIndexWarning)
+
+    const freshByRelative = new Map<string, DeviceSyncAction[]>()
+    for (const action of fresh.actions) {
+      const key = keyForRelativePath(action.relativePath)
+      const list = freshByRelative.get(key) ?? []
+      list.push(action)
+      freshByRelative.set(key, list)
+    }
+
+    const actions = fresh.actions.filter(action => pendingKeys.has(`${action.kind}:${keyForRelativePath(action.relativePath)}`))
+    for (const key of pendingKeys) {
+      if (actions.some(action => `${action.kind}:${keyForRelativePath(action.relativePath)}` === key)) continue
+      const relativeKey = key.slice(key.indexOf(':') + 1)
+      const changed = freshByRelative.get(relativeKey)
+      if (changed?.some(action => action.kind === 'skip_conflict')) {
+        throw new Error(`Sync state changed for ${changed[0].relativePath}; review a new plan before resuming.`)
+      }
+    }
+
+    const rebuiltPlan: DeviceSyncPlan = {
+      ...fresh,
+      actions,
+      summary: summaryFor(actions, fresh.summary.pcBefore, fresh.summary.deviceBefore),
+    }
+    return {
+      ...journal,
+      plan: rebuiltPlan,
+      writeCompleteState: false,
+      actions: actions.map(action => ({
+        id: action.id,
+        kind: action.kind,
+        relativePath: action.relativePath,
+        sourcePath: action.sourcePath,
+        destinationPath: action.destinationPath,
+        status: 'pending',
+      })),
+      artwork: journal.plan.actions.length === 0 ? journal.artwork : [],
+    }
   }
 
   private artworkSummaryFromJournal(journal: SyncJournalYaml): DeviceArtworkOptimizationSummary {
@@ -1758,7 +1985,7 @@ export class DeviceSyncService {
     this.setJournalStepCompleted(journal, step, outcome.optimized ? 'optimized' : 'skipped', outcome.bytesSaved)
   }
 
-  private toPendingJournal(journal: SyncJournalYaml): DevicePendingJournal {
+  private toPendingJournal(journal: SyncJournalYaml, trusted: boolean): DevicePendingJournal {
     const allSteps = [...journal.actions, ...journal.artwork]
     const current = allSteps.find(step => step.status === 'running') ?? allSteps.find(step => step.status === 'failed')
     return {
@@ -1777,6 +2004,8 @@ export class DeviceSyncService {
       failedActions: allSteps.filter(step => step.status === 'failed').length,
       currentPath: current?.relativePath ?? null,
       artwork: this.artworkSummaryFromJournal(journal),
+      resumeDisposition: trusted ? 'ready' : 'legacy_blocked',
+      blockedReason: trusted ? null : 'Legacy journal stored on removable media must be discarded and replanned.',
     }
   }
 
@@ -1854,6 +2083,7 @@ export class DeviceSyncService {
 
       let failed = this.failedSteps(journal)
       if (failed.length === 0) {
+        this.registeredLibraryPath(plan.pcTargetPath)
         this.broadcastSyncProgress(plan, 'refreshing', journal.actions.length, journal.actions.length)
         if (copiedIntoPcTarget && plan.pcTargetPath && !journal.pcTargetImported) {
           await this.importPcTarget(plan.pcTargetPath)
@@ -1882,6 +2112,7 @@ export class DeviceSyncService {
       }
 
       if (failed.length === 0) {
+        this.registeredLibraryPath(plan.pcTargetPath)
         this.broadcastSyncProgress(plan, 'writing_state', journal.actions.length, journal.actions.length)
         await this.writeSuccessfulState(row, plan, result)
         this.finishSyncRun(journal.runId, 'success', completedAt, result)
@@ -2818,6 +3049,50 @@ export class DeviceSyncService {
     return this.refreshDeviceRockboxState(row)
   }
 
+  private assertUniqueTrackKeys(tracks: Array<{ key: string; relativePath: string }>, label: string): void {
+    const byKey = new Map<string, string>()
+    for (const track of tracks) {
+      const previous = byKey.get(track.key)
+      if (previous && previous !== track.relativePath) {
+        throw new Error(`Path collision in ${label}: "${previous}" and "${track.relativePath}" normalize to the same sync key.`)
+      }
+      byKey.set(track.key, track.relativePath)
+    }
+  }
+
+  private async assertDeviceIdentity(row: DeviceRow): Promise<void> {
+    const device = await readYamlFile<DeviceYaml>(join(row.root_path, APP_STATE_DIR, 'device.yaml'))
+    if (!device || device.deviceId !== row.id) {
+      throw new Error('The mounted volume is not the device used to create this sync plan.')
+    }
+  }
+
+  private async assertPlanCapacity(row: DeviceRow, plan: DeviceSyncPlan): Promise<void> {
+    const deviceBytes = plan.actions
+      .filter(action => action.kind === 'copy_pc_to_device' || action.kind === 'replace_device')
+      .reduce((total, action) => total + Math.max(0, action.bytes), 0)
+    const pcBytes = plan.actions
+      .filter(action => action.kind === 'copy_device_to_pc' || action.kind === 'replace_pc')
+      .reduce((total, action) => total + Math.max(0, action.bytes), 0)
+    await this.assertFilesystemCapacity(row.root_path, deviceBytes, 'device')
+    await this.assertFilesystemCapacity(
+      this.registeredLibraryPath(plan.pcTargetPath),
+      pcBytes,
+      'PC destination',
+    )
+  }
+
+  private async assertFilesystemCapacity(root: string, bytesToCopy: number, label: string): Promise<void> {
+    if (!Number.isFinite(bytesToCopy) || bytesToCopy <= 0) return
+    let probe = resolve(root)
+    while (!(await pathExists(probe)) && dirname(probe) !== probe) probe = dirname(probe)
+    const info = await statfs(probe)
+    const freeBytes = Number(info.bavail) * Number(info.bsize)
+    if (Number.isFinite(freeBytes) && bytesToCopy > freeBytes) {
+      throw new Error(`Not enough free space on ${label}: need ${bytesToCopy} bytes, have ${freeBytes}.`)
+    }
+  }
+
   private async refreshDeviceRockboxState(row: DeviceRow): Promise<DeviceRow> {
     if (!(await pathExists(row.root_path))) return row
     const hasRockbox = (await pathExists(join(row.root_path, ROCKBOX_DIR))) ? 1 : 0
@@ -2946,12 +3221,14 @@ export class DeviceSyncService {
 
   private async pcLibraryTracks(folderIds?: Set<number>): Promise<PcTrack[]> {
     const repos = getRepos()
-    const allFolders = repos.folders.list()
+    const allFolders = repos.folders.list().filter(folder => folder.role === 'library')
     // Scope to the device's selected libraries; empty/undefined = every library.
     const folders =
       folderIds && folderIds.size > 0
         ? allFolders.filter(folder => folderIds.has(folder.id))
         : allFolders
+    const locked = folders.find(folder => isLibraryLocationMigrationLocked(folder.id))
+    if (locked) throw new Error(`La biblioteca “${locked.name}” está pausada por una migración activa.`)
     const folderById = new Map(folders.map(folder => [folder.id, folder]))
     const dbTracks =
       folderIds && folderIds.size > 0
@@ -2962,7 +3239,7 @@ export class DeviceSyncService {
     for (const track of dbTracks) {
       const folder = folderById.get(track.folder_id)
       if (!folder) continue
-      const rawRel = toPosixRelative(folder.path, track.path)
+      const rawRel = this.sourceRelativePathFor(track, folder.path, folder.name)
       const key = keyForRelativePath(rawRel)
       rawRelCounts.set(key, (rawRelCounts.get(key) ?? 0) + 1)
     }
@@ -2972,7 +3249,7 @@ export class DeviceSyncService {
     for (const track of dbTracks) {
       const folder = folderById.get(track.folder_id)
       if (!folder) continue
-      const sourceRelativePath = toPosixRelative(folder.path, track.path)
+      const sourceRelativePath = this.sourceRelativePathFor(track, folder.path, folder.name)
       const rawKey = keyForRelativePath(sourceRelativePath)
       let relativePath = sourceRelativePath
       if ((rawRelCounts.get(rawKey) ?? 0) > 1) {
@@ -2991,6 +3268,17 @@ export class DeviceSyncService {
     }
 
     return tracks.sort((a, b) => a.relativePath.localeCompare(b.relativePath))
+  }
+
+  private sourceRelativePathFor(track: DbTrack, folderPath: string, folderName: string): string {
+    if (track.provider === 'onedrive') {
+      return cloudDeviceRelativePath({
+        remotePath: track.remote_path,
+        filename: track.filename,
+        folderName,
+      })
+    }
+    return toPosixRelative(folderPath, track.path)
   }
 
   private dbTrackToPcTrack(
@@ -3157,9 +3445,11 @@ export class DeviceSyncService {
       pcPath: pc?.absolutePath ?? null,
       pcRelativePath: pc?.relativePath ?? null,
       pcBytes: pc?.fileSize ?? null,
+      pcFingerprint: pc?.fingerprint ?? null,
       devicePath: device?.absolutePath ?? null,
       deviceRelativePath: device?.relativePath ?? null,
       deviceBytes: device?.fileSize ?? null,
+      deviceFingerprint: device?.fingerprint ?? null,
       sourcePath,
       destinationPath,
       bytes: kind === 'delete_device' || kind === 'delete_pc' || kind === 'skip_conflict'
@@ -3251,29 +3541,86 @@ export class DeviceSyncService {
       case 'copy_pc_to_device':
       case 'replace_device':
         if (!action.sourcePath || !action.destinationPath) throw new Error('Invalid copy action')
-        assertInside(ctx.deviceMusicRoot, resolve(action.destinationPath))
+        await this.assertPcSourceAllowed(action.sourcePath)
+        await assertNoSymlinkTraversal(ctx.deviceMusicRoot, action.destinationPath)
+        await this.revalidatePlannedFile(action.sourcePath, action.pcFingerprint, action.pcBytes, 'PC source')
+        if (action.kind === 'replace_device' && action.devicePath) {
+          await this.revalidatePlannedFile(action.devicePath, action.deviceFingerprint, action.deviceBytes, 'device destination')
+        }
         {
           return this.copyPcTrackToDevice(action, ctx.artworkMaxEdge)
         }
       case 'copy_device_to_pc':
         if (!action.sourcePath || !action.destinationPath) throw new Error('Invalid copy action')
-        assertInside(resolve(ctx.pcTargetPath), resolve(action.destinationPath))
+        await assertNoSymlinkTraversal(ctx.deviceMusicRoot, action.sourcePath)
+        await assertNoSymlinkTraversal(this.pcAllowedRoot(action.destinationPath, ctx.pcTargetPath), action.destinationPath)
+        await this.revalidatePlannedFile(action.sourcePath, action.deviceFingerprint, action.deviceBytes, 'device source')
         await this.copyPreservingMtime(action.sourcePath, action.destinationPath)
         return {}
       case 'replace_pc':
         if (!action.sourcePath || !action.destinationPath) throw new Error('Invalid copy action')
-        this.assertPcWriteAllowed(action.destinationPath, ctx.pcTargetPath)
+        await assertNoSymlinkTraversal(ctx.deviceMusicRoot, action.sourcePath)
+        await assertNoSymlinkTraversal(this.pcAllowedRoot(action.destinationPath, ctx.pcTargetPath), action.destinationPath)
+        await this.revalidatePlannedFile(action.sourcePath, action.deviceFingerprint, action.deviceBytes, 'device source')
+        if (action.pcPath) {
+          await this.revalidatePlannedFile(action.pcPath, action.pcFingerprint, action.pcBytes, 'PC destination')
+        }
         await this.copyPreservingMtime(action.sourcePath, action.destinationPath)
         return {}
       case 'delete_device':
+        if (action.devicePath) {
+          await assertNoSymlinkTraversal(ctx.deviceMusicRoot, action.devicePath)
+          await this.revalidatePlannedFile(action.devicePath, action.deviceFingerprint, action.deviceBytes, 'device delete target')
+        }
         await this.moveDeviceFileToTrash(ctx.deviceRoot, ctx.deviceMusicRoot, action.relativePath, ctx.runId)
         return {}
       case 'delete_pc':
         if (!action.sourcePath) throw new Error('Invalid delete action')
+        await this.assertPcSourceAllowed(action.sourcePath)
+        await this.revalidatePlannedFile(action.sourcePath, action.pcFingerprint, action.pcBytes, 'PC delete target')
         await this.trashPcFile(action.sourcePath, ctx.affectedPcFolderIds)
         return {}
       case 'skip_conflict':
         return {}
+    }
+  }
+
+  private async revalidatePlannedFile(
+    path: string,
+    expectedFingerprint: string | null | undefined,
+    expectedBytes: number | null | undefined,
+    label: string,
+  ): Promise<void> {
+    if (!expectedFingerprint) throw new Error(`${label} has no trusted planning fingerprint; create a new sync plan`)
+    if (isCloudSourcePath(path)) {
+      const track = getRepos().tracks.getByPath(path)
+      if (!track || track.provider !== 'onedrive') throw new Error(`${label} cloud track is no longer indexed`)
+      const actualFingerprint = trackFingerprint({
+        duration: track.duration,
+        title: track.title,
+        artist: track.artist,
+        album: track.album,
+        albumArtist: track.album_artist,
+        format: track.format,
+      })
+      if (actualFingerprint !== expectedFingerprint) {
+        throw new Error(`${label} changed after planning; create a new sync plan`)
+      }
+      if (expectedBytes != null && track.file_size !== expectedBytes) {
+        throw new Error(`${label} size changed after planning; create a new sync plan`)
+      }
+      return
+    }
+    const [metadata, info] = await Promise.all([
+      readTrackMetadata(path, { artwork: false }),
+      stat(path),
+    ])
+    const actualFingerprint = trackFingerprint(metadata)
+    if (actualFingerprint !== expectedFingerprint) {
+      throw new Error(`${label} changed after planning; create a new sync plan`)
+    }
+    if (expectedBytes != null && info.size !== expectedBytes) {
+      throw new Error(`${label} size changed after planning; create a new sync plan`)
     }
   }
 
@@ -3283,17 +3630,62 @@ export class DeviceSyncService {
   ): Promise<ApplyActionResult> {
     if (!action.sourcePath || !action.destinationPath) throw new Error('Invalid copy action')
 
+    if (isCloudSourcePath(action.sourcePath)) {
+      return this.withCloudSourceTempFile(action.sourcePath, localPath =>
+        this.copyLocalSourceToDevice(localPath, action.destinationPath!, artworkMaxEdge),
+      )
+    }
+    return this.copyLocalSourceToDevice(action.sourcePath, action.destinationPath, artworkMaxEdge)
+  }
+
+  private async copyLocalSourceToDevice(
+    sourcePath: string,
+    destinationPath: string,
+    artworkMaxEdge: number,
+  ): Promise<ApplyActionResult> {
+
     // Copiar PC→MP3 aplica siempre el límite de artwork: si la carátula embebida
     // del origen supera el máximo configurado, se copia ya reducida (no hay paso
     // posterior de optimización durante el sync).
-    const staged = this.sourceArtworkNeedsLimit(action.sourcePath, artworkMaxEdge)
-      ? await this.stageDeviceCopyWithArtworkLimit(action.sourcePath, artworkMaxEdge)
+    const staged = this.sourceArtworkNeedsLimit(sourcePath, artworkMaxEdge)
+      ? await this.stageDeviceCopyWithArtworkLimit(sourcePath, artworkMaxEdge)
       : null
     try {
-      await this.copyPreservingMtime(staged?.path ?? action.sourcePath, action.destinationPath, action.sourcePath)
+      await this.copyPreservingMtime(staged?.path ?? sourcePath, destinationPath, sourcePath)
       return { deviceArtwork: staged?.outcome ?? { optimized: false, bytesSaved: 0 } }
     } finally {
       await staged?.cleanup()
+    }
+  }
+
+  private async withCloudSourceTempFile<T>(
+    sourcePath: string,
+    run: (localPath: string) => Promise<T>,
+  ): Promise<T> {
+    const track = getRepos().tracks.getByPath(sourcePath)
+    if (!track) throw new Error(`Cloud source not found in library: ${sourcePath}`)
+    const cloud = await resolveCloudLoadOptions(track, getOneDriveClient())
+    if (!cloud) throw new Error(`Track is not backed by OneDrive: ${sourcePath}`)
+
+    const buffer = Buffer.allocUnsafe(cloud.cloudSizeBytes)
+    await getOneDriveClient().fetchFullIntoBuffer({
+      driveId: cloud.cloudRef.driveId,
+      itemId: cloud.cloudRef.itemId,
+      sizeBytes: cloud.cloudSizeBytes,
+      buffer,
+    })
+    const tempDir = await mkdtemp(join(tmpdir(), 'crate-device-cloud-'))
+    const tempPath = join(tempDir, sanitizeSegment(track.filename) || 'track')
+    try {
+      await writeFile(tempPath, buffer)
+      const modified = track.date_modified ? Date.parse(track.date_modified) : Number.NaN
+      if (Number.isFinite(modified)) {
+        const date = new Date(modified)
+        await utimes(tempPath, date, date)
+      }
+      return await run(tempPath)
+    } finally {
+      await rm(tempDir, { recursive: true, force: true })
     }
   }
 
@@ -3340,29 +3732,84 @@ export class DeviceSyncService {
   }
 
   private async copyPreservingMtime(source: string, destination: string, mtimeSource = source): Promise<void> {
-    await mkdir(dirname(destination), { recursive: true })
-    await copyFile(source, destination)
+    const destinationDir = dirname(destination)
+    const tempPath = join(destinationDir, `.${basename(destination)}.crate-copy-${randomUUID()}.tmp`)
+    const backupPath = `${destination}.crate-replaced-${randomUUID()}`
+    let backedUp = false
+    await mkdir(destinationDir, { recursive: true })
     try {
+      await copyFile(source, tempPath, fsConstants.COPYFILE_EXCL)
+      const [sourceInfo, tempInfo] = await Promise.all([stat(source), stat(tempPath)])
+      if (sourceInfo.size !== tempInfo.size) throw new Error('Copied file size does not match source')
       const sourceStat = await stat(mtimeSource)
-      await utimes(destination, sourceStat.atime, sourceStat.mtime)
+      await utimes(tempPath, sourceStat.atime, sourceStat.mtime)
+      if (existsSync(destination)) {
+        await rename(destination, backupPath)
+        backedUp = true
+      }
+      await rename(tempPath, destination)
+      if (backedUp) {
+        await rm(backupPath, { force: true }).catch(err => {
+          console.warn(`[devices] could not remove replaced backup ${backupPath}:`, (err as Error).message)
+        })
+      }
     } catch (err) {
-      console.warn(`[devices] utimes failed for ${destination}:`, (err as Error).message)
+      await rm(tempPath, { force: true }).catch(() => undefined)
+      if (backedUp && !existsSync(destination)) {
+        await rename(backupPath, destination).catch(() => undefined)
+      }
+      throw err
     }
   }
 
-  private assertPcWriteAllowed(destinationPath: string, pcTargetPath: string): void {
+  private pcAllowedRoot(destinationPath: string, pcTargetPath: string): string {
+    if (isCloudSourcePath(destinationPath)) {
+      throw new Error('Refusing to use a OneDrive identity as a PC filesystem destination')
+    }
+    const registeredTarget = this.registeredLibraryPath(pcTargetPath)
     const destination = resolve(destinationPath)
-    if (isInside(resolve(pcTargetPath), destination)) return
+    if (isInside(registeredTarget, destination)) return registeredTarget
     const folders = getRepos().folders.list()
-    if (folders.some(folder => isInside(resolve(folder.path), destination))) return
+    const folder = folders.find(item =>
+      item.provider === 'local' && item.role === 'library' && isInside(resolve(item.path), destination),
+    )
+    if (folder) return resolve(folder.path)
     throw new Error(`Refusing to write outside the configured PC library: ${destinationPath}`)
+  }
+
+  private registeredLibraryPath(path: string): string {
+    return requireRegisteredLocalLibraryPath(path, getRepos().folders.listAll())
+  }
+
+  private async assertPcSourceAllowed(sourcePath: string): Promise<DbTrack> {
+    const repos = getRepos()
+    if (isCloudSourcePath(sourcePath)) {
+      const track = repos.tracks.getByPath(sourcePath)
+      if (!track || track.provider !== 'onedrive') throw new Error(`Refusing unregistered cloud source: ${sourcePath}`)
+      const folder = repos.folders.getById(track.folder_id)
+      if (!folder || folder.provider !== 'onedrive' || folder.role !== 'library') {
+        throw new Error(`Cloud source library no longer exists: ${sourcePath}`)
+      }
+      return track
+    }
+    const source = resolve(sourcePath)
+    const track = repos.tracks.getByPath(source)
+    if (!track || track.provider !== 'local') throw new Error(`Refusing unregistered PC source: ${sourcePath}`)
+    const folder = repos.folders.getById(track.folder_id)
+    if (!folder || folder.provider !== 'local' || folder.role !== 'library') {
+      throw new Error(`PC source library no longer exists: ${sourcePath}`)
+    }
+    await assertNoSymlinkTraversal(folder.path, source)
+    return track
   }
 
   private async moveDeviceFileToTrash(deviceRoot: string, deviceMusicRoot: string, relPath: string, runId: string): Promise<void> {
     const source = fromPosix(deviceMusicRoot, relPath)
-    assertInside(deviceMusicRoot, resolve(source))
-    const destination = fromPosix(join(deviceRoot, APP_STATE_DIR, 'trash', runId), relPath)
-    assertInside(join(deviceRoot, APP_STATE_DIR, 'trash', runId), resolve(destination))
+    await assertNoSymlinkTraversal(deviceMusicRoot, source)
+    const trashRoot = join(deviceRoot, APP_STATE_DIR, 'trash', runId)
+    await mkdir(trashRoot, { recursive: true })
+    const destination = fromPosix(trashRoot, relPath)
+    await assertNoSymlinkTraversal(trashRoot, destination)
     if (existsSync(source)) {
       await mkdir(dirname(destination), { recursive: true })
       await rename(source, destination)
@@ -3371,8 +3818,8 @@ export class DeviceSyncService {
     const sourceSidecar = sidecarPathFor(source)
     if (!existsSync(sourceSidecar)) return
     const destinationSidecar = sidecarPathFor(destination)
-    assertInside(deviceMusicRoot, resolve(sourceSidecar))
-    assertInside(join(deviceRoot, APP_STATE_DIR, 'trash', runId), resolve(destinationSidecar))
+    await assertNoSymlinkTraversal(deviceMusicRoot, sourceSidecar)
+    await assertNoSymlinkTraversal(trashRoot, destinationSidecar)
     try {
       await mkdir(dirname(destinationSidecar), { recursive: true })
       await rename(sourceSidecar, destinationSidecar)
@@ -3383,26 +3830,30 @@ export class DeviceSyncService {
 
   private async trashPcFile(sourcePath: string, affectedFolderIds: Set<number>): Promise<void> {
     const repos = getRepos()
-    const track = repos.tracks.getByPath(sourcePath)
-    await shell.trashItem(sourcePath)
-    const sidecarPath = sidecarPathFor(sourcePath)
+    const track = await this.assertPcSourceAllowed(sourcePath)
+    if (track.provider === 'onedrive') {
+      throw new Error('Deleting OneDrive source tracks from a device sync is not supported')
+    }
+    const safeSource = resolve(track.path)
+    await shell.trashItem(safeSource)
+    const sidecarPath = sidecarPathFor(safeSource)
     if (existsSync(sidecarPath)) {
       await shell.trashItem(sidecarPath).catch(err => {
         console.warn(`[devices] could not trash lyrics sidecar for ${sourcePath}:`, (err as Error).message)
       })
     }
-    if (track) {
-      repos.tracks.deleteByPath(sourcePath)
-      affectedFolderIds.add(track.folder_id)
-    }
+    repos.tracks.deleteByPath(safeSource)
+    affectedFolderIds.add(track.folder_id)
   }
 
   private async importPcTarget(pcTargetPath: string): Promise<void> {
-    const target = resolve(pcTargetPath)
+    const target = this.registeredLibraryPath(pcTargetPath)
     await mkdir(target, { recursive: true })
     const repos = getRepos()
-    const name = basename(target) || target
-    const folder = repos.folders.add(target, name)
+    const folder = repos.folders.getByPath(target)
+    if (!folder || folder.provider !== 'local' || folder.role !== 'library') {
+      throw new Error('PC destination is no longer a registered local library')
+    }
     getFolderWatcher().start(folder.id, folder.path)
     await getImportService().scan(folder.id, folder.path)
   }

@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { getDeviceSyncService } from './devices/DeviceSyncService'
+import { serveRemoteArtwork } from './downloads/RemoteArtwork'
 
 // Lets the renderer load cached artwork files via `crate://artwork/<filename>`
 // without disabling webSecurity or opening up arbitrary file:// access.
@@ -39,6 +40,9 @@ export function registerProtocolHandlers(): void {
         return new Response('Not Found', { status: 404 })
       }
       return net.fetch(pathToFileURL(filePath).toString())
+    }
+    if (url.hostname === 'remote-artwork') {
+      return serveRemoteArtwork(url)
     }
     if (url.hostname === 'rockbox-theme') {
       let parts: string[]

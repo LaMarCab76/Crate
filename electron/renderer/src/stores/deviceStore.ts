@@ -49,7 +49,7 @@ interface DeviceState {
   loadPendingJournals(): Promise<void>
   detectCandidates(): Promise<void>
   refreshVolumes(): Promise<void>
-  ignoreVolume(rootPath: string): Promise<void>
+  ignoreVolume(token: string): Promise<void>
   connect(payload: DeviceConnectPayload): Promise<DeviceRecord>
   updateSettings(deviceId: string, settings: DeviceSettingsUpdate): Promise<DeviceRecord>
   loadDeviceOverview(deviceId: string, force?: boolean): Promise<DeviceOverviewResult>
@@ -187,6 +187,19 @@ function canReuseDeviceLibrary(library: DeviceLibraryResult, device?: DeviceReco
   return !storage.error && storage.totalBytes > 0
 }
 
+const deviceRequestVersions = new Map<string, number>()
+
+function beginDeviceRequest(scope: string, deviceId: string): number {
+  const key = `${scope}:${deviceId}`
+  const version = (deviceRequestVersions.get(key) ?? 0) + 1
+  deviceRequestVersions.set(key, version)
+  return version
+}
+
+function isCurrentDeviceRequest(scope: string, deviceId: string, version: number): boolean {
+  return deviceRequestVersions.get(`${scope}:${deviceId}`) === version
+}
+
 export const useDeviceStore = create<DeviceState>((set, get) => ({
   devices: [],
   candidates: [],
@@ -256,9 +269,9 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     }
   },
 
-  async ignoreVolume(rootPath) {
+  async ignoreVolume(token) {
     try {
-      const snapshot = await window.api.devices.ignoreVolume(rootPath)
+      const snapshot = await window.api.devices.ignoreVolume(token)
       set(state => ({
         devices: snapshot.devices,
         candidates: snapshot.candidates,
@@ -329,18 +342,24 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
   async loadDeviceOverview(deviceId, force = false) {
     const cached = get().deviceOverviews[deviceId]
     if (cached && !force) return cached
+    const requestVersion = beginDeviceRequest('overview', deviceId)
     set({ loading: true, error: null })
     try {
       const overview = await window.api.devices.overview(deviceId)
+      if (!isCurrentDeviceRequest('overview', deviceId, requestVersion)) return overview
       set(state => ({
         devices: mergeDeviceRecord(state.devices, overview.device),
         deviceOverviews: { ...state.deviceOverviews, [deviceId]: overview },
-        selectedDeviceId: deviceId,
-        loading: false,
+        loading: state.selectedDeviceId === deviceId ? false : state.loading,
       }))
       return overview
     } catch (err) {
-      set({ loading: false, error: (err as Error).message })
+      if (isCurrentDeviceRequest('overview', deviceId, requestVersion)) {
+        set(state => ({
+          loading: state.selectedDeviceId === deviceId ? false : state.loading,
+          error: state.selectedDeviceId === deviceId ? (err as Error).message : state.error,
+        }))
+      }
       throw err
     }
   },
@@ -351,10 +370,12 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     const cached = state.deviceLibraries[deviceId]
     const device = state.devices.find(item => item.id === deviceId) ?? cached?.device
     if (cached && !force && canReuseDeviceLibrary(cached, device)) return cached
+    const requestVersion = beginDeviceRequest('library', deviceId)
     if (background) set({ error: null })
     else set({ loading: true, error: null })
     try {
       const library = await window.api.devices.library(deviceId, { progress })
+      if (!isCurrentDeviceRequest('library', deviceId, requestVersion)) return library
       set(state => ({
         devices: mergeDeviceRecord(state.devices, library.device),
         deviceLibraries: { ...state.deviceLibraries, [deviceId]: library },
@@ -366,15 +387,16 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
           ...state.rockboxThemeLibraries,
           [deviceId]: rockboxThemesFromLibrary(library),
         },
-        selectedDeviceId: deviceId,
-        loading: background ? state.loading : false,
+        loading: background || state.selectedDeviceId !== deviceId ? state.loading : false,
       }))
       return library
     } catch (err) {
-      set(state => ({
-        loading: background ? state.loading : false,
-        error: (err as Error).message,
-      }))
+      if (isCurrentDeviceRequest('library', deviceId, requestVersion)) {
+        set(state => ({
+          loading: background || state.selectedDeviceId !== deviceId ? state.loading : false,
+          error: state.selectedDeviceId === deviceId ? (err as Error).message : state.error,
+        }))
+      }
       throw err
     }
   },
@@ -382,6 +404,7 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
   async loadRockboxThemes(deviceId, force = false) {
     const cached = get().rockboxThemeLibraries[deviceId]
     if (cached && !force) return cached
+    const requestVersion = beginDeviceRequest('themes', deviceId)
     set({ loading: true, error: null })
     try {
       let library: DeviceLibraryResult | null = null
@@ -392,18 +415,23 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
         library = await window.api.devices.library(deviceId)
         themes = rockboxThemesFromLibrary(library)
       }
+      if (!isCurrentDeviceRequest('themes', deviceId, requestVersion)) return themes
       set(state => ({
         devices: mergeDeviceRecord(state.devices, themes.device),
         deviceLibraries: library
           ? { ...state.deviceLibraries, [deviceId]: library }
           : state.deviceLibraries,
         rockboxThemeLibraries: { ...state.rockboxThemeLibraries, [deviceId]: themes },
-        selectedDeviceId: deviceId,
-        loading: false,
+        loading: state.selectedDeviceId === deviceId ? false : state.loading,
       }))
       return themes
     } catch (err) {
-      set({ loading: false, error: (err as Error).message })
+      if (isCurrentDeviceRequest('themes', deviceId, requestVersion)) {
+        set(state => ({
+          loading: state.selectedDeviceId === deviceId ? false : state.loading,
+          error: state.selectedDeviceId === deviceId ? (err as Error).message : state.error,
+        }))
+      }
       throw err
     }
   },
@@ -509,40 +537,54 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
 
   async scan(deviceId) {
     const id = currentDeviceId(get(), deviceId)
+    const requestVersion = beginDeviceRequest('scan', id)
     set({ loading: true, error: null, scanResult: null })
     try {
       const library = await window.api.devices.library(id, { progress: true })
       const scanResult = scanResultFromLibrary(library)
       const devices = await window.api.devices.list()
+      if (!isCurrentDeviceRequest('scan', id, requestVersion)) return
       set(state => ({
         devices: mergeDeviceRecord(mergeDeviceRecord(devices, scanResult.device), library.device),
         scanResult,
-        selectedDeviceId: id,
-        loading: false,
+        loading: state.selectedDeviceId === id ? false : state.loading,
         scanProgress: null,
         deviceOverviews: { ...state.deviceOverviews, [id]: overviewFromScan(scanResult) },
         deviceLibraries: { ...state.deviceLibraries, [id]: library },
         rockboxThemeLibraries: { ...state.rockboxThemeLibraries, [id]: rockboxThemesFromLibrary(library) },
       }))
     } catch (err) {
-      set({ loading: false, error: (err as Error).message, scanProgress: null })
+      if (isCurrentDeviceRequest('scan', id, requestVersion)) {
+        set(state => ({
+          loading: state.selectedDeviceId === id ? false : state.loading,
+          error: state.selectedDeviceId === id ? (err as Error).message : state.error,
+          scanProgress: state.selectedDeviceId === id ? null : state.scanProgress,
+        }))
+      }
     }
   },
 
   async analyzeArtwork(deviceId) {
     const id = currentDeviceId(get(), deviceId)
+    const requestVersion = beginDeviceRequest('artwork', id)
     set({ loading: true, error: null, artworkAnalyzeProgress: null })
     try {
       const result = await window.api.devices.analyzeArtwork(id)
+      if (!isCurrentDeviceRequest('artwork', id, requestVersion)) return result
       set(state => ({
         artworkAnalysis: { ...state.artworkAnalysis, [id]: result },
-        selectedDeviceId: id,
-        loading: false,
+        loading: state.selectedDeviceId === id ? false : state.loading,
         artworkAnalyzeProgress: null,
       }))
       return result
     } catch (err) {
-      set({ loading: false, error: (err as Error).message, artworkAnalyzeProgress: null })
+      if (isCurrentDeviceRequest('artwork', id, requestVersion)) {
+        set(state => ({
+          loading: state.selectedDeviceId === id ? false : state.loading,
+          error: state.selectedDeviceId === id ? (err as Error).message : state.error,
+          artworkAnalyzeProgress: state.selectedDeviceId === id ? null : state.artworkAnalyzeProgress,
+        }))
+      }
       throw err
     }
   },

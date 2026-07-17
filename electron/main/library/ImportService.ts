@@ -1,6 +1,4 @@
-import { readdir } from 'node:fs/promises'
-import { basename, extname, join } from 'node:path'
-import type { Dirent } from 'node:fs'
+import { basename, extname } from 'node:path'
 import type { Repos } from '../db/repositories'
 import { getRepos } from '../db/repositories'
 import { readTrackMetadata, type TrackMetadata } from './MetadataExtractor'
@@ -10,6 +8,14 @@ import { createThrottledBroadcaster } from '../ipc/throttle'
 import { getLibraryBackup } from '../services/LibraryBackup'
 import { lufsFromReplayGain } from '@shared/constants/leveler'
 import type { DbFolder, DbTrackInsert } from '@shared/types/db'
+import { collectLibraryFiles } from './libraryFileCollector'
+import {
+  canonicalLibraryRoot,
+  findOverlappingLibraryRoot,
+  requireCurrentLocalLibraryFolder,
+  requirePathInsideLocalLibrary,
+} from './libraryRootGuards'
+import { assertLibraryLocationMigrationUnlocked } from '../library-migration/locationLocks'
 
 export const AUDIO_EXTENSIONS = new Set([
   '.flac', '.m4a', '.mp3', '.wav', '.aiff', '.aif',
@@ -22,41 +28,13 @@ export function isAudioPath(path: string): boolean {
 }
 
 export async function collectAudioFiles(root: string): Promise<string[]> {
-  return collectFiles(root, name => isAudioPath(name))
+  return collectLibraryFiles(root, name => isAudioPath(name))
 }
 
 // Same walk rules as collectAudioFiles (skip dotfiles + symlinks) but yields the
 // .lrc sidecar files. Used by the orphan-lyrics cleanup pass.
 export async function collectLrcFiles(root: string): Promise<string[]> {
-  return collectFiles(root, name => extname(name).toLowerCase() === '.lrc')
-}
-
-async function collectFiles(root: string, accept: (name: string) => boolean): Promise<string[]> {
-  const out: string[] = []
-  async function walk(dir: string): Promise<void> {
-    let entries: Dirent[]
-    try {
-      entries = await readdir(dir, { withFileTypes: true })
-    } catch (err) {
-      console.warn(`[import] skip unreadable dir ${dir}:`, (err as Error).message)
-      return
-    }
-    for (const ent of entries) {
-      // Skip dotfiles and macOS resource forks.
-      if (ent.name.startsWith('.')) continue
-      // Reject symlinks to avoid cycles and accidental escapes from the
-      // library root — matches the device-sync collectAudioFiles behavior.
-      if (ent.isSymbolicLink()) continue
-      const full = join(dir, ent.name)
-      if (ent.isDirectory()) {
-        await walk(full)
-      } else if (ent.isFile() && accept(ent.name)) {
-        out.push(full)
-      }
-    }
-  }
-  await walk(root)
-  return out
+  return collectLibraryFiles(root, name => extname(name).toLowerCase() === '.lrc')
 }
 
 export function buildTrackInsert(
@@ -120,6 +98,12 @@ export function buildTrackInsert(
     // and get an estimate from the playback analysis at play time instead.
     r128_integrated_loudness: lufsFromReplayGain(md.replayGainTrack),
     state_updated_at: null,
+    provider: 'local',
+    drive_id: null,
+    item_id: null,
+    etag: null,
+    remote_path: null,
+    quickxor_hash: null,
   }
 }
 
@@ -156,14 +140,36 @@ export class ImportService {
   }
 
   async addFolder(path: string): Promise<AddFolderResult> {
-    const name = basename(path) || path
-    const folder = this.repos.folders.add(path, name)
+    const canonicalPath = await canonicalLibraryRoot(path)
+    const registered = await Promise.all(this.repos.folders.listAll()
+      .filter(folder => folder.provider === 'local')
+      .map(async folder => ({
+      ...folder,
+      path: await canonicalLibraryRoot(folder.path).catch(() => folder.path),
+    })))
+    const overlap = findOverlappingLibraryRoot(canonicalPath, registered)
+    if (overlap?.exact) {
+      const folder = this.repos.folders.getById(overlap.folder.id)!
+      return { folder, startedScan: !this.scanning.has(folder.id) }
+    }
+    if (overlap) {
+      throw new Error(
+        `La carpeta se solapa con la biblioteca registrada "${overlap.folder.name}" (${overlap.folder.path}).`,
+      )
+    }
+    const name = basename(canonicalPath) || canonicalPath
+    const folder = this.repos.folders.add(canonicalPath, name)
     if (this.scanning.has(folder.id)) return { folder, startedScan: false }
     return { folder, startedScan: true }
   }
 
   async scan(folderId: number, folderPath: string): Promise<void> {
+    assertLibraryLocationMigrationUnlocked(folderId, 'la importación local')
     if (this.scanning.has(folderId)) return
+    const folder = this.repos.folders.getById(folderId)
+    if (!folder || folder.provider !== 'local' || folder.role !== 'library' || folder.path !== folderPath) {
+      throw new Error(`Folder ${folderId} is not a local library`)
+    }
     this.scanning.add(folderId)
 
     try {
@@ -235,15 +241,22 @@ export class ImportService {
       // folder's portable `.crate/library.yaml`, then refresh the file
       // so it reflects the new ground truth.
       const backup = getLibraryBackup()
-      const restore = backup.readForFolder(folderPath)
-      if (restore) {
+      const restore = backup.readForFolderDetailed(folderPath)
+      let mayRefreshBackup = restore.status === 'missing'
+      if (restore.status === 'ready') {
         try {
-          backup.mergeIntoDb(folderPath, restore)
+          backup.mergeIntoDb(folderPath, restore.backup)
+          mayRefreshBackup = true
         } catch (err) {
           console.error(`[backup] merge failed for ${folderPath}:`, (err as Error).message)
+          backup.preserveForRecovery(folderPath, 'merge-failed')
         }
+      } else if (restore.status === 'incompatible') {
+        backup.preserveForRecovery(folderPath, 'incompatible')
+      } else if (restore.status === 'invalid') {
+        backup.preserveForRecovery(folderPath, 'invalid')
       }
-      backup.writeForFolderImmediate(folderId)
+      if (mayRefreshBackup) backup.writeForFolderImmediate(folderId)
 
       this.throttle.reset('library:import:progress')
       broadcast('library:import:complete', { folderId, totalImported: imported, total })
@@ -254,9 +267,15 @@ export class ImportService {
   }
 
   async importFile(folderId: number, filePath: string): Promise<number | null> {
+    const expectedFolder = this.repos.folders.getById(folderId)
+    if (!expectedFolder) throw new Error(`Folder ${folderId} no longer exists`)
+    this.requireImportFileAuthority(expectedFolder, filePath)
     if (this.repos.tracks.getByPath(filePath)) return null
 
     const md = await readTrackMetadata(filePath)
+    // Metadata extraction yields. Re-read folder role/root before constructing
+    // catalog rows for a file whose library may now be a backup.
+    this.requireImportFileAuthority(expectedFolder, filePath)
     const parsedArtist = parseArtistName(md.artist)
     const artist = this.repos.artists.getOrCreate(parsedArtist.primary || md.artist)
     const album = this.repos.albums.getOrCreate(md.album, md.albumArtist ?? null, md.year || null)
@@ -267,6 +286,7 @@ export class ImportService {
     // concurrent scan could have inserted the same row.
     const existing = this.repos.tracks.getByPath(filePath)
     if (existing) return null
+    this.requireImportFileAuthority(expectedFolder, filePath)
     const trackId = this.repos.tracks.insert(row)
     if (trackId === 0) return null
 
@@ -277,8 +297,22 @@ export class ImportService {
     return trackId
   }
 
+  async waitForFolderIdle(folderId: number): Promise<void> {
+    while (this.scanning.has(folderId)) {
+      await new Promise<void>(resolve => setTimeout(resolve, 25))
+    }
+  }
+
+  private requireImportFileAuthority(expectedFolder: DbFolder, filePath: string): void {
+    assertLibraryLocationMigrationUnlocked(expectedFolder.id, 'la importación de archivos')
+    const current = this.repos.folders.getById(expectedFolder.id)
+    requireCurrentLocalLibraryFolder(expectedFolder, current)
+    requirePathInsideLocalLibrary(current, filePath)
+  }
+
   async rescanAll(): Promise<void> {
     for (const folder of this.repos.folders.list()) {
+      if (folder.provider !== 'local' || folder.role !== 'library') continue
       await this.scan(folder.id, folder.path)
     }
   }

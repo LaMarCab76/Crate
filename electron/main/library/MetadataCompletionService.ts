@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { basename, dirname, extname } from 'node:path'
 import { parseFile } from 'music-metadata'
 import type { IAudioMetadata } from 'music-metadata'
@@ -11,6 +12,7 @@ import { artworkAbsolutePath } from './ArtworkCache'
 import { writeTrackMetadata, type MetadataArtworkPayload } from './MetadataWriter'
 import { getLibraryBackup } from '../services/LibraryBackup'
 import { getMusicBrainzMetadataClient } from './MusicBrainzMetadata'
+import { requireLocalLibraryTrackPath } from './localLibraryTrackGuard'
 import type { DbTrack } from '@shared/types/db'
 import type {
   MetadataCompletionApplyRequest,
@@ -82,6 +84,9 @@ interface ArtworkProposal {
 interface StoredCandidate extends MetadataCompletionCandidate {
   proposalValues: Partial<Record<TextMetadataField, string | number | null>>
   artworkPayload: MetadataArtworkPayload | null
+  sourceStateUpdatedAt: number | null
+  sourceSize: number | null
+  sourceMtimeMs: number | null
 }
 
 interface StoredPreview {
@@ -251,7 +256,14 @@ function bestUnanimousNumber(tracks: DbTrack[], read: (track: DbTrack) => number
 }
 
 function publicCandidate(candidate: StoredCandidate): MetadataCompletionCandidate {
-  const { proposalValues: _proposalValues, artworkPayload: _artworkPayload, ...rest } = candidate
+  const {
+    proposalValues: _proposalValues,
+    artworkPayload: _artworkPayload,
+    sourceStateUpdatedAt: _sourceStateUpdatedAt,
+    sourceSize: _sourceSize,
+    sourceMtimeMs: _sourceMtimeMs,
+    ...rest
+  } = candidate
   return rest
 }
 
@@ -273,6 +285,7 @@ export class MetadataCompletionService {
 
     for (const track of tracks) {
       if (targets.length >= safeLimit) break
+      if (track.provider !== 'local') continue
       try {
         const snapshot = await this.readEmbeddedSnapshot(track.path)
         const missing = missingFields(snapshot)
@@ -306,7 +319,7 @@ export class MetadataCompletionService {
 
     for (const id of uniqueIds) {
       const track = this.repos.tracks.getById(id)
-      if (!track) continue
+      if (!track || track.provider !== 'local') continue
       const allowOnline = onlineSlots > 0 && Date.now() < onlineDeadline
       const candidate = await this.buildCandidate(track, allowOnline)
       if (allowOnline) onlineSlots -= 1
@@ -352,6 +365,7 @@ export class MetadataCompletionService {
 
   private async buildCandidate(track: DbTrack, allowOnline: boolean): Promise<StoredCandidate | null> {
     const warnings: string[] = []
+    const sourceInfo = await stat(track.path).catch(() => null)
     let snapshot: EmbeddedSnapshot
     try {
       snapshot = await this.readEmbeddedSnapshot(track.path)
@@ -368,6 +382,9 @@ export class MetadataCompletionService {
         warnings: [`No se pudo leer el archivo: ${err instanceof Error ? err.message : String(err)}`],
         proposalValues: {},
         artworkPayload: null,
+        sourceStateUpdatedAt: track.state_updated_at,
+        sourceSize: sourceInfo?.size ?? null,
+        sourceMtimeMs: sourceInfo?.mtimeMs ?? null,
       }
     }
 
@@ -440,6 +457,9 @@ export class MetadataCompletionService {
       warnings,
       proposalValues,
       artworkPayload: artwork ? { data: artwork.data, mimeType: artwork.mimeType } : null,
+      sourceStateUpdatedAt: track.state_updated_at,
+      sourceSize: sourceInfo?.size ?? null,
+      sourceMtimeMs: sourceInfo?.mtimeMs ?? null,
     }
   }
 
@@ -616,6 +636,29 @@ export class MetadataCompletionService {
       backupPath: null as string | null,
     }
     if (!track) return { ...base, ok: false, error: 'Track no longer exists.' }
+    if (track.provider !== 'local') return { ...base, ok: false, error: 'Metadata editing is unavailable for cloud tracks.' }
+
+    let initialPath: string
+    try {
+      initialPath = requireLocalLibraryTrackPath({
+        track,
+        folder: this.repos.folders.getById(track.folder_id),
+        expectedPath: candidate.path,
+        label: 'Track',
+      })
+      const currentInfo = await stat(initialPath)
+      if (
+        track.state_updated_at !== candidate.sourceStateUpdatedAt ||
+        candidate.sourceSize == null ||
+        candidate.sourceMtimeMs == null ||
+        currentInfo.size !== candidate.sourceSize ||
+        currentInfo.mtimeMs !== candidate.sourceMtimeMs
+      ) {
+        return { ...base, ok: false, error: 'Track changed after preview. Run the preview again.' }
+      }
+    } catch {
+      return { ...base, ok: false, error: 'Track file is no longer available. Run the preview again.' }
+    }
 
     const payload: TrackMetadataUpdatePayload = {}
     const appliedFields: MetadataCompletionField[] = []
@@ -644,8 +687,29 @@ export class MetadataCompletionService {
     if (appliedFields.length === 0) return { ...base, ok: true, error: null }
 
     try {
-      const result = writeTrackMetadata(track.path, payload, { artwork, createBackup: true })
-      await this.refreshTrackMetadataInDb(track.id)
+      // Re-read all filesystem authority immediately before writing. A folder
+      // can be reclassified as backup, or a row can become cloud-backed, while
+      // a metadata preview is open.
+      const writableTrack = this.repos.tracks.getById(candidate.trackId)
+      if (!writableTrack) throw new Error('Track no longer exists.')
+      const writablePath = requireLocalLibraryTrackPath({
+        track: writableTrack,
+        folder: this.repos.folders.getById(writableTrack.folder_id),
+        expectedPath: candidate.path,
+        label: 'Track',
+      })
+      const currentInfo = await stat(writablePath)
+      if (
+        writableTrack.state_updated_at !== candidate.sourceStateUpdatedAt ||
+        candidate.sourceSize == null ||
+        candidate.sourceMtimeMs == null ||
+        currentInfo.size !== candidate.sourceSize ||
+        currentInfo.mtimeMs !== candidate.sourceMtimeMs
+      ) {
+        throw new Error('Track changed after preview. Run the preview again.')
+      }
+      const result = writeTrackMetadata(writablePath, payload, { artwork, createBackup: true })
+      await this.refreshTrackMetadataInDb(writableTrack.id, writablePath)
       return {
         ...base,
         ok: true,
@@ -944,10 +1008,16 @@ export class MetadataCompletionService {
     }
   }
 
-  private async refreshTrackMetadataInDb(trackId: number): Promise<DbTrack | null> {
+  private async refreshTrackMetadataInDb(trackId: number, expectedPath: string): Promise<DbTrack | null> {
     const track = this.repos.tracks.getById(trackId)
     if (!track) return null
-    const md = await readTrackMetadata(track.path)
+    const safePath = requireLocalLibraryTrackPath({
+      track,
+      folder: this.repos.folders.getById(track.folder_id),
+      expectedPath,
+      label: 'Track',
+    })
+    const md = await readTrackMetadata(safePath)
     this.updateDbFromMetadata(track, md)
     getLibraryBackup().scheduleWriteForTrack(track.id)
     return this.repos.tracks.getById(track.id) ?? track

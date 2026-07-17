@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, type MessageBoxOptions } from 'electron'
+import { spawnSync } from 'node:child_process'
 import electronUpdater, {
   type AppUpdater,
   type ProgressInfo,
@@ -21,12 +22,12 @@ class AppUpdateService {
   private showingAvailablePrompt = false
   private showingDownloadedPrompt = false
 
-  constructor(updater: AppUpdater, currentVersion: string, supported: boolean) {
+  constructor(updater: AppUpdater, currentVersion: string, supported: boolean, unsupportedReason?: string) {
     this.updater = updater
     this.state = createInitialUpdateState(
       currentVersion,
       supported,
-      supported ? undefined : 'Las actualizaciones desde GitHub Releases se activan en la app empaquetada.',
+      supported ? undefined : (unsupportedReason ?? 'Las actualizaciones desde GitHub Releases se activan en la app empaquetada.'),
     )
   }
 
@@ -181,10 +182,45 @@ function showUpdateDialog(options: MessageBoxOptions) {
 
 let instance: AppUpdateService | null = null
 
+function hasTrustedMacSignature(): boolean {
+  if (process.platform !== 'darwin') return true
+  try {
+    const result = spawnSync('/usr/bin/codesign', ['-dv', '--verbose=4', app.getPath('exe')], {
+      encoding: 'utf8',
+      timeout: 5_000,
+    })
+    const details = `${result.stdout ?? ''}\n${result.stderr ?? ''}`
+    // An ad-hoc signature is sufficient to launch a hardened binary, but it is
+    // not a trusted update channel. Require a real certificate authority before
+    // allowing the updater to replace the installed application.
+    if (result.status !== 0 || !/^Authority=.+$/m.test(details)) return false
+    const assessment = spawnSync('/usr/sbin/spctl', [
+      '--assess',
+      '--type', 'execute',
+      '--verbose=4',
+      app.getPath('exe'),
+    ], {
+      encoding: 'utf8',
+      timeout: 5_000,
+    })
+    const assessmentDetails = `${assessment.stdout ?? ''}\n${assessment.stderr ?? ''}`
+    return assessment.status === 0 && /source=Notarized Developer ID/i.test(assessmentDetails)
+  } catch {
+    return false
+  }
+}
+
 export function getAppUpdateService(): AppUpdateService {
   if (!instance) {
     const { autoUpdater } = electronUpdater
-    instance = new AppUpdateService(autoUpdater, app.getVersion(), app.isPackaged)
+    const signed = hasTrustedMacSignature()
+    const supported = app.isPackaged && signed
+    const unsupportedReason = !app.isPackaged
+      ? 'Las actualizaciones desde GitHub Releases se activan en la app empaquetada.'
+      : !signed
+        ? 'La instalación automática está deshabilitada: este build de macOS no está firmado ni notarizado.'
+        : undefined
+    instance = new AppUpdateService(autoUpdater, app.getVersion(), supported, unsupportedReason)
   }
   return instance
 }
