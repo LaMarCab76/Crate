@@ -2,9 +2,9 @@ import { strict as assert } from 'node:assert'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
-const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8')
-const devicesSource = readFileSync(new URL('../views/DevicesView.tsx', import.meta.url), 'utf8')
-const css = readFileSync(new URL('../styles/globals.css', import.meta.url), 'utf8')
+const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+const devicesSource = readFileSync(new URL('../views/DevicesView.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+const css = readFileSync(new URL('../styles/globals.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 
 test('standalone Devices route uses the shared top chrome dashboard tabs', () => {
   assert.ok(appSource.includes("case 'devices':"), 'App should keep a standalone Devices route')

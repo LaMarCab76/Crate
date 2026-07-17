@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert'
 import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { test } from 'node:test'
 import {
   mergedPortableTrackState,
@@ -114,7 +114,7 @@ test('single-file imports stay inside a current local library', () => {
   const folder = { path: '/Volumes/Music', provider: 'local', role: 'library' }
   assert.equal(
     requirePathInsideLocalLibrary(folder, '/Volumes/Music/Album/song.flac'),
-    '/Volumes/Music/Album/song.flac',
+    resolve('/Volumes/Music/Album/song.flac'),
   )
   assert.throws(
     () => requirePathInsideLocalLibrary({ ...folder, role: 'backup' }, '/Volumes/Music/song.flac'),

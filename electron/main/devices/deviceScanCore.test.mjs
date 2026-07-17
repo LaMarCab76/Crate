@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert'
 import { mkdtemp, mkdir, symlink, utimes, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join, relative, sep } from 'node:path'
 import { test } from 'node:test'
 import {
   collectDeviceAudioFiles,
@@ -12,7 +12,7 @@ import {
 
 function metadataFor(file) {
   return {
-    title: file.split('/').pop()?.replace(/\.[^.]+$/, '') ?? 'Track',
+    title: basename(file).replace(/\.[^.]+$/, '') || 'Track',
     artist: 'Artist',
     album: 'Album',
     albumArtist: null,
@@ -21,6 +21,10 @@ function metadataFor(file) {
     fileSize: 1024,
     dateModified: '2026-06-04T00:00:00.000Z',
   }
+}
+
+function relativePosix(root, file) {
+  return relative(root, file).split(sep).join('/')
 }
 
 test('collectDeviceAudioFiles respects database.ignore, database.unignore, dotfiles and symlinks', async () => {
@@ -45,7 +49,7 @@ test('collectDeviceAudioFiles respects database.ignore, database.unignore, dotfi
     })
 
     assert.deepEqual(
-      files.map(file => file.slice(root.length + 1)).sort(),
+      files.map(file => relativePosix(root, file)).sort(),
       [
         'Album/01 - Keep.mp3',
         'Ignored/Recovered/03 - Include.flac',
@@ -79,7 +83,7 @@ test('collectDeviceMusicFiles ignores lrc sidecars during device scan', async ()
     const collected = await collectDeviceMusicFiles({ deviceId: 'dap', root })
 
     assert.deepEqual(
-      collected.audioFiles.map(file => file.slice(root.length + 1)).sort(),
+      collected.audioFiles.map(file => relativePosix(root, file)).sort(),
       [
         'Album/01 - Keep.mp3',
         'Ignored/Recovered/03 - Include.flac',
@@ -146,7 +150,7 @@ test('collectDeviceMusicFiles marks only tracks changed after a cutoff in increm
     })
 
     assert.deepEqual(
-      collected.audioFiles.map(file => file.slice(root.length + 1)).sort(),
+      collected.audioFiles.map(file => relativePosix(root, file)).sort(),
       ['changed.mp3', 'old.mp3'],
     )
     assert.deepEqual([...collected.changedAudioFiles].sort(), ['changed.mp3'])

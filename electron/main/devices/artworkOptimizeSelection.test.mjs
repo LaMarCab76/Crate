@@ -1,4 +1,5 @@
 import { strict as assert } from 'node:assert'
+import { resolve } from 'node:path'
 import { test } from 'node:test'
 import {
   resolveArtworkOptimizationFiles,
@@ -47,7 +48,7 @@ test('artwork optimization selection resolves valid paths inside the music root'
   })
 
   assert.deepEqual(files, [
-    '/Volumes/DAP/Music/Artist/Album/Track.mp3',
-    '/Volumes/DAP/Music/Other/Album/Second.mp3',
+    resolve('/Volumes/DAP/Music/Artist/Album/Track.mp3'),
+    resolve('/Volumes/DAP/Music/Other/Album/Second.mp3'),
   ])
 })

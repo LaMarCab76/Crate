@@ -1,4 +1,5 @@
 import { strict as assert } from 'node:assert'
+import { resolve } from 'node:path'
 import { test } from 'node:test'
 import {
   downloadPartPath,
@@ -25,7 +26,7 @@ test('download publish paths require a current local library destination', () =>
   const folder = { path: '/Music', provider: 'local', role: 'library' } as const
   assert.equal(
     requireLocalLibraryDownloadPath(folder, '/Music/Crate Downloads/song.flac'),
-    '/Music/Crate Downloads/song.flac',
+    resolve('/Music/Crate Downloads/song.flac'),
   )
   assert.throws(
     () => requireLocalLibraryDownloadPath({ ...folder, role: 'backup' }, '/Music/song.flac'),

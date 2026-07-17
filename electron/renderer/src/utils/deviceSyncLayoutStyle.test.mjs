@@ -2,8 +2,8 @@ import { strict as assert } from 'node:assert'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
-const css = readFileSync(new URL('../styles/globals.css', import.meta.url), 'utf8')
-const syncSource = readFileSync(new URL('../views/DeviceSyncView.tsx', import.meta.url), 'utf8')
+const css = readFileSync(new URL('../styles/globals.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+const syncSource = readFileSync(new URL('../views/DeviceSyncView.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 
 function cssBlock(selector) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')

@@ -1,5 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { test } from 'node:test'
 import { requireRegisteredLocalLibraryPath } from './pcTargetLibrary.ts'
 
@@ -10,7 +11,7 @@ const folders = [
 ]
 
 test('device PC target accepts only a registered local normal library', () => {
-  assert.equal(requireRegisteredLocalLibraryPath('/Music/Main', folders), '/Music/Main')
+  assert.equal(requireRegisteredLocalLibraryPath('/Music/Main', folders), resolve('/Music/Main'))
   assert.throws(() => requireRegisteredLocalLibraryPath('/Music/Backup', folders), /registered local library/)
   assert.throws(() => requireRegisteredLocalLibraryPath('/Music/Other', folders), /registered local library/)
 })
