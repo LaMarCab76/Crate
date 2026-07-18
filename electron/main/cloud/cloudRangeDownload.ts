@@ -42,6 +42,7 @@ export async function downloadRangesIntoBuffer(options: {
   signal?: AbortSignal
   onProgress?: (loadedBytes: number) => void
   initialUrl?: string
+  requireRange?: boolean
 }): Promise<void> {
   const { sizeBytes, buffer, deps, signal, onProgress } = options
   if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 0) {
@@ -96,6 +97,9 @@ export async function downloadRangesIntoBuffer(options: {
     }
     if (response.status !== 206 && response.status !== 200) {
       throw new CloudRangeError(response.status, `Cloud range download failed (${response.status}).`)
+    }
+    if (options.requireRange && response.status === 200) {
+      throw new CloudRangeError(200, 'Cloud server ignored the bounded prefix Range request.')
     }
     if (!response.body || response.body.byteLength === 0) {
       throw new Error(`Incomplete cloud download: ${offset}/${sizeBytes} bytes.`)

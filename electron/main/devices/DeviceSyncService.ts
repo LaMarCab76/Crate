@@ -69,7 +69,8 @@ import {
 import { clampDeviceArtworkEdge } from '@shared/constants/device-sync'
 import { getOneDriveClient } from '../cloud/OneDriveClient'
 import { resolveCloudLoadOptions } from '../cloud/cloudTrackRef'
-import { cloudDeviceRelativePath, sanitizeSegment } from './cloudDeviceRelativePath'
+import { cloudDeviceRelativePath } from './cloudDeviceRelativePath'
+import { withCloudSourceTempFile } from './cloudSourceTempFile'
 import { requireRegisteredLocalLibraryPath } from './pcTargetLibrary'
 import type { DbTrack } from '@shared/types/db'
 import type { PickFolderResult } from '@shared/types/ipc-contract'
@@ -3631,7 +3632,7 @@ export class DeviceSyncService {
     if (!action.sourcePath || !action.destinationPath) throw new Error('Invalid copy action')
 
     if (isCloudSourcePath(action.sourcePath)) {
-      return this.withCloudSourceTempFile(action.sourcePath, localPath =>
+      return this.withMaterializedCloudSource(action.sourcePath, localPath =>
         this.copyLocalSourceToDevice(localPath, action.destinationPath!, artworkMaxEdge),
       )
     }
@@ -3658,35 +3659,27 @@ export class DeviceSyncService {
     }
   }
 
-  private async withCloudSourceTempFile<T>(
+  private async withMaterializedCloudSource<T>(
     sourcePath: string,
     run: (localPath: string) => Promise<T>,
   ): Promise<T> {
     const track = getRepos().tracks.getByPath(sourcePath)
     if (!track) throw new Error(`Cloud source not found in library: ${sourcePath}`)
-    const cloud = await resolveCloudLoadOptions(track, getOneDriveClient())
+    const client = getOneDriveClient()
+    const cloud = await resolveCloudLoadOptions(track, client)
     if (!cloud) throw new Error(`Track is not backed by OneDrive: ${sourcePath}`)
 
-    const buffer = Buffer.allocUnsafe(cloud.cloudSizeBytes)
-    await getOneDriveClient().fetchFullIntoBuffer({
-      driveId: cloud.cloudRef.driveId,
-      itemId: cloud.cloudRef.itemId,
+    return withCloudSourceTempFile({
       sizeBytes: cloud.cloudSizeBytes,
-      buffer,
-    })
-    const tempDir = await mkdtemp(join(tmpdir(), 'crate-device-cloud-'))
-    const tempPath = join(tempDir, sanitizeSegment(track.filename) || 'track')
-    try {
-      await writeFile(tempPath, buffer)
-      const modified = track.date_modified ? Date.parse(track.date_modified) : Number.NaN
-      if (Number.isFinite(modified)) {
-        const date = new Date(modified)
-        await utimes(tempPath, date, date)
-      }
-      return await run(tempPath)
-    } finally {
-      await rm(tempDir, { recursive: true, force: true })
-    }
+      filename: track.filename,
+      dateModified: track.date_modified,
+      downloadInto: buffer => client.fetchFullIntoBuffer({
+        driveId: cloud.cloudRef.driveId,
+        itemId: cloud.cloudRef.itemId,
+        sizeBytes: cloud.cloudSizeBytes,
+        buffer,
+      }),
+    }, run)
   }
 
   private sourceArtworkNeedsLimit(sourcePath: string, artworkMaxEdge: number): boolean {

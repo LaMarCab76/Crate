@@ -242,7 +242,7 @@ async function shutdownApplication(exitCode: number): Promise<void> {
     if (!win.isDestroyed()) win.destroy()
   }
   try { await getDownloadManager().dispose() } catch (err) { console.error('[downloads] dispose failed:', err) }
-  try { getOneDriveLibraryService().stopPolling() } catch { /* cloud service may not have initialized */ }
+  try { await getOneDriveLibraryService().stopPolling() } catch { /* cloud service may not have initialized */ }
   try { unsubscribeCloudMirror?.() } catch { /* listener may not have initialized */ }
   unsubscribeCloudMirror = null
   disposeLibraryLocationsChannel()

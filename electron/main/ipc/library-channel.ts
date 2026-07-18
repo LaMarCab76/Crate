@@ -13,6 +13,7 @@ import { getTrackAlbumMoveService } from '../library/TrackAlbumMoveService'
 import { writeTrackMetadata } from '../library/MetadataWriter'
 import { getLibraryBackup } from '../services/LibraryBackup'
 import { getCloudManifestService } from '../cloud/CloudManifestService'
+import { getOneDriveLibraryService } from '../cloud/OneDriveLibraryService'
 import { getPathAuthorizationService } from '../security/PathAuthorizationService'
 import { sidecarPathFor } from '../lyrics/providers/SidecarLrcProvider'
 import { broadcast } from './events'
@@ -215,6 +216,7 @@ export function registerLibraryChannel(): void {
     }
 
     getLibraryBackup().cancelForFolder(folderId)
+    if (folder.provider === 'onedrive') await getOneDriveLibraryService().waitForFolderIdle(folderId)
     repos.folders.remove(folderId)
     broadcast('library:changed', { reason: 'folder-remove' })
   })

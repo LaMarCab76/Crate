@@ -20,6 +20,11 @@ import { scheduleMirrorForBackupDestination } from '../library-mirror/runtime'
 import { assertLibraryLocationMigrationUnlocked } from '../library-migration/locationLocks'
 import { getCloudManifestService } from './CloudManifestService'
 import { audioFacetToMetadata, driveItemRemotePath } from './cloudMetadata'
+import {
+  enrichCloudTechnicalTracks,
+  type CloudTechnicalMetadataPatch,
+  type CloudTechnicalTrack,
+} from './cloudTechnicalMetadata'
 import { cloudRelativePath } from './cloudPortableManifest'
 import { assertCloudMoveAuthority } from './cloudMoveSafety'
 import {
@@ -38,6 +43,12 @@ interface ExistingCloudTrack {
   id: number
   item_id: string
   etag: string | null
+  file_size: number | null
+  quickxor_hash: string | null
+}
+
+interface PendingTechnicalTrack extends CloudTechnicalTrack {
+  quickxor_hash: string | null
 }
 
 type AuthorizedOneDriveFolder = DbFolder & {
@@ -113,6 +124,11 @@ export class OneDriveLibraryService {
   private readonly client: OneDriveClient
   private readonly syncing = new Map<number, Promise<CloudSyncResult>>()
   private readonly folderOperations = new Map<number, Promise<unknown>>()
+  private readonly enrichmentControllers = new Map<number, AbortController>()
+  private readonly enrichmentJobs = new Map<number, Promise<void>>()
+  private readonly attemptedTechnicalVersions = new Set<string>()
+  private enrichmentQueue: Promise<void> = Promise.resolve()
+  private enrichmentStopped = false
   private readonly syncCompleteListeners = new Set<CloudSyncCompleteListener>()
   private pollTimer: NodeJS.Timeout | null = null
 
@@ -191,8 +207,13 @@ export class OneDriveLibraryService {
   }
 
   async waitForFolderIdle(folderId: number): Promise<void> {
-    const pending = this.folderOperations.get(folderId) ?? this.syncing.get(folderId)
-    if (pending) await Promise.allSettled([pending])
+    this.enrichmentControllers.get(folderId)?.abort()
+    const pending = [
+      this.folderOperations.get(folderId),
+      this.syncing.get(folderId),
+      this.enrichmentJobs.get(folderId),
+    ].filter((operation): operation is Promise<unknown> => operation != null)
+    if (pending.length > 0) await Promise.allSettled(pending)
   }
 
   private withFolderLock<T>(folderId: number, operation: () => Promise<T>): Promise<T> {
@@ -264,7 +285,7 @@ export class OneDriveLibraryService {
 
       const transaction = this.db.transaction(() => {
         const existing = this.db.prepare<[number], ExistingCloudTrack>(`
-          SELECT id, item_id, etag FROM tracks
+          SELECT id, item_id, etag, file_size, quickxor_hash FROM tracks
           WHERE folder_id = ? AND provider = 'onedrive' AND item_id IS NOT NULL
         `).all(folderId)
         const byItemId = new Map(existing.map(row => [row.item_id, row]))
@@ -286,7 +307,7 @@ export class OneDriveLibraryService {
           fullInventoryAudioIds.add(item.id)
           const entityIds = this.resolveEntities(item)
           if (row) {
-            this.updateCloudTrack(row.id, item, folder, entityIds)
+            this.updateCloudTrack(row, item, folder, entityIds)
           } else {
             const inserted = this.repos.tracks.insert(cloudTrackInsert(
               item,
@@ -323,6 +344,7 @@ export class OneDriveLibraryService {
       }
       this.emitSync({ folderId, phase: 'done', scanned, imported, total: scanned })
       broadcast('library:changed', { reason: 'cloud-sync', folderId })
+      this.startTechnicalMetadataEnrichment(folderId)
       if (changes.size > 0) this.notifySyncComplete(result)
       return result
     } catch (error) {
@@ -336,6 +358,97 @@ export class OneDriveLibraryService {
       })
       throw error
     }
+  }
+
+  private startTechnicalMetadataEnrichment(folderId: number): void {
+    if (this.enrichmentStopped || this.enrichmentJobs.has(folderId)) return
+    const controller = new AbortController()
+    this.enrichmentControllers.set(folderId, controller)
+    const job = this.enrichmentQueue
+      .catch(() => undefined)
+      .then(() => this.enrichTechnicalMetadata(folderId, controller.signal))
+      .catch(error => {
+        if (!controller.signal.aborted) {
+          console.warn(`[cloud] metadata enrichment failed for folder ${folderId}:`, (error as Error).message)
+        }
+      })
+      .finally(() => {
+        if (this.enrichmentControllers.get(folderId) === controller) {
+          this.enrichmentControllers.delete(folderId)
+          this.enrichmentJobs.delete(folderId)
+        }
+      })
+    this.enrichmentQueue = job
+    this.enrichmentJobs.set(folderId, job)
+  }
+
+  private technicalVersion(track: CloudTechnicalTrack): string {
+    return `${track.id}:${track.etag ?? `${track.file_size ?? 'unknown'}:${track.filename}`}`
+  }
+
+  private async enrichTechnicalMetadata(folderId: number, signal: AbortSignal): Promise<void> {
+    const candidates = this.db.prepare<[number], PendingTechnicalTrack>(`
+      SELECT id, filename, provider, drive_id, item_id, etag, codec, bitrate,
+             sample_rate, bit_depth, channels, duration, file_size, quickxor_hash
+      FROM tracks
+      WHERE folder_id = ? AND provider = 'onedrive'
+        AND drive_id IS NOT NULL AND item_id IS NOT NULL
+        AND (codec IS NULL OR sample_rate IS NULL OR channels IS NULL)
+      ORDER BY path COLLATE NOCASE
+    `).all(folderId)
+    const pending = candidates.filter(track => !this.attemptedTechnicalVersions.has(this.technicalVersion(track)))
+    const enriched = await enrichCloudTechnicalTracks(pending, {
+      fetchPrefix: (driveId, itemId, maxBytes, activeSignal) =>
+        this.client.fetchPrefix(driveId, itemId, maxBytes, activeSignal),
+      update: (track, patch, fetchedEtag) => {
+        const changed = this.updateCloudTechnicalMetadata(track, patch, fetchedEtag)
+        if (changed) this.attemptedTechnicalVersions.add(this.technicalVersion(track))
+        return changed
+      },
+      onTrackError: (track, error) => {
+        this.attemptedTechnicalVersions.add(this.technicalVersion(track))
+        console.warn(`[cloud] enrich failed for ${track.filename}:`, (error as Error).message)
+      },
+    }, signal)
+    if (enriched > 0) broadcast('library:changed', { reason: 'cloud-enrich', folderId })
+  }
+
+  private updateCloudTechnicalMetadata(
+    track: CloudTechnicalTrack,
+    patch: CloudTechnicalMetadataPatch,
+    fetchedEtag: string | null | undefined,
+  ): boolean {
+    const fields: string[] = []
+    const params: Record<string, string | number> = {
+      id: track.id,
+      driveId: track.drive_id!,
+      itemId: track.item_id!,
+    }
+    const add = (column: string, parameter: string, value: string | number | undefined): void => {
+      if (value === undefined) return
+      fields.push(`${column} = @${parameter}`)
+      params[parameter] = value
+    }
+    add('codec', 'codec', patch.codec)
+    if (patch.bitrate !== undefined) {
+      fields.push('bitrate = @bitrate')
+      params.bitrate = patch.bitrate
+    }
+    add('sample_rate', 'sampleRate', patch.sampleRate)
+    add('bit_depth', 'bitDepth', patch.bitDepth)
+    add('channels', 'channels', patch.channels)
+    add('duration', 'duration', patch.duration)
+
+    const expectedEtag = fetchedEtag === undefined ? track.etag : fetchedEtag
+    const etagClause = expectedEtag == null ? 'etag IS NULL' : 'etag = @etag'
+    if (expectedEtag != null) params.etag = expectedEtag
+    const setClause = fields.length > 0 ? fields.join(', ') : 'etag = etag'
+    const result = this.db.prepare(`
+      UPDATE tracks SET ${setClause}
+      WHERE id = @id AND provider = 'onedrive'
+        AND drive_id = @driveId AND item_id = @itemId AND ${etagClause}
+    `).run(params)
+    return result.changes === 1
   }
 
   private resolveEntities(item: DriveItem): {
@@ -356,12 +469,17 @@ export class OneDriveLibraryService {
   }
 
   private updateCloudTrack(
-    trackId: number,
+    existing: ExistingCloudTrack,
     item: DriveItem,
     folder: DbFolder,
     entities: { albumId: number; artistId: number; genreId: number | null },
   ): void {
     const metadata = audioFacetToMetadata(item)
+    const nextHash = item.file?.hashes?.quickXorHash ?? null
+    const nextEtag = item.eTag ?? item.cTag ?? null
+    const sameContent = nextHash != null && existing.quickxor_hash === nextHash
+      || nextHash == null && existing.quickxor_hash == null
+        && existing.etag === nextEtag && existing.file_size === metadata.fileSize
     this.db.prepare(`
       UPDATE tracks SET
         path = @path, filename = @filename, title = @title, artist = @artist,
@@ -370,12 +488,18 @@ export class OneDriveLibraryService {
         album_artist = @albumArtist, composer = @composer, genre = @genre, year = @year,
         track_number = @trackNumber, total_tracks = @totalTracks,
         disc_number = @discNumber, total_discs = @totalDiscs,
-        bitrate = @bitrate, album_id = @albumId, artist_id = @artistId, genre_id = @genreId,
+        codec = CASE WHEN @sameContent THEN codec ELSE NULL END,
+        bitrate = CASE WHEN @sameContent THEN bitrate ELSE @bitrate END,
+        sample_rate = CASE WHEN @sameContent THEN sample_rate ELSE NULL END,
+        bit_depth = CASE WHEN @sameContent THEN bit_depth ELSE NULL END,
+        channels = CASE WHEN @sameContent THEN channels ELSE NULL END,
+        album_id = @albumId, artist_id = @artistId, genre_id = @genreId,
         provider = 'onedrive', drive_id = @driveId, item_id = @itemId,
         etag = @etag, remote_path = @remotePath, quickxor_hash = @quickXorHash
       WHERE id = @id
     `).run({
-      id: trackId,
+      id: existing.id,
+      sameContent: sameContent ? 1 : 0,
       path: `onedrive://${folder.drive_id}/${item.id}`,
       filename: item.name ?? item.id,
       title: metadata.title,
@@ -399,9 +523,9 @@ export class OneDriveLibraryService {
       genreId: entities.genreId,
       driveId: folder.drive_id,
       itemId: item.id,
-      etag: item.eTag ?? item.cTag ?? null,
+      etag: nextEtag,
       remotePath: driveItemRemotePath(item),
-      quickXorHash: item.file?.hashes?.quickXorHash ?? null,
+      quickXorHash: nextHash,
     })
   }
 
@@ -686,14 +810,21 @@ export class OneDriveLibraryService {
 
   startPolling(intervalMs = POLL_INTERVAL_MS): void {
     if (this.pollTimer) return
+    this.enrichmentStopped = false
     void this.syncAllCloudFolders()
     this.pollTimer = setInterval(() => void this.syncAllCloudFolders(), intervalMs)
   }
 
-  stopPolling(): void {
-    if (!this.pollTimer) return
-    clearInterval(this.pollTimer)
-    this.pollTimer = null
+  async stopPolling(): Promise<void> {
+    this.enrichmentStopped = true
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer)
+      this.pollTimer = null
+    }
+    for (const controller of this.enrichmentControllers.values()) controller.abort()
+    await Promise.allSettled(this.enrichmentJobs.values())
+    this.enrichmentControllers.clear()
+    this.enrichmentJobs.clear()
   }
 
   async syncAllCloudFolders(): Promise<void> {

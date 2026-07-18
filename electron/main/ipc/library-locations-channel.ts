@@ -383,7 +383,7 @@ export function registerLibraryLocationsChannel(): void {
     return locationPayload(repos.folders.updatePresentation(folderId, { name, displayIcon }))
   })
 
-  ipcMain.handle('library-locations:remove', (_event, value: unknown) => {
+  ipcMain.handle('library-locations:remove', async (_event, value: unknown) => {
     const folderId = assertId(value, 'folder id')
     const folder = repos.folders.getById(folderId)
     if (!folder) return
@@ -391,6 +391,7 @@ export function registerLibraryLocationsChannel(): void {
     getFolderWatcher().stop(folderId)
     getLibraryBackup().cancelForFolder(folderId)
     getCloudManifestService().cancelForFolder(folderId)
+    if (folder.provider === 'onedrive') await getOneDriveLibraryService().waitForFolderIdle(folderId)
     repos.folders.remove(folderId)
     broadcast('library:changed', { reason: 'folder-remove', folderId })
   })

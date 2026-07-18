@@ -351,18 +351,20 @@ export class OneDriveClient {
     itemId: string,
     maxBytes: number,
     signal?: AbortSignal,
-  ): Promise<{ buffer: Buffer; size: number }> {
+  ): Promise<{ buffer: Buffer; size: number; etag: string | null }> {
     const info = await this.getDownloadUrl(driveId, itemId, signal)
-    if (info.size === 0 || maxBytes <= 0) return { buffer: Buffer.alloc(0), size: info.size }
-    const end = Math.min(maxBytes, info.size) - 1
-    const response = await this.fetchImpl(info.url, {
-      headers: { Range: `bytes=0-${end}` },
+    const prefixBytes = Math.min(Math.max(0, maxBytes), info.size)
+    const buffer = Buffer.allocUnsafe(prefixBytes)
+    await this.fetchFullIntoBuffer({
+      driveId,
+      itemId,
+      sizeBytes: prefixBytes,
+      buffer,
       signal,
+      initialUrl: info.url,
+      requireRange: info.size > prefixBytes,
     })
-    if (response.status !== 200 && response.status !== 206) {
-      throw new CloudHttpError(response.status, `Prefix download failed (${response.status}).`)
-    }
-    return { buffer: Buffer.from(await response.arrayBuffer()), size: info.size }
+    return { buffer, size: info.size, etag: info.etag }
   }
 
   async fetchFullIntoBuffer(options: {
@@ -373,6 +375,7 @@ export class OneDriveClient {
     signal?: AbortSignal
     onProgress?: (loadedBytes: number) => void
     initialUrl?: string
+    requireRange?: boolean
   }): Promise<void> {
     const { driveId, itemId, sizeBytes, buffer, signal, onProgress } = options
     await downloadRangesIntoBuffer({
@@ -381,6 +384,7 @@ export class OneDriveClient {
       signal,
       onProgress,
       initialUrl: options.initialUrl,
+      requireRange: options.requireRange,
       deps: {
         chunkBytes: PLAYBACK_MEMORY_READ_CHUNK_BYTES,
         maxUrlRefreshes: MAX_DOWNLOAD_URL_REFRESHES,
@@ -393,6 +397,10 @@ export class OneDriveClient {
             headers: { Range: `bytes=${start}-${endInclusive}` },
             signal: activeSignal,
           })
+          if (options.requireRange && response.status === 200) {
+            await response.body?.cancel()
+            return { status: 200, body: null, retryAfterSec: null }
+          }
           const retryAfter = Number(response.headers.get('Retry-After'))
           return {
             status: response.status,
