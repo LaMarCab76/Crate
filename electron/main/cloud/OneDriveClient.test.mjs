@@ -178,6 +178,38 @@ test('creates folders and deletes items through the recycle-bin API with precond
   assert.equal(new Headers(requests[1].init.headers).get('If-Match'), 'etag')
 })
 
+test('fetches a bounded prefix and rejects a server that ignores Range', async () => {
+  const bytes = Buffer.alloc(32, 7)
+  const ranges = []
+  const graph = client(async (url, init = {}) => {
+    if (String(url).startsWith('https://graph.microsoft.com/')) {
+      return json({
+        id: 'item',
+        size: bytes.length,
+        '@microsoft.graph.downloadUrl': 'https://download.example.test/item',
+      })
+    }
+    ranges.push(new Headers(init.headers).get('Range'))
+    return new Response(bytes.subarray(0, 8), { status: 206 })
+  })
+
+  const prefix = await graph.fetchPrefix('drive', 'item', 8)
+  assert.equal(prefix.buffer.length, 8)
+  assert.deepEqual(ranges, ['bytes=0-7'])
+
+  const unbounded = client(async (url, init = {}) => {
+    if (String(url).startsWith('https://graph.microsoft.com/')) {
+      return json({
+        id: 'item',
+        size: bytes.length,
+        '@microsoft.graph.downloadUrl': 'https://download.example.test/item',
+      })
+    }
+    return new Response(bytes, { status: 200 })
+  })
+  await assert.rejects(unbounded.fetchPrefix('drive', 'item', 8), /ignored the bounded prefix/)
+})
+
 test('streams downloads as bounded verified ranges', async () => {
   const size = 700_000
   const bytes = Uint8Array.from({ length: size }, (_value, index) => index % 251)

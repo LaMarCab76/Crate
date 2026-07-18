@@ -120,3 +120,18 @@ test('DeviceSyncService passes changed-since signals into incremental device sca
     'planSync should compute changed track-key sets for incremental change filtering',
   )
 })
+
+test('DeviceSyncService materializes cloud sources through the tested temp-file helper', () => {
+  assert.ok(serviceSource.includes("import { withCloudSourceTempFile } from './cloudSourceTempFile'"))
+  assert.match(serviceSource, /withMaterializedCloudSource[\s\S]*?return withCloudSourceTempFile\(/)
+})
+
+test('DeviceSyncService never deletes or deindexes OneDrive sources', () => {
+  const deletePath = serviceSource.slice(
+    serviceSource.indexOf('private async trashPcFile'),
+    serviceSource.indexOf('private async importPcTarget'),
+  )
+  assert.match(deletePath, /if \(track\.provider === 'onedrive'\)[\s\S]*?throw new Error/)
+  assert.ok(deletePath.indexOf("provider === 'onedrive'") < deletePath.indexOf('shell.trashItem'))
+  assert.ok(deletePath.indexOf("provider === 'onedrive'") < deletePath.indexOf('repos.tracks.deleteByPath'))
+})
