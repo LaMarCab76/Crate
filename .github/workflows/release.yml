@@ -9,12 +9,12 @@ on:
       tag:
         description: Existing tag to publish
         required: true
-        default: v0.5.2
+        default: v0.5.3-rc.1
       unsigned_macos:
         description: Build macOS ad hoc without notarization
         required: true
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: write
@@ -66,10 +66,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
       - name: Validate macOS signing credentials
-        if: runner.os == 'macOS' && inputs.unsigned_macos != true
+        if: runner.os == 'macOS' && github.event_name != 'push' && inputs.unsigned_macos != true
         shell: bash
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -125,7 +124,7 @@ jobs:
         run: npm run typecheck
 
       - name: Build ${{ matrix.platform_name }} packages
-        if: runner.os != 'macOS' || inputs.unsigned_macos != true
+        if: runner.os != 'macOS' || (github.event_name != 'push' && inputs.unsigned_macos != true)
         env:
           CSC_LINK: ${{ runner.os == 'macOS' && secrets.CSC_LINK || '' }}
           CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.CSC_KEY_PASSWORD || '' }}
@@ -135,14 +134,14 @@ jobs:
         run: npm run ${{ matrix.build_script }}
 
       - name: Build unsigned macOS packages
-        if: runner.os == 'macOS' && inputs.unsigned_macos == true
+        if: runner.os == 'macOS' && (github.event_name == 'push' || inputs.unsigned_macos == true)
         run: npm run verify:bass -- --platform=darwin && npm run build && npx electron-builder --mac --config electron-builder.unsigned.yml --publish never
 
       - name: Smoke packaged BASS resources
         run: npm run verify:bass -- --packaged-root=release --load
 
       - name: Verify macOS signatures and notarization
-        if: runner.os == 'macOS' && inputs.unsigned_macos != true
+        if: runner.os == 'macOS' && github.event_name != 'push' && inputs.unsigned_macos != true
         shell: bash
         run: |
           set -euo pipefail
@@ -168,7 +167,7 @@ jobs:
           verify_app "release/mac-arm64/Crate.app" "arm64"
 
       - name: Verify ad hoc macOS packages
-        if: runner.os == 'macOS' && inputs.unsigned_macos == true
+        if: runner.os == 'macOS' && (github.event_name == 'push' || inputs.unsigned_macos == true)
         shell: bash
         run: |
           set -euo pipefail
@@ -195,6 +194,7 @@ jobs:
           name: crate-${{ env.RELEASE_TAG }}-${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_paths }}
           if-no-files-found: error
+          retention-days: 1
 
   publish:
     name: Publish GitHub Release
@@ -238,9 +238,44 @@ jobs:
             exit 1
           fi
 
+          release_flags=()
+          if [[ "${tag}" == *-* ]]; then
+            release_flags+=(--prerelease --latest=false)
+          else
+            release_flags+=(--latest)
+          fi
+
           if gh release view "${tag}" >/dev/null 2>&1; then
             gh release upload "${tag}" "${assets[@]}" --clobber
-            gh release edit "${tag}" --title "Crate ${tag}" --notes-file "${notes_file}" --latest
+            gh release edit "${tag}" --title "Crate ${tag}" --notes-file "${notes_file}" "${release_flags[@]}"
           else
-            gh release create "${tag}" "${assets[@]}" --title "Crate ${tag}" --notes-file "${notes_file}" --verify-tag --latest
+            gh release create "${tag}" "${assets[@]}" --title "Crate ${tag}" --notes-file "${notes_file}" --verify-tag "${release_flags[@]}"
           fi
+
+  cleanup:
+    name: Cleanup workflow artifacts
+    if: ${{ always() }}
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: Delete artifacts from this run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          artifact_ids="$(
+            gh api --paginate \
+              "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+              --jq '.artifacts[].id'
+          )"
+
+          while IFS= read -r artifact_id; do
+            [[ -z "${artifact_id}" ]] && continue
+            gh api --method DELETE "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
+          done <<< "${artifact_ids}"

@@ -1,6 +1,6 @@
 {
   "name": "crate",
-  "version": "0.5.2",
+  "version": "0.5.3-rc.1",
   "description": "Audiophile music library and player",
   "main": "out/main/index.js",
   "author": "Lautaro Caballero",

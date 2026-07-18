@@ -4,7 +4,7 @@ Audiophile music library and player for **macOS, Windows and Linux**, built as a
 Electron + Vite + React + TypeScript desktop app on top of the
 [BASS](https://www.un4seen.com/bass.html) audio library.
 
-> Current release: **v0.5.2** — installers and release notes live in
+> Current prerelease: **v0.5.3-rc.1** — installers and release notes live in
 > [`docs/releases/`](docs/releases/).
 
 ## Quick start
@@ -28,13 +28,14 @@ runtime. If a native module ever drifts after an Electron upgrade,
 `npm run rebuild` does it on demand.
 
 Packaged builds check GitHub Releases for updates through `electron-updater`.
-The release workflow uploads installer artifacts plus `latest*.yml` metadata,
-and Preferences → Actualizaciones can check, download, and install the
-published release. The macOS release job requires Developer ID signing,
-notarization, a stapled ticket, and Gatekeeper acceptance before upload. A
-manual workflow dispatch can explicitly request ad hoc macOS artifacts when no
-Developer ID is available; those builds require a Gatekeeper override and do
-not support automatic installation of updates.
+The release workflow uploads installer artifacts plus `latest*.yml` metadata.
+Stable releases can be checked, downloaded, and installed from Preferences →
+Actualizaciones. Prereleases in this private repository are installed manually
+and are not offered by the in-app updater. Tag-triggered macOS prereleases use
+ad hoc signing; those builds require a Gatekeeper override and do not support
+automatic installation of updates. A manual workflow dispatch can still use
+Developer ID signing, notarization, stapling, and Gatekeeper validation when
+the required Apple credentials are available.
 
 ## Optional OneDrive setup
 
