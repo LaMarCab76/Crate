@@ -19,9 +19,47 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
+  prepare_release:
+    name: Prepare GitHub Release draft
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+    steps:
+      - name: Create or reset release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${RELEASE_TAG}"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            if [[ "$(gh release view "${tag}" --json isDraft --jq '.isDraft')" != "true" ]]; then
+              echo "${tag} is already published; refusing to replace it" >&2
+              exit 1
+            fi
+
+            while IFS= read -r asset; do
+              [[ -z "${asset}" ]] && continue
+              gh release delete-asset "${tag}" "${asset}" --yes
+            done < <(gh release view "${tag}" --json assets --jq '.assets[].name')
+          else
+            gh release create "${tag}" \
+              --draft \
+              --verify-tag \
+              --title "Crate ${tag}" \
+              --notes "Release build in progress."
+          fi
+
   build:
     name: Build ${{ matrix.platform_name }}
+    needs: prepare_release
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -29,30 +67,13 @@ jobs:
         include:
           - os: macos-latest
             platform_name: macOS
-            artifact_name: macos
             build_script: dist:mac
-            artifact_paths: |
-              release/*.dmg
-              release/*.dmg.blockmap
-              release/*.zip
-              release/*.zip.blockmap
-              release/latest-mac.yml
           - os: windows-latest
             platform_name: Windows
-            artifact_name: windows
             build_script: dist:win
-            artifact_paths: |
-              release/*.exe
-              release/*.exe.blockmap
-              release/latest.yml
           - os: ubuntu-latest
             platform_name: Linux
-            artifact_name: linux
             build_script: dist:linux
-            artifact_paths: |
-              release/*.AppImage
-              release/*.deb
-              release/latest-linux.yml
     env:
       RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
@@ -188,13 +209,71 @@ jobs:
           verify_app "release/mac/Crate.app" "x86_64"
           verify_app "release/mac-arm64/Crate.app" "arm64"
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: crate-${{ env.RELEASE_TAG }}-${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_paths }}
-          if-no-files-found: error
-          retention-days: 1
+      - name: Upload verified macOS release assets
+        if: runner.os == 'macOS'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          assets=(
+            release/*.dmg
+            release/*.dmg.blockmap
+            release/*.zip
+            release/*.zip.blockmap
+            release/latest-mac.yml
+          )
+          if [[ ${#assets[@]} -eq 0 ]]; then
+            echo "No macOS release assets found" >&2
+            exit 1
+          fi
+          gh release upload "${RELEASE_TAG}" "${assets[@]}"
+
+      - name: Upload verified Windows release assets
+        if: runner.os == 'Windows'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $assets = @(
+            Get-ChildItem "release/*.exe" -File -ErrorAction SilentlyContinue
+            Get-ChildItem "release/*.exe.blockmap" -File -ErrorAction SilentlyContinue
+            Get-ChildItem "release/latest.yml" -File -ErrorAction SilentlyContinue
+          ) | Sort-Object FullName | Select-Object -ExpandProperty FullName
+
+          if ($assets.Count -eq 0) {
+            throw "No Windows release assets found"
+          }
+
+          $arguments = @("release", "upload", $env:RELEASE_TAG) + $assets
+          & gh @arguments
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to upload Windows release assets"
+          }
+
+      - name: Upload verified Linux release assets
+        if: runner.os == 'Linux'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          assets=(
+            release/*.AppImage
+            release/*.deb
+            release/latest-linux.yml
+          )
+          if [[ ${#assets[@]} -eq 0 ]]; then
+            echo "No Linux release assets found" >&2
+            exit 1
+          fi
+          gh release upload "${RELEASE_TAG}" "${assets[@]}"
 
   publish:
     name: Publish GitHub Release
@@ -208,11 +287,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
-
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
 
       - name: Publish to GitHub Releases
         env:
@@ -231,12 +305,24 @@ jobs:
             printf '# Crate %s\n\nRelease build.\n' "${tag}" > "${notes_file}"
           fi
 
-          mapfile -t assets < <(find artifacts -type f -print)
+          mapfile -t asset_names < <(gh release view "${tag}" --json assets --jq '.assets[].name')
+          require_asset() {
+            local pattern="$1"
+            local description="$2"
+            if ! printf '%s\n' "${asset_names[@]}" | grep -Eiq "${pattern}"; then
+              echo "Missing ${description} release asset" >&2
+              exit 1
+            fi
+          }
 
-          if [[ ${#assets[@]} -eq 0 ]]; then
-            echo "No assets found to publish" >&2
-            exit 1
-          fi
+          require_asset '\.dmg$' 'macOS DMG'
+          require_asset '\.zip$' 'macOS ZIP'
+          require_asset '^latest-mac\.yml$' 'macOS update metadata'
+          require_asset '\.exe$' 'Windows installer'
+          require_asset '^latest\.yml$' 'Windows update metadata'
+          require_asset '\.AppImage$' 'Linux AppImage'
+          require_asset '\.deb$' 'Linux Debian package'
+          require_asset '^latest-linux\.yml$' 'Linux update metadata'
 
           release_flags=()
           if [[ "${tag}" == *-* ]]; then
@@ -245,37 +331,8 @@ jobs:
             release_flags+=(--latest)
           fi
 
-          if gh release view "${tag}" >/dev/null 2>&1; then
-            gh release upload "${tag}" "${assets[@]}" --clobber
-            gh release edit "${tag}" --title "Crate ${tag}" --notes-file "${notes_file}" "${release_flags[@]}"
-          else
-            gh release create "${tag}" "${assets[@]}" --title "Crate ${tag}" --notes-file "${notes_file}" --verify-tag "${release_flags[@]}"
-          fi
-
-  cleanup:
-    name: Cleanup workflow artifacts
-    if: ${{ always() }}
-    needs: [build, publish]
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      contents: read
-
-    steps:
-      - name: Delete artifacts from this run
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          artifact_ids="$(
-            gh api --paginate \
-              "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
-              --jq '.artifacts[].id'
-          )"
-
-          while IFS= read -r artifact_id; do
-            [[ -z "${artifact_id}" ]] && continue
-            gh api --method DELETE "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
-          done <<< "${artifact_ids}"
+          gh release edit "${tag}" \
+            --draft=false \
+            --title "Crate ${tag}" \
+            --notes-file "${notes_file}" \
+            "${release_flags[@]}"

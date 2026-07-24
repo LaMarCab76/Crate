@@ -42,9 +42,49 @@ permissions:
   contents: read
 
 jobs:
+  prepare_release:
+    name: Prepare native release draft
+    if: github.event_name == 'workflow_dispatch' && inputs.publish == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Create or reset the release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="chromaprint-native-v1.6.0-1"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            if [[ "$(gh release view "${tag}" --json isDraft --jq '.isDraft')" != "true" ]]; then
+              echo "${tag} is already published; refusing to replace immutable native binaries" >&2
+              exit 1
+            fi
+
+            while IFS= read -r asset; do
+              [[ -z "${asset}" ]] && continue
+              gh release delete-asset "${tag}" "${asset}" --yes
+            done < <(gh release view "${tag}" --json assets --jq '.assets[].name')
+          else
+            gh release create "${tag}" \
+              --draft \
+              --target "${GITHUB_SHA}" \
+              --title "Crate Chromaprint 1.6.0 native assets (revision 1)" \
+              --notes "Verified shared-library builds from the pinned Chromaprint 1.6.0 source. Each archive includes its provenance manifest, exact source archive, and license notices."
+          fi
+
   build:
     name: Build ${{ matrix.asset }}
+    needs: prepare_release
+    if: >-
+      always() &&
+      (needs.prepare_release.result == 'success' || needs.prepare_release.result == 'skipped')
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -95,61 +135,103 @@ jobs:
       - name: Smoke BASS PCM into Chromaprint
         run: npm run smoke:chromaprint-pipeline
 
-      - name: Upload verified native tree
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.asset }}
-          path: |
-            ${{ matrix.binary }}
-            native/libs/chromaprint-manifest.json
-            native/libs/licenses/chromaprint/LICENSE.md
-            native/libs/licenses/chromaprint/LGPL-2.1.txt
-            native/libs/licenses/chromaprint/KISSFFT-LICENSE.txt
-            native/libs/licenses/chromaprint/SOURCE.md
-            native/libs/licenses/chromaprint/chromaprint-1.6.0.tar.gz
-          if-no-files-found: error
-          retention-days: 7
+      - name: Package and upload verified native tree
+        if: github.event_name == 'workflow_dispatch' && inputs.publish == true && runner.os != 'Windows'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="chromaprint-native-v1.6.0-1"
+          asset="${{ matrix.asset }}.zip"
+          stage="release-staging"
+
+          mkdir -p "${stage}/licenses/chromaprint"
+          cp "${{ matrix.binary }}" "${stage}/"
+          cp native/libs/chromaprint-manifest.json "${stage}/"
+          cp native/libs/licenses/chromaprint/LICENSE.md "${stage}/licenses/chromaprint/"
+          cp native/libs/licenses/chromaprint/LGPL-2.1.txt "${stage}/licenses/chromaprint/"
+          cp native/libs/licenses/chromaprint/KISSFFT-LICENSE.txt "${stage}/licenses/chromaprint/"
+          cp native/libs/licenses/chromaprint/SOURCE.md "${stage}/licenses/chromaprint/"
+          cp native/libs/licenses/chromaprint/chromaprint-1.6.0.tar.gz "${stage}/licenses/chromaprint/"
+
+          (
+            cd "${stage}"
+            zip -9 -r "../${asset}" .
+          )
+          gh release upload "${tag}" "${asset}"
+
+      - name: Package and upload verified native tree on Windows
+        if: github.event_name == 'workflow_dispatch' && inputs.publish == true && runner.os == 'Windows'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $tag = "chromaprint-native-v1.6.0-1"
+          $asset = "${{ matrix.asset }}.zip"
+          $stage = "release-staging"
+          $licenseStage = Join-Path $stage "licenses/chromaprint"
+
+          New-Item -ItemType Directory -Force -Path $licenseStage | Out-Null
+          Copy-Item "${{ matrix.binary }}" $stage
+          Copy-Item "native/libs/chromaprint-manifest.json" $stage
+          Copy-Item "native/libs/licenses/chromaprint/LICENSE.md" $licenseStage
+          Copy-Item "native/libs/licenses/chromaprint/LGPL-2.1.txt" $licenseStage
+          Copy-Item "native/libs/licenses/chromaprint/KISSFFT-LICENSE.txt" $licenseStage
+          Copy-Item "native/libs/licenses/chromaprint/SOURCE.md" $licenseStage
+          Copy-Item "native/libs/licenses/chromaprint/chromaprint-1.6.0.tar.gz" $licenseStage
+
+          Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $asset -CompressionLevel Optimal
+          & gh release upload $tag $asset
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to upload $asset"
+          }
 
   publish:
     name: Publish verified native release
-    if: inputs.publish == true
+    if: github.event_name == 'workflow_dispatch' && inputs.publish == true
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Download verified targets
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Create immutable asset archives
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir release-assets
-          for directory in artifacts/chromaprint-1.6.0-*; do
-            asset="$(basename "${directory}").zip"
-            (
-              cd "${directory}"
-              zip -9 -r "../../release-assets/${asset}" .
-            )
-          done
-          sha256sum release-assets/*.zip | tee release-assets/SHA256SUMS
-
-      - name: Publish native asset release once
+      - name: Verify assets and publish immutable native release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
+
           tag="chromaprint-native-v1.6.0-1"
-          if gh release view "${tag}" >/dev/null 2>&1; then
-            echo "${tag} already exists; refusing to replace published native binaries" >&2
+          expected=(
+            chromaprint-1.6.0-darwin-universal.zip
+            chromaprint-1.6.0-linux-x64.zip
+            chromaprint-1.6.0-win32-x64.zip
+          )
+
+          mkdir release-assets
+          gh release download "${tag}" --dir release-assets --pattern 'chromaprint-1.6.0-*.zip'
+
+          for asset in "${expected[@]}"; do
+            if [[ ! -s "release-assets/${asset}" ]]; then
+              echo "Missing or empty native release asset: ${asset}" >&2
+              exit 1
+            fi
+          done
+
+          mapfile -t archives < <(find release-assets -maxdepth 1 -type f -name '*.zip' -print)
+          if [[ ${#archives[@]} -ne ${#expected[@]} ]]; then
+            echo "Expected ${#expected[@]} native archives, found ${#archives[@]}" >&2
             exit 1
           fi
-          gh release create "${tag}" release-assets/* \
-            --target "${GITHUB_SHA}" \
-            --title "Crate Chromaprint 1.6.0 native assets (revision 1)" \
-            --notes "Verified shared-library builds from the pinned Chromaprint 1.6.0 source. Each archive includes its provenance manifest, exact source archive, and license notices."
+
+          (
+            cd release-assets
+            sha256sum "${expected[@]}" > SHA256SUMS
+          )
+          gh release upload "${tag}" release-assets/SHA256SUMS
+          gh release edit "${tag}" --draft=false --latest=false
