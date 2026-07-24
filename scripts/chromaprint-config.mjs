@@ -5,7 +5,7 @@ export const CHROMAPRINT_ALGORITHM = 1
 export const CHROMAPRINT_SOURCE_NAME = `chromaprint-${CHROMAPRINT_VERSION}.tar.gz`
 export const CHROMAPRINT_SOURCE_URL = `https://github.com/acoustid/chromaprint/releases/download/v${CHROMAPRINT_VERSION}/${CHROMAPRINT_SOURCE_NAME}`
 export const CHROMAPRINT_SOURCE_SHA256 = '9d33482e56a1389a37a0d6742c376139fa43e3b8a63d29003222b93db2cb40da'
-export const LGPL_2_1_SHA256 = 'e237fa56668030e928551ddd60f05df5fe957f75eab874bbd017e085ed722e7c'
+export const LGPL_2_1_SHA256 = 'f2f118b9029ec1871b953639ecc46651b2fc7b62e295e6cf3ef2ac4c9a058b33'
 
 // Native assets are published independently from application releases. Keeping
 // the toolchain revision in the tag lets us rebuild the same upstream version
