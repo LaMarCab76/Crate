@@ -10,7 +10,10 @@ import {
   assertNoExternalAudioDependencies,
   parseArchitectures,
 } from './verify-chromaprint.mjs'
-import { releaseAssetDownloadRequest } from './fetch-chromaprint.mjs'
+import {
+  releaseAssetDownloadRequest,
+  validateLocalArchiveOptions,
+} from './fetch-chromaprint.mjs'
 import {
   chromaprintArtifactName,
   chromaprintLibraryName,
@@ -126,6 +129,16 @@ test('local fetch refuses an artifact without an explicit SHA-256', () => {
   })
   assert.equal(result.status, 1)
   assert.match(result.stderr, /--archive requires a 64-character --sha256/)
+})
+
+test('local archive options are validated before cache reuse', () => {
+  assert.throws(
+    () => validateLocalArchiveOptions('artifact.zip'),
+    /--archive requires a 64-character --sha256/,
+  )
+  assert.doesNotThrow(
+    () => validateLocalArchiveOptions('artifact.zip', 'a'.repeat(64)),
+  )
 })
 
 test('authenticated release downloads use the GitHub asset API', () => {

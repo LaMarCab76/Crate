@@ -83,6 +83,12 @@ export function releaseAssetDownloadRequest(asset, token) {
   return { url: asset.browser_download_url, headers: {} }
 }
 
+export function validateLocalArchiveOptions(localArchive, localSha256) {
+  if (localArchive && (!localSha256 || !/^[0-9a-f]{64}$/.test(localSha256))) {
+    throw new Error('--archive requires a 64-character --sha256 value')
+  }
+}
+
 async function downloadPublishedArtifact(assetName) {
   const headers = { Accept: 'application/vnd.github+json' }
   const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN
@@ -114,9 +120,6 @@ async function downloadPublishedArtifact(assetName) {
 
 async function loadArtifact(assetName) {
   if (LOCAL_ARCHIVE) {
-    if (!LOCAL_SHA256 || !/^[0-9a-f]{64}$/.test(LOCAL_SHA256)) {
-      throw new Error('--archive requires a 64-character --sha256 value')
-    }
     return {
       bytes: await readFile(resolve(REPO_ROOT, LOCAL_ARCHIVE)),
       expectedDigest: LOCAL_SHA256,
@@ -187,6 +190,7 @@ async function existingInstallIsValid() {
 }
 
 async function main() {
+  validateLocalArchiveOptions(LOCAL_ARCHIVE, LOCAL_SHA256)
   const assetName = chromaprintArtifactName(TARGET.platform, TARGET.arch)
   if (!FORCE && await existingInstallIsValid()) {
     console.log(`[fetch-chromaprint] skip ${assetName} (verified install already present)`)
