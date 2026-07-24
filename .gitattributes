@@ -1,0 +1,3 @@
+native/libs/licenses/chromaprint/*.md text eol=lf
+native/libs/licenses/chromaprint/*.txt text eol=lf
+native/libs/licenses/chromaprint/*.tar.gz -text
