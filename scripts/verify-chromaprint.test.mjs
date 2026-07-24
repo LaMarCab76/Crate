@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -8,6 +9,7 @@ import test from 'node:test'
 import {
   assertExpectedRuntimeDependencies,
   assertNoExternalAudioDependencies,
+  classifyManifestBinary,
   parseArchitectures,
 } from './verify-chromaprint.mjs'
 import {
@@ -79,6 +81,38 @@ test('uses portable forward-slash paths for the Windows artifact layout', () => 
     'licenses/chromaprint/SOURCE.md',
     'licenses/chromaprint/chromaprint-1.6.0.tar.gz',
   ])
+})
+
+test('accepts only a verified source binary when macOS packaging changes its signature', () => {
+  const source = Buffer.from('verified native binary')
+  const resigned = Buffer.from('verified native binary with a replaced code signature')
+  const manifestBinary = {
+    bytes: source.length,
+    sha256: createHash('sha256').update(source).digest('hex'),
+  }
+
+  assert.equal(classifyManifestBinary(manifestBinary, source, { platform: 'darwin' }), 'exact')
+  assert.equal(classifyManifestBinary(manifestBinary, resigned, {
+    platform: 'darwin',
+    packaged: true,
+    sourceBinary: source,
+  }), 'macos-resigned')
+  assert.throws(
+    () => classifyManifestBinary(manifestBinary, resigned, {
+      platform: 'linux',
+      packaged: true,
+      sourceBinary: source,
+    }),
+    /does not match its provenance manifest/,
+  )
+  assert.throws(
+    () => classifyManifestBinary(manifestBinary, resigned, {
+      platform: 'darwin',
+      packaged: true,
+      sourceBinary: Buffer.from('unverified source'),
+    }),
+    /does not match its provenance manifest/,
+  )
 })
 
 test('reads the architectures from Mach-O, ELF, and PE headers', () => {
