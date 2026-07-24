@@ -36,6 +36,7 @@ import {
   type DeviceSyncPlanGroupBy,
 } from '@renderer/utils/deviceSyncPlan'
 import type { DbFolder } from '@shared/types/db'
+import { computerTerms } from '@shared/utils/computerTerms'
 import type {
   DeviceArtworkAnalysisItem,
   DevicePendingJournal,
@@ -48,18 +49,20 @@ import type {
   DeviceArtworkOptimizationSummary,
 } from '@shared/types/device-sync'
 
+const COMPUTER = computerTerms(window.api.meta.platform)
+
 const MODES: Array<{ mode: DeviceSyncMode; label: string; short: string; description: string }> = [
   {
     mode: 'pc_to_device',
-    label: 'PC -> Device',
+    label: `${COMPUTER.short} -> Device`,
     short: 'Push',
     description: 'Copia las bibliotecas seleccionadas al MP3 y elimina del dispositivo lo que ya no corresponda.',
   },
   {
     mode: 'device_to_pc',
-    label: 'Device -> PC',
+    label: `Device -> ${COMPUTER.short}`,
     short: 'Pull',
-    description: 'Importa desde el MP3 a la raíz de la biblioteca elegida y elimina en la PC lo que ya no corresponda.',
+    description: `Importa desde el MP3 a la raíz de la biblioteca elegida y elimina en ${COMPUTER.definite} lo que ya no corresponda.`,
   },
   {
     mode: 'bidirectional_safe',
@@ -70,7 +73,7 @@ const MODES: Array<{ mode: DeviceSyncMode; label: string; short: string; descrip
 ]
 
 const SYNC_BASES: Array<{ value: DeviceSyncBase; label: string }> = [
-  { value: 'pc', label: 'Preferir PC' },
+  { value: 'pc', label: `Preferir ${COMPUTER.short}` },
   { value: 'device', label: 'Preferir dispositivo' },
   { value: 'review', label: 'Revisar c/u' },
 ]
@@ -163,10 +166,10 @@ const ARTWORK_VIEW_MODES: Array<{ value: ArtworkOptimizeViewMode; label: string 
 const SYNC_DIRECTION_LABELS: Record<DeviceSyncActionKind, string> = {
   copy_pc_to_device: 'Copiando al MP3',
   replace_device: 'Actualizando en MP3',
-  copy_device_to_pc: 'Trayendo a la PC',
-  replace_pc: 'Actualizando en PC',
+  copy_device_to_pc: `Trayendo ${COMPUTER.destination}`,
+  replace_pc: `Actualizando en ${COMPUTER.definite}`,
   delete_device: 'Eliminando del MP3',
-  delete_pc: 'Eliminando de la PC',
+  delete_pc: `Eliminando de ${COMPUTER.definite}`,
   skip_conflict: 'Omitiendo',
 }
 
@@ -285,7 +288,7 @@ function SyncWizardStepper({
 }
 
 const SIDE_OPTIONS: Array<{ side: DeviceSyncActionSide; label: string; title: string }> = [
-  { side: 'pc', label: 'PC', title: 'Usar la versión de la PC' },
+  { side: 'pc', label: COMPUTER.short, title: `Usar la versión de ${COMPUTER.definite}` },
   { side: 'device', label: 'MP3', title: 'Usar la versión del MP3' },
   { side: 'omit', label: '–', title: 'Omitir este tema' },
 ]
@@ -353,7 +356,7 @@ function SyncDiffColumn({
           disabled={loading || actions.length === 0}
           onClick={() => onSetSide(allIds, side)}
         >
-          {side === 'pc' ? 'Usar PC' : 'Usar MP3'}
+          {side === 'pc' ? `Usar ${COMPUTER.short}` : 'Usar MP3'}
         </button>
       </header>
       <div className="device-sync-side-groups">
@@ -367,7 +370,7 @@ function SyncDiffColumn({
                 <em>{group.actions.length} · {fmtFileSize(group.bytes)}</em>
               </span>
               <span className="device-side-group-actions">
-                <button type="button" disabled={loading} onClick={() => onSetSide(group.actions.map(a => a.id), 'pc')}>PC</button>
+                <button type="button" disabled={loading} onClick={() => onSetSide(group.actions.map(a => a.id), 'pc')}>{COMPUTER.short}</button>
                 <button type="button" disabled={loading} onClick={() => onSetSide(group.actions.map(a => a.id), 'device')}>MP3</button>
               </span>
             </div>
@@ -384,7 +387,7 @@ function SyncDiffColumn({
                       </em>
                     </span>
                     <span className={`device-side-badge ${onOtherSide ? 'is-diff' : 'is-only'}`}>
-                      {onOtherSide ? 'Difiere' : side === 'pc' ? 'Falta en MP3' : 'Falta en PC'}
+                      {onOtherSide ? 'Difiere' : side === 'pc' ? 'Falta en MP3' : `Falta en ${COMPUTER.short}`}
                     </span>
                     <SideToggle value={value} disabled={loading} onPick={next => onSetSide([action.id], next)} />
                   </div>
@@ -423,7 +426,7 @@ function SyncDiffStep({
       <div className="device-sync-diff-toolbar">
         <div className="device-side-global" role="group" aria-label="Elegir lado para todo">
           <span>Para todo:</span>
-          <button className="btn ghost" type="button" disabled={loading} onClick={() => onGlobalBase('pc')}>Tomar todo de PC</button>
+          <button className="btn ghost" type="button" disabled={loading} onClick={() => onGlobalBase('pc')}>Tomar todo de {COMPUTER.short}</button>
           <button className="btn ghost" type="button" disabled={loading} onClick={() => onGlobalBase('device')}>Tomar todo de MP3</button>
           <button className="btn ghost" type="button" disabled={loading} onClick={() => onGlobalBase('review')}>Revisar</button>
         </div>
@@ -444,7 +447,7 @@ function SyncDiffStep({
         <div className="device-empty compact">Las bibliotecas ya están sincronizadas.</div>
       ) : (
         <div className="device-sync-columns">
-          <SyncDiffColumn side="pc" title="PC" actions={pc} actionSides={actionSides} groupBy={groupBy} loading={loading} onSetSide={onSetSide} />
+          <SyncDiffColumn side="pc" title={COMPUTER.short} actions={pc} actionSides={actionSides} groupBy={groupBy} loading={loading} onSetSide={onSetSide} />
           <SyncDiffColumn side="device" title={deviceName || 'MP3'} actions={device} actionSides={actionSides} groupBy={groupBy} loading={loading} onSetSide={onSetSide} />
         </div>
       )}
@@ -550,7 +553,7 @@ function SyncResultStep({
         Se copiarán <strong>{fmtFileSize(summary.bytesToCopy)}</strong> en total.
       </div>
       <div className="device-sync-columns">
-        <SyncResultColumn title="Biblioteca PC" before={summary.pcBefore} after={summary.pcAfter} actions={pcActions} selection={selection} groupBy={groupBy} />
+        <SyncResultColumn title={COMPUTER.library} before={summary.pcBefore} after={summary.pcAfter} actions={pcActions} selection={selection} groupBy={groupBy} />
         <SyncResultColumn title={deviceName || 'MP3'} before={summary.deviceBefore} after={summary.deviceAfter} actions={deviceActions} selection={selection} groupBy={groupBy} />
       </div>
     </div>
@@ -590,7 +593,7 @@ function SyncConfirmStep({
       </div>
       <div className="device-confirm-stats">
         <div><b className="mono">{toDevice}</b><span>Al MP3</span></div>
-        <div><b className="mono">{toPc}</b><span>A la PC</span></div>
+        <div><b className="mono">{toPc}</b><span>{COMPUTER.destination[0].toUpperCase() + COMPUTER.destination.slice(1)}</span></div>
         <div><b className="mono">{removed}</b><span>Se eliminan</span></div>
         <div><b className="mono">{fmtFileSize(summary.bytesToCopy)}</b><span>A copiar</span></div>
       </div>
@@ -1695,8 +1698,8 @@ export function DeviceSyncView({
         )}
         {pathError && <div className="device-error inline">{pathError}</div>}
         <div className="device-library-note">
-          PC -&gt; Device copia desde las bibliotecas agregadas a <code>{normalizedMusicRoot}</code>.
-          {needsDestination && <> Device -&gt; PC importa a la raíz de <code>{destinationFolder ? folderLabel(destinationFolder) : '—'}</code>.</>}
+          {COMPUTER.short} -&gt; Device copia desde las bibliotecas agregadas a <code>{normalizedMusicRoot}</code>.
+          {needsDestination && <> Device -&gt; {COMPUTER.short} importa a la raíz de <code>{destinationFolder ? folderLabel(destinationFolder) : '—'}</code>.</>}
         </div>
       </section>
       )}

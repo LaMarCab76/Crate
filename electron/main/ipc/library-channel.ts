@@ -1,4 +1,4 @@
-import { dialog, shell } from 'electron'
+import { BrowserWindow, dialog, shell } from 'electron'
 import { secureIpcMain as ipcMain } from './secureIpc'
 import { existsSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
@@ -7,14 +7,17 @@ import { getImportService } from '../library/ImportService'
 import { getFolderWatcher } from '../library/FolderWatcher'
 import { getLibraryReconciler } from '../library/LibraryReconciler'
 import { parseArtistName } from '../library/ArtistNameParser'
-import { readTrackMetadata } from '../library/MetadataExtractor'
+import { readTrackMetadata, serializeTrackExtendedMetadata } from '../library/MetadataExtractor'
 import { getMetadataCompletionService } from '../library/MetadataCompletionService'
 import { getTrackAlbumMoveService } from '../library/TrackAlbumMoveService'
+import { trashTrackBatch } from '../library/TrackTrashBatch'
 import { writeTrackMetadata } from '../library/MetadataWriter'
 import { getLibraryBackup } from '../services/LibraryBackup'
 import { getCloudManifestService } from '../cloud/CloudManifestService'
+import { getDuplicateDecisionPortableService } from '../duplicates/DuplicateDecisionPortableService'
 import { getOneDriveLibraryService } from '../cloud/OneDriveLibraryService'
 import { getPathAuthorizationService } from '../security/PathAuthorizationService'
+import { getLocalFileAccessService } from '../security/localFileAccessRuntime'
 import { sidecarPathFor } from '../lyrics/providers/SidecarLrcProvider'
 import { broadcast } from './events'
 import { assertId, assertNonEmptyString, sanitizeIds } from './validation'
@@ -98,6 +101,7 @@ async function refreshTrackMetadataInDb(repos: Repos, trackId: number): Promise<
   }
   const candidateAlbum = resolveAlbumFromFolderHints(metadataHint, candidateRefs)
   const resolvedAlbum = repos.albums.getOrCreate(md.album, md.albumArtist ?? null, md.year || null)
+  repos.albums.enrichReleaseMetadata(resolvedAlbum.id, md)
   const targetAlbumId = candidateAlbum ?? resolvedAlbum.id
 
   repos.tracks.updateMetadata({
@@ -114,6 +118,10 @@ async function refreshTrackMetadataInDb(repos: Repos, trackId: number): Promise<
     discNumber: md.discNumber,
     totalDiscs: md.totalDiscs,
     compilation: md.isCompilation ? 1 : 0,
+    releaseDate: md.releaseDate,
+    originalReleaseDate: md.originalReleaseDate,
+    mediaType: md.mediaType,
+    extendedMetadata: serializeTrackExtendedMetadata(md),
     duration: md.duration,
     format: md.format,
     codec: md.codec,
@@ -184,7 +192,7 @@ export function registerLibraryChannel(): void {
   )
 
   ipcMain.handle('library:folders', () => repos.folders.list().filter(folder => folder.role === 'library'))
-  ipcMain.handle('library:folders:remove', async (_, id: number, options?: RemoveFolderOptions) => {
+  ipcMain.handle('library:folders:remove', async (event, id: number, options?: RemoveFolderOptions) => {
     const folderId = assertId(id, 'folderId')
     const folder = repos.folders.getById(folderId)
     if (!folder) throw new Error('La carpeta ya no existe en la biblioteca.')
@@ -201,12 +209,14 @@ export function registerLibraryChannel(): void {
     }
     const folderPath = folder.provider === 'local' ? resolve(folder.path) : folder.path
     if (deleteMusic) {
-      if (!existsSync(folderPath)) {
-        throw new Error('La carpeta ya no existe en disco. Se mantuvo la conexión en Crate.')
-      }
       watcher.stop(folderId)
       try {
-        await shell.trashItem(folderPath)
+        await getLocalFileAccessService().runWithAccess(
+          folderPath,
+          'write',
+          () => shell.trashItem(folderPath),
+          { owner: BrowserWindow.fromWebContents(event.sender) ?? undefined },
+        )
       } catch (err) {
         watcher.start(folderId, folder.path)
         throw new Error(`No se pudo mover la carpeta a Papelera: ${err instanceof Error ? err.message : String(err)}`)
@@ -234,23 +244,46 @@ export function registerLibraryChannel(): void {
     return { canceled: false, token, displayPath }
   })
 
-  ipcMain.handle('library:folders:add', async (_, token: unknown): Promise<AddFolderResult> => {
+  ipcMain.handle('library:folders:add', async (event, token: unknown): Promise<AddFolderResult> => {
     const folderPath = getPathAuthorizationService().resolve(
       assertNonEmptyString(token, 'folder authorization'),
       'library:add',
       { consume: true },
     )
-    if (!existsSync(folderPath)) throw new Error('Folder does not exist')
-    const result = await importer.addFolder(folderPath)
+    const result = await getLocalFileAccessService().runWithAccess(
+      folderPath,
+      'read',
+      () => importer.addFolder(folderPath),
+      {
+        owner: BrowserWindow.fromWebContents(event.sender) ?? undefined,
+        retryOnce: false,
+      },
+    )
     watcher.start(result.folder.id, result.folder.path)
     reconciler.scheduleFolderScan(result.folder.id, 'import', 0)
     broadcast('library:changed', { reason: 'folder-add' })
     return result
   })
 
-  ipcMain.handle('library:scanNow', async (_, folderId?: number) => {
+  ipcMain.handle('library:scanNow', async (event, folderId?: number) => {
     if (folderId != null) {
-      return reconciler.scanFolder(assertId(folderId, 'folderId'), 'manual')
+      const safeFolderId = assertId(folderId, 'folderId')
+      const folder = repos.folders.getById(safeFolderId)
+      if (!folder) throw new Error('La biblioteca ya no existe.')
+      if (folder.provider !== 'local') return reconciler.scanFolder(safeFolderId, 'manual')
+      return getLocalFileAccessService().runWithAccess(
+        folder.path,
+        'read',
+        () => reconciler.scanFolder(safeFolderId, 'manual'),
+        { owner: BrowserWindow.fromWebContents(event.sender) ?? undefined },
+      )
+    }
+    const owner = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    for (const folder of repos.folders.list().filter(item => item.provider === 'local')) {
+      const access = await getLocalFileAccessService().inspect(folder.path)
+      if (access.state === 'permission_required') {
+        await getLocalFileAccessService().runWithAccess(folder.path, 'read', async () => undefined, { owner })
+      }
     }
     const runs = await reconciler.scanAll('manual')
     if (runs.length === 0) throw new Error('No library folders configured')
@@ -293,20 +326,32 @@ export function registerLibraryChannel(): void {
     broadcast('library:changed', { reason: 'album-favorite' })
   })
 
-  ipcMain.handle('track:updateMetadata', async (_, payload: { trackId: number; metadata: TrackMetadataUpdatePayload }) => {
+  ipcMain.handle('track:updateMetadata', async (event, payload: { trackId: number; metadata: TrackMetadataUpdatePayload }) => {
     const track = repos.tracks.getById(payload.trackId)
     if (!track) return
     if (track.provider !== 'local') throw new Error('Metadata editing is unavailable for cloud tracks')
 
-    writeTrackMetadata(track.path, payload.metadata)
-    await refreshTrackMetadataInDb(repos, track.id)
+    const folder = repos.folders.getById(track.folder_id)
+    if (!folder || folder.provider !== 'local') throw new Error('La biblioteca local ya no existe.')
+    await getLocalFileAccessService().runWithAccess(folder.path, 'write', async () => {
+      writeTrackMetadata(track.path, payload.metadata)
+      await refreshTrackMetadataInDb(repos, track.id)
+    }, { owner: BrowserWindow.fromWebContents(event.sender) ?? undefined })
     broadcast('library:changed', { reason: 'track-metadata-update' })
   })
 
-  ipcMain.handle('track:refreshMetadata', async (_, trackId: number) => {
+  ipcMain.handle('track:refreshMetadata', async (event, trackId: number) => {
     const track = repos.tracks.getById(trackId)
     if (track?.provider !== 'local') throw new Error('Metadata refresh is unavailable for cloud tracks')
-    await refreshTrackMetadataInDb(repos, trackId)
+    if (!track) return
+    const folder = repos.folders.getById(track.folder_id)
+    if (!folder || folder.provider !== 'local') throw new Error('La biblioteca local ya no existe.')
+    await getLocalFileAccessService().runWithAccess(
+      folder.path,
+      'read',
+      () => refreshTrackMetadataInDb(repos, trackId),
+      { owner: BrowserWindow.fromWebContents(event.sender) ?? undefined },
+    )
     broadcast('library:changed', { reason: 'track-refresh' })
   })
 
@@ -320,97 +365,94 @@ export function registerLibraryChannel(): void {
     return metadataCompletion.preview(sanitizeIds(trackIds))
   })
 
-  ipcMain.handle('track:metadataCompletion:apply', async (_, payload: MetadataCompletionApplyRequest) => {
+  ipcMain.handle('track:metadataCompletion:apply', async (event, payload: MetadataCompletionApplyRequest) => {
+    const selections = Array.isArray(payload?.selections)
+      ? payload.selections.map(selection => ({
+          trackId: assertId(selection.trackId, 'trackId'),
+          fields: Array.isArray(selection.fields) ? selection.fields : [],
+        }))
+      : []
+    const roots = new Set<string>()
+    for (const selection of selections) {
+      const track = repos.tracks.getById(selection.trackId)
+      const folder = track ? repos.folders.getById(track.folder_id) : null
+      if (track?.provider === 'local' && folder?.provider === 'local') roots.add(folder.path)
+    }
+    const owner = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    for (const root of roots) {
+      await getLocalFileAccessService().runWithAccess(root, 'write', async () => undefined, { owner })
+    }
     const result = await metadataCompletion.apply({
       previewId: assertNonEmptyString(payload?.previewId, 'previewId'),
-      selections: Array.isArray(payload?.selections)
-        ? payload.selections.map(selection => ({
-            trackId: assertId(selection.trackId, 'trackId'),
-            fields: Array.isArray(selection.fields) ? selection.fields : [],
-          }))
-        : [],
+      selections,
     })
     if (result.applied > 0) broadcast('library:changed', { reason: 'metadata-completion' })
     return result
   })
 
-  ipcMain.handle('track:albumMove:preview', async (_, payload: { trackId: number; targetAlbumId: number; trackNumber?: number | null }) => {
+  ipcMain.handle('track:albumMove:preview', async (event, payload: { trackId: number; targetAlbumId: number; trackNumber?: number | null }) => {
     const trackNumber = Number.isInteger(payload?.trackNumber) && (payload!.trackNumber as number) > 0
       ? (payload!.trackNumber as number)
       : null
-    return albumMove.preview(
-      assertId(payload?.trackId, 'trackId'),
+    const trackId = assertId(payload?.trackId, 'trackId')
+    const track = repos.tracks.getById(trackId)
+    const folder = track ? repos.folders.getById(track.folder_id) : null
+    const operation = () => albumMove.preview(
+      trackId,
       assertId(payload?.targetAlbumId, 'targetAlbumId'),
       trackNumber,
     )
+    if (track?.provider !== 'local' || folder?.provider !== 'local') return operation()
+    return getLocalFileAccessService().runWithAccess(
+      folder.path,
+      'read',
+      operation,
+      { owner: BrowserWindow.fromWebContents(event.sender) ?? undefined },
+    )
   })
 
-  ipcMain.handle('track:albumMove:apply', async (_, payload: { previewId: string; confirmLowerQualityReplace?: boolean }) => {
-    const result = await albumMove.apply(
-      assertNonEmptyString(payload?.previewId, 'previewId'),
-      payload?.confirmLowerQualityReplace === true,
-    )
+  ipcMain.handle('track:albumMove:apply', async (event, payload: { previewId: string; confirmLowerQualityReplace?: boolean }) => {
+    const previewId = assertNonEmptyString(payload?.previewId, 'previewId')
+    const owner = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const roots = albumMove.accessRootsForPreview(previewId)
+    for (const root of roots) {
+      await getLocalFileAccessService().runWithAccess(root, 'write', async () => undefined, { owner })
+    }
+    const result = await albumMove.apply(previewId, payload?.confirmLowerQualityReplace === true)
     broadcast('library:changed', { reason: 'track-album-move' })
     return result
   })
 
-  ipcMain.handle('track:trash', async (_, trackIds: number[]): Promise<TrashTracksResult> => {
-    const uniqueIds = [...new Set(trackIds.filter(id => Number.isInteger(id) && id > 0))]
-    const trashedTrackIds: number[] = []
-    const failed: TrashTracksResult['failed'] = []
-    const affectedFolderIds = new Set<number>()
+  ipcMain.handle('track:trash', async (event, trackIds: number[]): Promise<TrashTracksResult> => {
+    const owner = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const result = await trashTrackBatch(trackIds, {
+      getTrack: trackId => repos.tracks.getById(trackId),
+      getLocalRoot: folderId => {
+        const folder = repos.folders.getById(folderId)
+        return folder?.provider === 'local' ? folder.path : null
+      },
+      runWithWriteAccess: (rootPath, operation) => getLocalFileAccessService().runWithAccess(
+        rootPath, 'write', operation, { owner },
+      ),
+      trashItem: path => shell.trashItem(path),
+      deleteTrack: trackId => repos.tracks.deleteById(trackId),
+      sidecarPath: sidecarPathFor,
+      sidecarExists: existsSync,
+      onSidecarError: (path, error) => {
+        console.warn(`[track-trash] failed to trash sidecar ${path}:`, error instanceof Error ? error.message : String(error))
+      },
+    })
 
-    for (const trackId of uniqueIds) {
-      const track = repos.tracks.getById(trackId)
-      if (!track) {
-        failed.push({
-          id: trackId,
-          title: `Track ${trackId}`,
-          path: '',
-          error: 'Track no longer exists in the library.',
-        })
-        continue
-      }
-
-      try {
-        if (track.provider !== 'local') {
-          throw new Error('Cloud tracks cannot be moved to the local Trash')
-        }
-        await shell.trashItem(resolve(track.path))
-        repos.tracks.deleteById(track.id)
-        trashedTrackIds.push(track.id)
-        affectedFolderIds.add(track.folder_id)
-        // Send the .lrc sidecar to the trash alongside the audio so lyrics
-        // don't linger as orphans. Best-effort: a missing or unremovable
-        // sidecar must not fail the track deletion that already succeeded.
-        const lrcPath = sidecarPathFor(resolve(track.path))
-        if (existsSync(lrcPath)) {
-          try {
-            await shell.trashItem(lrcPath)
-          } catch (lrcErr) {
-            console.warn(`[track-trash] failed to trash sidecar ${lrcPath}:`, (lrcErr as Error).message)
-          }
-        }
-      } catch (err) {
-        failed.push({
-          id: track.id,
-          title: track.title,
-          path: track.path,
-          error: err instanceof Error ? err.message : String(err),
-        })
-      }
-    }
-
-    for (const folderId of affectedFolderIds) {
+    for (const folderId of result.affectedFolderIds) {
       repos.folders.updateTrackCount(folderId, repos.tracks.countByFolder(folderId))
       getLibraryBackup().scheduleWriteForFolder(folderId)
     }
 
-    if (trashedTrackIds.length > 0) {
+    if (result.trashedTrackIds.length > 0) {
       broadcast('library:changed', { reason: 'track-trash' })
     }
 
-    return { trashedTrackIds, failed }
+    return { trashedTrackIds: result.trashedTrackIds, failed: result.failed }
   })
 
   ipcMain.handle('artist:setFavorite', (_, payload: { id: number; favorite: boolean }) => {
@@ -425,6 +467,7 @@ export function registerLibraryChannel(): void {
   // whether to write.
   ipcMain.handle('settings:setLibraryBackup', (_, enabled: boolean) => {
     getLibraryBackup().setEnabled(enabled)
+    getDuplicateDecisionPortableService().setEnabled(enabled)
   })
   ipcMain.handle('settings:setLibraryScanLogRetention', (_, days: number | null) => {
     reconciler.setRetentionDays(days)

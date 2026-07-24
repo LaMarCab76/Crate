@@ -13,8 +13,9 @@ import type {
 } from '@shared/types/device-sync'
 import type { LyricsSelectionProgress } from '@shared/types/lyrics'
 import type { DownloadJob } from '@shared/types/downloads'
+import type { DuplicateAnalysisProgress, DuplicateSummary } from '@shared/types/duplicates'
 
-export type ActivityCategory = 'devices' | 'lyrics' | 'library' | 'downloads' | 'updates'
+export type ActivityCategory = 'devices' | 'lyrics' | 'library' | 'duplicates' | 'downloads' | 'updates'
 export type ActivityStatus = 'queued' | 'running' | 'waiting' | 'success' | 'warning' | 'error' | 'info'
 
 export type ActivityActionId =
@@ -28,6 +29,7 @@ export type ActivityActionId =
   | 'open-downloads'
   | 'open-import'
   | 'open-updates'
+  | 'open-duplicates'
 
 export interface ActivityProgress {
   completed: number
@@ -227,6 +229,9 @@ export function primaryActivityActionIdFor(item: ActivityItem): ActivityActionId
       return 'open-downloads'
     case 'app-update':
       return 'open-updates'
+    case 'duplicate-analysis':
+    case 'duplicate-candidates':
+      return 'open-duplicates'
     default:
       return item.actionIds.find(actionId => actionId.startsWith('open-')) ?? item.actionIds[0] ?? null
   }
@@ -238,13 +243,15 @@ export function upsertActivityItem(
   now = Date.now(),
 ): ActivityItem[] {
   const previous = items.find(item => item.id === input.id)
+  const replacesDetail = Object.prototype.hasOwnProperty.call(input, 'detail')
+  const replacesProgress = Object.prototype.hasOwnProperty.call(input, 'progress')
   const next: ActivityItem = {
     id: input.id,
     category: input.category,
     status: input.status,
     title: input.title,
-    detail: input.detail ?? previous?.detail ?? null,
-    progress: input.progress ?? previous?.progress ?? null,
+    detail: replacesDetail ? (input.detail ?? null) : (previous?.detail ?? null),
+    progress: replacesProgress ? (input.progress ?? null) : (previous?.progress ?? null),
     read: input.read ?? false,
     createdAt: previous?.createdAt ?? now,
     updatedAt: now,
@@ -413,6 +420,104 @@ export function activityFromImportComplete(event: ImportCompleteEvent): Activity
   }
 }
 
+export function activityFromDuplicateSummary(summary: DuplicateSummary): ActivityUpsert | null {
+  if (!summary.running && summary.pendingCount === 0 && summary.failedCount === 0 && !summary.blocker) return null
+  const progress = summary.progress
+    ? activityProgress(summary.progress.completed, summary.progress.total)
+    : null
+  if (summary.blocker) {
+    const waitingForLibrary = summary.blocker.retryable
+    return {
+      id: 'duplicates:pending',
+      category: 'duplicates',
+      status: waitingForLibrary ? 'waiting' : 'error',
+      title: summary.blocker.code === 'local_library_unavailable'
+        ? 'Biblioteca desconectada'
+        : summary.blocker.code === 'local_library_permission_required'
+          ? 'Esperando acceso a la biblioteca'
+          : summary.blocker.code === 'native_component_missing'
+            ? 'Falta el componente de análisis acústico'
+            : 'Análisis acústico no disponible',
+      detail: summary.blocker.message,
+      progress: null,
+      metadata: {
+        activityKind: 'duplicate-analysis',
+        analysisBlocker: summary.blocker.code,
+      },
+      actionIds: ['open-duplicates'],
+    }
+  }
+  if (summary.running) {
+    return {
+      id: 'duplicates:pending',
+      category: 'duplicates',
+      status: 'running',
+      title: 'Buscando temas duplicados',
+      detail: summary.progress?.currentTitle || 'Comparando huellas acústicas',
+      progress,
+      metadata: { activityKind: 'duplicate-analysis' },
+      actionIds: ['open-duplicates'],
+    }
+  }
+  if (summary.pendingCount > 0) {
+    return {
+      id: 'duplicates:pending',
+      category: 'duplicates',
+      status: 'warning',
+      title: summary.pendingCount === 1 ? 'Posible tema duplicado' : 'Posibles temas duplicados',
+      detail: summary.pendingCount === 1
+        ? 'Hay una comparación pendiente de revisión.'
+        : `Hay ${summary.pendingCount.toLocaleString()} comparaciones pendientes de revisión.`,
+      progress: null,
+      metadata: { activityKind: 'duplicate-candidates', pendingCount: summary.pendingCount },
+      actionIds: ['open-duplicates'],
+    }
+  }
+  return {
+    id: 'duplicates:pending',
+    category: 'duplicates',
+    status: 'error',
+    title: 'No se completó el análisis de duplicados',
+    detail: `${summary.failedCount.toLocaleString()} ${summary.failedCount === 1 ? 'tema requiere' : 'temas requieren'} un nuevo intento.`,
+    progress: null,
+    metadata: { activityKind: 'duplicate-analysis' },
+    actionIds: ['open-duplicates'],
+  }
+}
+
+export function activityFromDuplicateProgress(event: DuplicateAnalysisProgress): ActivityUpsert {
+  const phaseLabel: Record<DuplicateAnalysisProgress['phase'], string> = {
+    prefiltering: 'Buscando candidatos',
+    fingerprinting: 'Calculando huellas acústicas',
+    comparing: 'Comparando grabaciones',
+    complete: 'Análisis completado',
+    error: 'El análisis necesita atención',
+  }
+  return {
+    id: 'duplicates:pending',
+    category: 'duplicates',
+    status: event.phase === 'error'
+      ? event.blocker?.retryable ? 'waiting' : 'error'
+      : event.phase === 'complete' ? 'success' : 'running',
+    title: event.phase === 'complete'
+      ? 'Biblioteca analizada'
+      : event.phase === 'error'
+        ? event.blocker?.code === 'local_library_unavailable'
+          ? 'Biblioteca desconectada'
+          : event.blocker?.code === 'local_library_permission_required'
+            ? 'Esperando acceso a la biblioteca'
+            : 'Análisis de duplicados no disponible'
+        : 'Buscando temas duplicados',
+    detail: event.message || phaseLabel[event.phase],
+    progress: event.phase === 'error' ? null : activityProgress(event.completed, event.total),
+    metadata: {
+      activityKind: 'duplicate-analysis',
+      analysisBlocker: event.blocker?.code,
+    },
+    actionIds: ['open-duplicates'],
+  }
+}
+
 export function activityFromLyricsSelectionProgress(event: LyricsSelectionProgress): ActivityUpsert {
   const phase = event.phase ?? 'fetching'
   return {
@@ -557,6 +662,16 @@ function recordUpdateState(state: AppUpdateState): void {
   } else {
     useActivityCenterStore.getState().remove('app-update')
   }
+}
+
+function recordDuplicateSummary(summary: DuplicateSummary): void {
+  const activity = activityFromDuplicateSummary(summary)
+  if (activity) useActivityCenterStore.getState().upsert(activity)
+  else useActivityCenterStore.getState().remove('duplicates:pending')
+}
+
+function refreshDuplicateActivity(): void {
+  void window.api.duplicates.summary().then(recordDuplicateSummary).catch(() => undefined)
 }
 
 function initialState(): Pick<ActivityCenterState, 'items' | 'open' | 'pinned' | 'fullscreen'> {
@@ -715,6 +830,11 @@ function initializeActivityCenterListeners(): void {
   const offUpdates = window.api.updates.onStateChanged(state => {
     recordUpdateState(state)
   })
+  const offDuplicatesChanged = window.api.duplicates.onChanged(refreshDuplicateActivity)
+  const offDuplicatesProgress = window.api.duplicates.onProgress(event => {
+    useActivityCenterStore.getState().upsert(activityFromDuplicateProgress(event))
+    if (event.phase === 'complete' || event.phase === 'error') refreshDuplicateActivity()
+  })
 
   void window.api.devices.volumes().then(recordVolumeSnapshot).catch(() => undefined)
   void window.api.downloads.jobs().then(jobs => {
@@ -723,6 +843,7 @@ function initializeActivityCenterListeners(): void {
   void window.api.updates.getState().then(state => {
     recordUpdateState(state)
   }).catch(() => undefined)
+  refreshDuplicateActivity()
 
   activityListenerCleanups = [
     offImportProgress,
@@ -735,6 +856,8 @@ function initializeActivityCenterListeners(): void {
     offDownloadProgress,
     offDownloadJobs,
     offUpdates,
+    offDuplicatesChanged,
+    offDuplicatesProgress,
   ]
 }
 

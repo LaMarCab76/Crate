@@ -34,6 +34,12 @@ mac:
   entitlements: electron-build/entitlements.mac.plist
   entitlementsInherit: electron-build/entitlements.mac.plist
   notarize: true
+  extendInfo:
+    NSDesktopFolderUsageDescription: Crate necesita leer y modificar las bibliotecas de música que elijas, incluso para editar metadatos y mover archivos a la Papelera.
+    NSDocumentsFolderUsageDescription: Crate necesita leer y modificar las bibliotecas de música que elijas, incluso para editar metadatos y mover archivos a la Papelera.
+    NSDownloadsFolderUsageDescription: Crate necesita leer y modificar las bibliotecas de música que elijas, incluso para editar metadatos y mover archivos a la Papelera.
+    NSNetworkVolumesUsageDescription: Crate necesita leer y modificar las bibliotecas de música que elijas en volúmenes de red, incluso para sincronizar y mover archivos a la Papelera.
+    NSRemovableVolumesUsageDescription: Crate necesita leer y modificar las bibliotecas de música que elijas en discos externos, incluso para sincronizar y mover archivos a la Papelera.
   target:
     - target: dmg
       arch:

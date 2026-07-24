@@ -5,6 +5,8 @@ import {
   activityActionIdsFor,
   activityFromDownloadJob,
   activityFromAppUpdateState,
+  activityFromDuplicateProgress,
+  activityFromDuplicateSummary,
   activityFromUnknownVolume,
   activityProgress,
   hydrateActivityItems,
@@ -76,6 +78,28 @@ test('upserts progress without duplicating an activity id', () => {
   assert.equal(second[0].progress.percent, 30)
   assert.equal(second[0].createdAt, 100)
   assert.equal(second[0].updatedAt, 200)
+})
+
+test('explicit null clears stale activity detail and progress', () => {
+  const first = upsertActivityItem([], {
+    id: 'duplicates:pending',
+    category: 'duplicates',
+    status: 'running',
+    title: 'Analizando',
+    detail: 'Track.flac',
+    progress: activityProgress(121, 121),
+  }, 100)
+  const second = upsertActivityItem(first, {
+    id: 'duplicates:pending',
+    category: 'duplicates',
+    status: 'error',
+    title: 'No disponible',
+    detail: null,
+    progress: null,
+  }, 200)
+
+  assert.equal(second[0].detail, null)
+  assert.equal(second[0].progress, null)
 })
 
 test('normalizes activity progress with a bounded percentage', () => {
@@ -307,6 +331,137 @@ test('primary activity actions prefer contextual device and lyrics destinations'
     category: 'devices',
     metadata: { activityKind: 'device-scan', deviceId: 'dev-1' },
   }), 'open-device')
+})
+
+test('duplicate summary exposes one stable, actionable warning', () => {
+  const item = activityFromDuplicateSummary({
+    pendingCount: 3,
+    analyzedCount: 30,
+    queuedCount: 0,
+    running: false,
+    dismissedCount: 2,
+    staleCount: 0,
+    analyzingCount: 0,
+    failedCount: 0,
+    lastAnalyzedAt: null,
+  })
+
+  assert.equal(item.id, 'duplicates:pending')
+  assert.equal(item.category, 'duplicates')
+  assert.equal(item.status, 'warning')
+  assert.deepEqual(item.actionIds, ['open-duplicates'])
+  assert.equal(primaryActivityActionIdFor({
+    ...baseActivity(item.id, item.status, 100),
+    ...item,
+    progress: item.progress ?? null,
+    detail: item.detail ?? null,
+    metadata: item.metadata ?? {},
+    actionIds: item.actionIds ?? [],
+  }), 'open-duplicates')
+})
+
+test('duplicate progress keeps the activity id stable and maps completion', () => {
+  const progress = activityFromDuplicateProgress({
+    phase: 'fingerprinting',
+    completed: 4,
+    total: 10,
+    message: 'Track.flac',
+  })
+  const complete = activityFromDuplicateProgress({ phase: 'complete', completed: 10, total: 10 })
+
+  assert.equal(progress.id, 'duplicates:pending')
+  assert.equal(progress.status, 'running')
+  assert.equal(progress.progress.percent, 40)
+  assert.equal(complete.status, 'success')
+})
+
+test('duplicate native blocker is one explicit system error with no stale track count or progress', () => {
+  const item = activityFromDuplicateSummary({
+    pendingCount: 0,
+    analyzedCount: 0,
+    queuedCount: 0,
+    running: false,
+    dismissedCount: 0,
+    staleCount: 0,
+    analyzingCount: 0,
+    failedCount: 0,
+    lastAnalyzedAt: null,
+    blocker: {
+      code: 'native_component_missing',
+      message: 'Falta Chromaprint 1.6.0. Las pistas no presentan errores.',
+      retryable: false,
+      requiresRestart: true,
+      component: 'Chromaprint',
+      version: '1.6.0',
+    },
+  })
+
+  assert.equal(item.id, 'duplicates:pending')
+  assert.equal(item.status, 'error')
+  assert.equal(item.progress, null)
+  assert.match(item.title, /componente/i)
+  assert.match(item.detail, /Chromaprint 1\.6\.0/)
+  assert.doesNotMatch(item.detail, /temas? requieren/i)
+
+  const running = upsertActivityItem([], activityFromDuplicateProgress({
+    phase: 'fingerprinting',
+    completed: 121,
+    total: 121,
+  }), 100)
+  const blocked = upsertActivityItem(running, item, 200)
+  assert.equal(blocked[0].progress, null, 'blocked summary must clear the previous 121/121 bar')
+})
+
+test('disconnected duplicate root waits without disabling a same-process retry', () => {
+  const blocker = {
+    code: 'local_library_unavailable',
+    message: 'La biblioteca “02 - Biblioteca” no está conectada. Volvé a analizar.',
+    retryable: true,
+    requiresRestart: false,
+    affectedFolders: [{
+      folderId: 7,
+      name: '02 - Biblioteca',
+      path: '/Volumes/H2-SD/02 - Biblioteca',
+      state: 'unavailable',
+    }],
+  }
+  const summaryItem = activityFromDuplicateSummary({
+    pendingCount: 0,
+    analyzedCount: 0,
+    queuedCount: 0,
+    running: false,
+    dismissedCount: 0,
+    staleCount: 0,
+    analyzingCount: 0,
+    failedCount: 0,
+    lastAnalyzedAt: null,
+    blocker,
+  })
+  const progressItem = activityFromDuplicateProgress({
+    phase: 'error',
+    completed: 0,
+    total: 203,
+    message: blocker.message,
+    blocker,
+  })
+
+  assert.equal(summaryItem.status, 'waiting')
+  assert.equal(summaryItem.title, 'Biblioteca desconectada')
+  assert.equal(summaryItem.progress, null)
+  assert.equal(progressItem.status, 'waiting')
+  assert.equal(progressItem.progress, null)
+})
+
+test('duplicate error progress never renders a misleading zero progress bar', () => {
+  const item = activityFromDuplicateProgress({
+    phase: 'error',
+    completed: 0,
+    total: 0,
+    message: 'Falta Chromaprint.',
+  })
+  assert.equal(item.status, 'error')
+  assert.equal(item.progress, null)
+  assert.match(item.title, /no disponible/i)
 })
 
 test('unknown volume adapter keeps action metadata stable', () => {

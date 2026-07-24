@@ -102,17 +102,17 @@ jobs:
             exit 1
           fi
 
-      - name: Cache BASS native libraries
+      - name: Cache native audio libraries
         uses: actions/cache@v4
         with:
           path: native/libs
-          key: bass-libs-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-bass.mjs', 'scripts/verify-bass.mjs') }}
+          key: native-libs-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-bass.mjs', 'scripts/verify-bass.mjs', 'scripts/fetch-chromaprint.mjs', 'scripts/verify-chromaprint.mjs', 'scripts/chromaprint-config.mjs') }}
 
-      - name: Fetch BASS native libraries
-        run: npm run fetch:bass
+      - name: Fetch native audio libraries
+        run: npm run fetch:native
 
-      - name: Verify and load BASS native libraries
-        run: npm run verify:bass -- --load
+      - name: Verify and load native audio libraries
+        run: npm run verify:native -- --load
 
       - name: Test
         run: npm test
@@ -135,10 +135,10 @@ jobs:
 
       - name: Build unsigned macOS packages
         if: runner.os == 'macOS' && (github.event_name == 'push' || inputs.unsigned_macos == true)
-        run: npm run verify:bass -- --platform=darwin && npm run build && npx electron-builder --mac --config electron-builder.unsigned.yml --publish never
+        run: npm run verify:native -- --platform=darwin --arch=universal && npm run build && npx electron-builder --mac --config electron-builder.unsigned.yml --publish never
 
-      - name: Smoke packaged BASS resources
-        run: npm run verify:bass -- --packaged-root=release --load
+      - name: Smoke packaged native resources
+        run: npm run verify:native -- --packaged-root=release --load
 
       - name: Verify macOS signatures and notarization
         if: runner.os == 'macOS' && github.event_name != 'push' && inputs.unsigned_macos != true

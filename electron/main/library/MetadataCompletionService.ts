@@ -7,7 +7,11 @@ import { parseFile } from 'music-metadata'
 import type { IAudioMetadata } from 'music-metadata'
 import { getRepos, type Repos } from '../db/repositories'
 import { parseArtistName } from './ArtistNameParser'
-import { readTrackMetadata, type TrackMetadata } from './MetadataExtractor'
+import {
+  readTrackMetadata,
+  serializeTrackExtendedMetadata,
+  type TrackMetadata,
+} from './MetadataExtractor'
 import { artworkAbsolutePath } from './ArtworkCache'
 import { writeTrackMetadata, type MetadataArtworkPayload } from './MetadataWriter'
 import { getLibraryBackup } from '../services/LibraryBackup'
@@ -1027,6 +1031,7 @@ export class MetadataCompletionService {
     const parsedArtist = parseArtistName(md.artist)
     const artist = this.repos.artists.getOrCreate(parsedArtist.primary || md.artist)
     const album = this.repos.albums.getOrCreate(md.album, md.albumArtist ?? null, md.year || null)
+    this.repos.albums.enrichReleaseMetadata(album.id, md)
     const genre = md.genre ? this.repos.genres.getOrCreate(md.genre) : null
 
     this.repos.tracks.updateMetadata({
@@ -1043,6 +1048,10 @@ export class MetadataCompletionService {
       discNumber: md.discNumber,
       totalDiscs: md.totalDiscs,
       compilation: md.isCompilation ? 1 : 0,
+      releaseDate: md.releaseDate,
+      originalReleaseDate: md.originalReleaseDate,
+      mediaType: md.mediaType,
+      extendedMetadata: serializeTrackExtendedMetadata(md),
       duration: md.duration,
       format: md.format,
       codec: md.codec,

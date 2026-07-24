@@ -5,13 +5,17 @@ import { basenameForPath, isValidDeviceMusicRoot, normalizeDeviceMusicRoot } fro
 import { isLocalLibraryDestination } from '@renderer/utils/libraryDestinations'
 import type { DeviceRecord } from '@shared/types/device-sync'
 import type { DbFolder } from '@shared/types/db'
+import { computerTerms } from '@shared/utils/computerTerms'
 import { Icon } from './Icon'
 import { ModalShell } from './ModalShell'
+
+const COMPUTER = computerTerms(window.api.meta.platform)
 
 export interface DeviceConnectTarget {
   token: string
   displayPath: string
   name?: string
+  hasCrateState?: boolean
 }
 
 interface DeviceConnectModalProps {
@@ -39,6 +43,7 @@ export function DeviceConnectModal({
   const connect = useDeviceStore(s => s.connect)
   const loading = useDeviceStore(s => s.loading)
   const [musicRoot, setMusicRoot] = useState('.')
+  const [resetDeviceState, setResetDeviceState] = useState(false)
   const [selectedFolderId, setSelectedFolderId] = useState<number | null>(
     destinationFolders.length === 1 ? destinationFolders[0].id : null,
   )
@@ -54,6 +59,9 @@ export function DeviceConnectModal({
       return destinationFolders.length === 1 ? destinationFolders[0].id : null
     })
   }, [destinationFolders])
+  useEffect(() => {
+    setResetDeviceState(false)
+  }, [target.token])
 
   const pickMusicRoot = async () => {
     setLocalError(null)
@@ -79,6 +87,7 @@ export function DeviceConnectModal({
         pcTargetPath: selectedFolder.path,
         sourceLibraryIds: [selectedFolder.id],
         artworkMaxEdge,
+        resetDeviceState: target.hasCrateState === true && resetDeviceState,
       })
       onConnected?.(device)
       onClose()
@@ -129,10 +138,35 @@ export function DeviceConnectModal({
         {!musicRootValid && (
           <div className="device-error inline">La carpeta del MP3 no puede usar segmentos ..</div>
         )}
+        {target.hasCrateState && (
+          <div className="device-state-mode">
+            <span>Estado encontrado en el dispositivo</span>
+            <div className="migration-radio-row">
+              <label>
+                <input
+                  type="radio"
+                  name={`crate-state-mode-${target.token}`}
+                  checked={!resetDeviceState}
+                  onChange={() => setResetDeviceState(false)}
+                />
+                Usar configuración existente
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name={`crate-state-mode-${target.token}`}
+                  checked={resetDeviceState}
+                  onChange={() => setResetDeviceState(true)}
+                />
+                Arrancar desde cero
+              </label>
+            </div>
+          </div>
+        )}
         {localError && <div className="device-error inline">{localError}</div>}
 
         <div className="device-connect-library-head">
-          <span>Biblioteca PC</span>
+          <span>{COMPUTER.library}</span>
           <strong>{selectedFolder?.path ?? 'Seleccioná una biblioteca'}</strong>
         </div>
         <div className="device-library-list device-connect-library-list">

@@ -1690,6 +1690,11 @@ export class AudioEngine {
       this.initialized = false
     }
   }
+
+  /** Release only the active track while keeping the shared BASS device alive. */
+  unload(): void {
+    this.freeCurrent()
+  }
 }
 
 export function getAudioEngine(): AudioEngine {

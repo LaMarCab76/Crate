@@ -57,6 +57,18 @@ import {
 } from './rockboxIgnoredFiles.ts'
 import { trackFingerprint } from './trackFingerprint'
 import { mergeLibraryStateBaseline } from './libraryStateBaseline'
+import {
+  duplicateDeletionVerificationTracks,
+  encodeDuplicateDeletionFingerprint,
+  reconcileDuplicateDeletionIntents,
+  type DuplicateDeletionIntentLike,
+} from './duplicateDeletionSync'
+import { fingerprintDigest, type FingerprintProvider } from '../duplicates/fingerprint'
+import {
+  BassChromaprintPcmDecoder,
+  ChromaprintFingerprintProvider,
+  DefaultChromaprintSourceResolver,
+} from '../duplicates/native'
 import { sidecarPathFor } from '../lyrics/providers/SidecarLrcProvider'
 import { sanitizeLegacyDeviceSyncJournal } from './deviceSyncJournalSanitizer'
 import {
@@ -72,6 +84,7 @@ import { resolveCloudLoadOptions } from '../cloud/cloudTrackRef'
 import { cloudDeviceRelativePath } from './cloudDeviceRelativePath'
 import { withCloudSourceTempFile } from './cloudSourceTempFile'
 import { requireRegisteredLocalLibraryPath } from './pcTargetLibrary'
+import { computerTerms, desktopPlatform } from '@shared/utils/computerTerms'
 import type { DbTrack } from '@shared/types/db'
 import type { PickFolderResult } from '@shared/types/ipc-contract'
 import type {
@@ -122,6 +135,8 @@ import type {
   RockboxThemeInstallSourceResult,
   RockboxThemeLibraryResult,
 } from '@shared/types/device-sync'
+
+const COMPUTER = computerTerms(desktopPlatform(platform()))
 
 const APP_STATE_DIR = '.crate'
 const ROCKBOX_DIR = '.rockbox'
@@ -179,6 +194,22 @@ interface DeviceRow {
   last_seen_at: string
   last_scan_at: string | null
   last_sync_at: string | null
+}
+
+interface DeviceDuplicateDeletionRow {
+  id: string
+  device_id: string
+  sync_key: string
+  relative_path: string
+  expected_fingerprint: string
+  status: 'pending' | 'applied' | 'conflict'
+}
+
+export interface PreparedDuplicateDeviceIntent {
+  deviceId: string
+  syncKey: string
+  relativePath: string
+  expectedFingerprint: string
 }
 
 interface DeviceYaml {
@@ -686,6 +717,11 @@ export class DeviceSyncService {
   private portableStateCache = new Map<string, DevicePortableState>()
   private volumeMonitorTimer: ReturnType<typeof setInterval> | null = null
   private lastVolumeSignature = ''
+  private readonly duplicateDeviceFingerprintProvider: FingerprintProvider =
+    new ChromaprintFingerprintProvider(
+      new DefaultChromaprintSourceResolver(),
+      new BassChromaprintPcmDecoder(),
+    )
 
   private async withDeviceMutation<T>(deviceId: string, operation: string, run: () => Promise<T>): Promise<T> {
     if (this.activeDeviceMutations.has(deviceId)) {
@@ -929,6 +965,9 @@ export class DeviceSyncService {
     if (!rootStats.isDirectory()) throw new Error('Device root must be a directory')
 
     const stateDir = join(rootPath, APP_STATE_DIR)
+    if (payload.resetDeviceState) {
+      await rm(stateDir, { recursive: true, force: true })
+    }
     await mkdir(stateDir, { recursive: true })
     await writeFile(join(stateDir, 'database.ignore'), '', 'utf8')
 
@@ -953,7 +992,7 @@ export class DeviceSyncService {
         ? this.registeredLibraryPath(existingRootRow.pc_target_path)
         : requestedLibrary?.path
           ? this.registeredLibraryPath(requestedLibrary.path)
-          : (() => { throw new Error('Choose a registered library as the PC destination') })()
+          : (() => { throw new Error(`Choose a registered library as the ${COMPUTER.short} destination`) })()
     const artworkMaxEdge = clampDeviceArtworkEdge(
       existingDevice?.artworkMaxEdge ?? existingRootRow?.artwork_max_edge ?? payload.artworkMaxEdge,
     )
@@ -1518,7 +1557,7 @@ export class DeviceSyncService {
         reusableMetadataByKey: reusableMetadata,
       }),
     ])
-    this.assertUniqueTrackKeys(pcTracks, 'PC library')
+    this.assertUniqueTrackKeys(pcTracks, COMPUTER.library)
     this.assertUniqueTrackKeys(deviceScan.tracks, 'device')
 
     const changedPcTracks = useIncremental
@@ -1563,6 +1602,15 @@ export class DeviceSyncService {
           this.makeAction(kind, key, pc, device, reason, deviceMusicRoot, pcTargetPath),
       })
     }
+    if (!deviceIndexSuspect) {
+      actions = await this.applyDuplicateDeletionIntents(
+        row.id,
+        actions,
+        deviceScan.tracks,
+        deviceMusicRoot,
+        pcTargetPath,
+      )
+    }
     const moveWarning = pendingAlbumMoves.length > 0 && mode === 'device_to_pc'
       ? 'Hay temas movidos localmente a otro álbum; device_to_pc no fuerza esos movimientos en el MP3.'
       : null
@@ -1598,6 +1646,57 @@ export class DeviceSyncService {
       this.planCache.delete(oldestKey)
     }
     return plan
+  }
+
+  async localAccessRequirementsForPlan(request: DeviceSyncPlanRequest): Promise<Array<{ rootPath: string; mode: 'read' | 'write' }>> {
+    const row = await this.requireDevice(request.deviceId)
+    const libraryIds = this.deviceLibraryIds(row.id)
+    const allowedIds = libraryIds.length > 0 ? new Set(libraryIds) : null
+    return getRepos().folders.list()
+      .filter(folder => (
+        folder.provider === 'local'
+        && folder.role === 'library'
+        && (allowedIds == null || allowedIds.has(folder.id))
+      ))
+      .map(folder => ({ rootPath: resolve(folder.path), mode: 'read' as const }))
+  }
+
+  localAccessRequirementsForApply(
+    planId: string,
+    selection?: DeviceSyncApplySelection,
+  ): Array<{ rootPath: string; mode: 'read' | 'write' }> {
+    this.purgeExpiredPlans()
+    const cached = this.planCache.get(planId)
+    if (!cached) throw new Error('Sync plan expired. Create a new plan before applying.')
+    const executable = this.planForSelection(cached.plan, selection, cached.deviceMusicRoot)
+    return this.localAccessRequirementsForExecutablePlan(executable)
+  }
+
+  async localAccessRequirementsForJournal(journalId: string): Promise<Array<{ rootPath: string; mode: 'read' | 'write' }>> {
+    const found = await this.findPendingJournal(journalId)
+    if (!found) throw new Error('Pending sync journal was not found')
+    return this.localAccessRequirementsForExecutablePlan(found.journal.plan)
+  }
+
+  private localAccessRequirementsForExecutablePlan(
+    plan: DeviceSyncPlan,
+  ): Array<{ rootPath: string; mode: 'read' | 'write' }> {
+    const modes = new Map<string, 'read' | 'write'>()
+    const add = (path: string | null, mode: 'read' | 'write') => {
+      if (!path) return
+      const rootPath = this.pcAllowedRoot(path, plan.pcTargetPath)
+      if (mode === 'write' || !modes.has(rootPath)) modes.set(rootPath, mode)
+    }
+    for (const action of plan.actions) {
+      if (action.kind === 'copy_pc_to_device' || action.kind === 'replace_device') {
+        add(action.sourcePath, 'read')
+      } else if (action.kind === 'copy_device_to_pc' || action.kind === 'replace_pc') {
+        add(action.destinationPath, 'write')
+      } else if (action.kind === 'delete_pc') {
+        add(action.sourcePath, 'write')
+      }
+    }
+    return [...modes].map(([rootPath, mode]) => ({ rootPath, mode }))
   }
 
   private purgeExpiredPlans(): void {
@@ -2974,6 +3073,209 @@ export class DeviceSyncService {
       .map(r => r.folder_id)
   }
 
+  /** Snapshot the exact per-device sync key before a duplicate track leaves the
+   * catalog. New devices linked later are intentionally absent from this list. */
+  async prepareDuplicateDeletionIntents(
+    trackId: number,
+    acousticDigest: string,
+  ): Promise<PreparedDuplicateDeviceIntent[]> {
+    const track = getRepos().tracks.getById(trackId)
+    if (!track) return []
+    const intents: PreparedDuplicateDeviceIntent[] = []
+    for (const device of this.listDeviceRows()) {
+      const libraryIds = this.deviceLibraryIds(device.id)
+      if (libraryIds.length > 0 && !libraryIds.includes(track.folder_id)) continue
+      const pcTracks = await this.pcLibraryTracks(libraryIds.length > 0 ? new Set(libraryIds) : undefined)
+      const planned = pcTracks.find(item => item.trackId === trackId)
+      if (!planned) continue
+      intents.push({
+        deviceId: device.id,
+        syncKey: planned.key,
+        relativePath: planned.relativePath,
+        expectedFingerprint: encodeDuplicateDeletionFingerprint(planned.fingerprint, acousticDigest),
+      })
+    }
+    return intents
+  }
+
+  private pendingDuplicateDeletionRows(deviceId: string): DeviceDuplicateDeletionRow[] {
+    return getDatabase().prepare<[string], DeviceDuplicateDeletionRow>(`
+      SELECT id, device_id, sync_key, relative_path, expected_fingerprint, status
+      FROM device_duplicate_deletions
+      WHERE device_id = ? AND status IN ('pending', 'conflict')
+      ORDER BY created_at ASC
+    `).all(deviceId)
+  }
+
+  private updateDuplicateDeletionStatus(
+    id: string,
+    status: 'pending' | 'applied' | 'conflict',
+    at = nowIso(),
+  ): void {
+    getDatabase().prepare(`
+      UPDATE device_duplicate_deletions
+      SET status = ?, updated_at = ?, applied_at = CASE WHEN ? = 'applied' THEN ? ELSE NULL END
+      WHERE id = ?
+    `).run(status, at, status, at, id)
+  }
+
+  private async fingerprintDuplicateDeletionTracks(
+    intents: readonly DuplicateDeletionIntentLike[],
+    deviceTracks: readonly DeviceTrack[],
+    additionalKeys: ReadonlySet<string> = new Set(),
+  ): Promise<{
+    tracks: Array<DeviceTrack & { acousticDigest?: string | null }>
+    acousticInventoryComplete: boolean
+  }> {
+    const selected = duplicateDeletionVerificationTracks(intents, deviceTracks, additionalKeys)
+    if (selected.length === 0) {
+      return {
+        tracks: [...deviceTracks],
+        acousticInventoryComplete: deviceTracks.length === 0,
+      }
+    }
+    const selectedKeys = new Set(selected.map(track => track.key))
+    const acousticByKey = new Map<string, string | null>()
+    let everySelectedTrackVerified = true
+    for (const track of deviceTracks) {
+      if (!selectedKeys.has(track.key)) continue
+      try {
+        const fingerprint = await this.duplicateDeviceFingerprintProvider.fingerprint({
+          trackId: 0,
+          provider: 'local',
+          locator: track.absolutePath,
+          fileSize: track.fileSize,
+          dateModified: track.dateModified,
+          etag: null,
+        })
+        acousticByKey.set(track.key, fingerprintDigest(fingerprint.frames))
+      } catch (error) {
+        // A missing native library, unreadable volume, or changed file must
+        // surface as a review conflict. Never fall back to metadata for delete.
+        acousticByKey.set(track.key, null)
+        everySelectedTrackVerified = false
+        console.warn(
+          `[devices] could not verify duplicate cleanup candidate ${track.key}:`,
+          error instanceof Error ? error.message : String(error),
+        )
+      }
+    }
+    return {
+      tracks: deviceTracks.map(track => selectedKeys.has(track.key)
+        ? { ...track, acousticDigest: acousticByKey.get(track.key) ?? null }
+        : track),
+      acousticInventoryComplete: everySelectedTrackVerified && selectedKeys.size === deviceTracks.length,
+    }
+  }
+
+  private async applyDuplicateDeletionIntents(
+    deviceId: string,
+    actions: DeviceSyncAction[],
+    deviceTracks: DeviceTrack[],
+    deviceMusicRoot: string,
+    pcTargetPath: string,
+  ): Promise<DeviceSyncAction[]> {
+    const rows = this.pendingDuplicateDeletionRows(deviceId)
+    if (rows.length === 0) return actions
+    const intents: DuplicateDeletionIntentLike[] = rows.map(row => ({
+      id: row.id,
+      syncKey: row.sync_key,
+      relativePath: row.relative_path,
+      expectedFingerprint: row.expected_fingerprint,
+    }))
+    const possibleResurrectionKeys = new Set(actions
+      .filter(action => action.kind === 'copy_device_to_pc' || action.kind === 'replace_pc')
+      .map(action => action.key))
+    const verification = await this.fingerprintDuplicateDeletionTracks(
+      intents,
+      deviceTracks,
+      possibleResurrectionKeys,
+    )
+    const dispositions = reconcileDuplicateDeletionIntents(
+      intents,
+      verification.tracks,
+      { acousticInventoryComplete: false },
+    )
+    const rowById = new Map(rows.map(row => [row.id, row]))
+    const next = [...actions]
+
+    for (const disposition of dispositions) {
+      const row = rowById.get(disposition.intent.id)
+      if (!row) continue
+      const actionKeys = new Set([row.sync_key])
+      if (disposition.kind === 'delete' || disposition.kind === 'conflict') {
+        for (const device of disposition.relatedDevices) actionKeys.add(device.key)
+      }
+      for (let index = next.length - 1; index >= 0; index -= 1) {
+        if (actionKeys.has(next[index].key)) next.splice(index, 1)
+      }
+      if (disposition.kind === 'already_absent') {
+        this.updateDuplicateDeletionStatus(row.id, 'applied')
+        continue
+      }
+      if (disposition.kind === 'pending_absence') {
+        this.updateDuplicateDeletionStatus(row.id, 'pending')
+        continue
+      }
+      if (disposition.kind === 'conflict') {
+        this.updateDuplicateDeletionStatus(row.id, 'conflict')
+        next.push(this.makeAction(
+          'skip_conflict',
+          disposition.device.key,
+          undefined,
+          disposition.device as DeviceTrack,
+          'Corrección de duplicado pendiente, pero el archivo del MP3 cambió',
+          deviceMusicRoot,
+          pcTargetPath,
+        ))
+        continue
+      }
+      this.updateDuplicateDeletionStatus(row.id, 'pending')
+      next.push(this.makeAction(
+        'delete_device',
+        disposition.device.key,
+        undefined,
+        disposition.device as DeviceTrack,
+        'Corrección de duplicado',
+        deviceMusicRoot,
+        pcTargetPath,
+      ))
+    }
+    return next.sort((left, right) => left.relativePath.localeCompare(right.relativePath))
+  }
+
+  private async settleDuplicateDeletionIntents(
+    deviceId: string,
+    deviceTracks: DeviceTrack[],
+    at: string,
+  ): Promise<void> {
+    const rows = this.pendingDuplicateDeletionRows(deviceId)
+    if (rows.length === 0) return
+    const intents = rows.map(row => ({
+      id: row.id,
+      syncKey: row.sync_key,
+      relativePath: row.relative_path,
+      expectedFingerprint: row.expected_fingerprint,
+    }))
+    const verification = await this.fingerprintDuplicateDeletionTracks(
+      intents,
+      deviceTracks,
+      new Set(deviceTracks.map(track => track.key)),
+    )
+    const dispositions = reconcileDuplicateDeletionIntents(
+      intents,
+      verification.tracks,
+      { acousticInventoryComplete: verification.acousticInventoryComplete },
+    )
+    for (const disposition of dispositions) {
+      if (disposition.kind === 'already_absent') {
+        this.updateDuplicateDeletionStatus(disposition.intent.id, 'applied', at)
+      } else if (disposition.kind === 'conflict') {
+        this.updateDuplicateDeletionStatus(disposition.intent.id, 'conflict', at)
+      }
+    }
+  }
+
   private pendingTrackAlbumMoves(deviceId: string): TrackAlbumMoveRow[] {
     return getDatabase()
       .prepare<[string], TrackAlbumMoveRow>(`
@@ -3079,7 +3381,7 @@ export class DeviceSyncService {
     await this.assertFilesystemCapacity(
       this.registeredLibraryPath(plan.pcTargetPath),
       pcBytes,
-      'PC destination',
+      `${COMPUTER.short} destination`,
     )
   }
 
@@ -3358,13 +3660,13 @@ export class DeviceSyncService {
 
       if (args.mode === 'pc_to_device') {
         if (pc && !device) push('copy_pc_to_device', key, pc, device, 'Missing on device')
-        else if (pc && device && pc.fingerprint !== device.fingerprint) push('replace_device', key, pc, device, 'PC version differs')
-        else if (!pc && device) push('delete_device', key, pc, device, 'Not present in PC library')
+        else if (pc && device && pc.fingerprint !== device.fingerprint) push('replace_device', key, pc, device, `${COMPUTER.short} version differs`)
+        else if (!pc && device) push('delete_device', key, pc, device, `Not present in ${COMPUTER.library}`)
         continue
       }
 
       if (args.mode === 'device_to_pc') {
-        if (device && !pc) push('copy_device_to_pc', key, pc, device, 'Missing on PC')
+        if (device && !pc) push('copy_device_to_pc', key, pc, device, `Missing on ${COMPUTER.short}`)
         else if (device && pc && pc.fingerprint !== device.fingerprint) push('replace_pc', key, pc, device, 'Device version differs')
         else if (!device && pc) push('delete_pc', key, pc, device, 'Not present on device')
         continue
@@ -3374,18 +3676,18 @@ export class DeviceSyncService {
         if (deviceBase && pcBase && pc.fingerprint === pcBase.fingerprint) {
           push('delete_pc', key, pc, device, 'Deleted from device since last sync')
         } else if (deviceBase && pcBase) {
-          push('skip_conflict', key, pc, device, 'Device deleted it, PC changed it')
+          push('skip_conflict', key, pc, device, `Device deleted it, ${COMPUTER.short} changed it`)
         } else {
-          push('copy_pc_to_device', key, pc, device, 'New on PC')
+          push('copy_pc_to_device', key, pc, device, `New on ${COMPUTER.short}`)
         }
         continue
       }
 
       if (device && !pc) {
         if (pcBase && deviceBase && device.fingerprint === deviceBase.fingerprint) {
-          push('delete_device', key, pc, device, 'Deleted from PC since last sync')
+          push('delete_device', key, pc, device, `Deleted from ${COMPUTER.short} since last sync`)
         } else if (pcBase && deviceBase) {
-          push('skip_conflict', key, pc, device, 'PC deleted it, device changed it')
+          push('skip_conflict', key, pc, device, `${COMPUTER.short} deleted it, device changed it`)
         } else {
           push('copy_device_to_pc', key, pc, device, 'New on device')
         }
@@ -3396,7 +3698,7 @@ export class DeviceSyncService {
 
       const pcChanged = !pcBase || pcBase.fingerprint !== pc.fingerprint
       const deviceChanged = !deviceBase || deviceBase.fingerprint !== device.fingerprint
-      if (pcChanged && !deviceChanged) push('replace_device', key, pc, device, 'Changed on PC')
+      if (pcChanged && !deviceChanged) push('replace_device', key, pc, device, `Changed on ${COMPUTER.short}`)
       else if (deviceChanged && !pcChanged) push('replace_pc', key, pc, device, 'Changed on device')
       else push('skip_conflict', key, pc, device, 'Changed on both sides')
     }
@@ -3509,7 +3811,7 @@ export class DeviceSyncService {
           : 0
 
     if ((kind === 'copy_pc_to_device' || kind === 'replace_device' || kind === 'delete_pc') && !action.pcPath) {
-      throw new Error(`Cannot resolve ${kind}: PC file is missing`)
+      throw new Error(`Cannot resolve ${kind}: ${COMPUTER.short} file is missing`)
     }
     if ((kind === 'copy_device_to_pc' || kind === 'replace_pc' || kind === 'delete_device') && !action.devicePath) {
       throw new Error(`Cannot resolve ${kind}: device file is missing`)
@@ -3544,7 +3846,7 @@ export class DeviceSyncService {
         if (!action.sourcePath || !action.destinationPath) throw new Error('Invalid copy action')
         await this.assertPcSourceAllowed(action.sourcePath)
         await assertNoSymlinkTraversal(ctx.deviceMusicRoot, action.destinationPath)
-        await this.revalidatePlannedFile(action.sourcePath, action.pcFingerprint, action.pcBytes, 'PC source')
+        await this.revalidatePlannedFile(action.sourcePath, action.pcFingerprint, action.pcBytes, `${COMPUTER.short} source`)
         if (action.kind === 'replace_device' && action.devicePath) {
           await this.revalidatePlannedFile(action.devicePath, action.deviceFingerprint, action.deviceBytes, 'device destination')
         }
@@ -3564,7 +3866,7 @@ export class DeviceSyncService {
         await assertNoSymlinkTraversal(this.pcAllowedRoot(action.destinationPath, ctx.pcTargetPath), action.destinationPath)
         await this.revalidatePlannedFile(action.sourcePath, action.deviceFingerprint, action.deviceBytes, 'device source')
         if (action.pcPath) {
-          await this.revalidatePlannedFile(action.pcPath, action.pcFingerprint, action.pcBytes, 'PC destination')
+          await this.revalidatePlannedFile(action.pcPath, action.pcFingerprint, action.pcBytes, `${COMPUTER.short} destination`)
         }
         await this.copyPreservingMtime(action.sourcePath, action.destinationPath)
         return {}
@@ -3578,7 +3880,7 @@ export class DeviceSyncService {
       case 'delete_pc':
         if (!action.sourcePath) throw new Error('Invalid delete action')
         await this.assertPcSourceAllowed(action.sourcePath)
-        await this.revalidatePlannedFile(action.sourcePath, action.pcFingerprint, action.pcBytes, 'PC delete target')
+        await this.revalidatePlannedFile(action.sourcePath, action.pcFingerprint, action.pcBytes, `${COMPUTER.short} delete target`)
         await this.trashPcFile(action.sourcePath, ctx.affectedPcFolderIds)
         return {}
       case 'skip_conflict':
@@ -3757,7 +4059,7 @@ export class DeviceSyncService {
 
   private pcAllowedRoot(destinationPath: string, pcTargetPath: string): string {
     if (isCloudSourcePath(destinationPath)) {
-      throw new Error('Refusing to use a OneDrive identity as a PC filesystem destination')
+      throw new Error(`Refusing to use a OneDrive identity as a ${COMPUTER.short} filesystem destination`)
     }
     const registeredTarget = this.registeredLibraryPath(pcTargetPath)
     const destination = resolve(destinationPath)
@@ -3767,7 +4069,7 @@ export class DeviceSyncService {
       item.provider === 'local' && item.role === 'library' && isInside(resolve(item.path), destination),
     )
     if (folder) return resolve(folder.path)
-    throw new Error(`Refusing to write outside the configured PC library: ${destinationPath}`)
+    throw new Error(`Refusing to write outside the configured ${COMPUTER.short} library: ${destinationPath}`)
   }
 
   private registeredLibraryPath(path: string): string {
@@ -3787,10 +4089,10 @@ export class DeviceSyncService {
     }
     const source = resolve(sourcePath)
     const track = repos.tracks.getByPath(source)
-    if (!track || track.provider !== 'local') throw new Error(`Refusing unregistered PC source: ${sourcePath}`)
+    if (!track || track.provider !== 'local') throw new Error(`Refusing unregistered ${COMPUTER.short} source: ${sourcePath}`)
     const folder = repos.folders.getById(track.folder_id)
     if (!folder || folder.provider !== 'local' || folder.role !== 'library') {
-      throw new Error(`PC source library no longer exists: ${sourcePath}`)
+      throw new Error(`${COMPUTER.short} source library no longer exists: ${sourcePath}`)
     }
     await assertNoSymlinkTraversal(folder.path, source)
     return track
@@ -3845,7 +4147,7 @@ export class DeviceSyncService {
     const repos = getRepos()
     const folder = repos.folders.getByPath(target)
     if (!folder || folder.provider !== 'local' || folder.role !== 'library') {
-      throw new Error('PC destination is no longer a registered local library')
+      throw new Error(`${COMPUTER.short} destination is no longer a registered local library`)
     }
     getFolderWatcher().start(folder.id, folder.path)
     await getImportService().scan(folder.id, folder.path)
@@ -3916,6 +4218,7 @@ export class DeviceSyncService {
       } satisfies DeviceYaml)
       await writeYamlFile(join(stateDir, 'library-state.yaml'), state)
       this.markSatisfiedTrackAlbumMoves(row.id, deviceScan.tracks, completedAt)
+      await this.settleDuplicateDeletionIntents(row.id, deviceScan.tracks, completedAt)
       await writeYamlFile(join(stateDir, 'sync-runs', `${completedAt.replace(/[:.]/g, '-')}-${plan.id}.yaml`), {
         version: DEVICE_STATE_VERSION,
         plan,

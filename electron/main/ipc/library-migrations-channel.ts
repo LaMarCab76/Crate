@@ -1,5 +1,6 @@
 import { existsSync, statSync } from 'node:fs'
 import { basename } from 'node:path'
+import { BrowserWindow } from 'electron'
 import type { DbFolder } from '@shared/types/db'
 import type {
   CreateLibraryMigrationRequest,
@@ -18,6 +19,7 @@ import {
   type ResolvedUnifiedBackup,
 } from '../library-migration'
 import { getPathAuthorizationService } from '../security/PathAuthorizationService'
+import { getLocalFileAccessService } from '../security/localFileAccessRuntime'
 import { broadcast } from './events'
 import { secureIpcMain as ipcMain } from './secureIpc'
 import { assertId, assertNonEmptyString } from './validation'
@@ -165,30 +167,73 @@ async function request(value: unknown): Promise<{
   }
 }
 
+async function ensureMigrationPathAccess(
+  event: Electron.IpcMainInvokeEvent,
+  folder: DbFolder,
+  accessMode: 'read' | 'write',
+): Promise<void> {
+  if (folder.provider !== 'local') return
+  await getLocalFileAccessService().runWithAccess(folder.path, accessMode, async () => undefined, {
+    owner: BrowserWindow.fromWebContents(event.sender) ?? undefined,
+    retryOnce: false,
+  })
+}
+
 export function registerLibraryMigrationsChannel(): void {
   const migrations = getLibraryMigrationService()
   removeProgressListener?.()
   removeProgressListener = migrations.onProgress(event => broadcast('library-migrations:progress', event))
 
   ipcMain.handle('library-migrations:list', () => migrations.list())
-  ipcMain.handle('library-migrations:create', async (_event, value: CreateLibraryMigrationRequest | unknown) => (
-    migrations.create(await request(value))
-  ))
-  ipcMain.handle('library-migrations:approve', (_event, value: unknown) => (
-    migrations.approve(assertNonEmptyString(value, 'migration run id'))
-  ))
+  ipcMain.handle('library-migrations:create', async (event, value: CreateLibraryMigrationRequest | unknown) => {
+    const resolved = await request(value)
+    const source = getRepos().folders.getById(resolved.sourceFolderId)
+    if (!source) throw new Error('La biblioteca de origen ya no existe.')
+    await ensureMigrationPathAccess(event, source, resolved.sourceDisposition === 'trash' ? 'write' : 'read')
+    await ensureMigrationPathAccess(event, resolved.target.folder, 'write')
+    if (resolved.unifiedBackup.kind === 'new') {
+      await ensureMigrationPathAccess(event, resolved.unifiedBackup.folder, 'write')
+    } else if (resolved.unifiedBackup.kind === 'existing') {
+      const backup = getRepos().folders.getById(resolved.unifiedBackup.folderId)
+      if (!backup) throw new Error('La ubicación de backup ya no existe.')
+      await ensureMigrationPathAccess(event, backup, 'write')
+    }
+    return migrations.create(resolved)
+  })
+  ipcMain.handle('library-migrations:approve', async (event, value: unknown) => {
+    const runId = assertNonEmptyString(value, 'migration run id')
+    const run = migrations.list().find(item => item.runId === runId)
+    if (!run) throw new Error('La migración ya no existe.')
+    const source = getRepos().folders.getById(run.sourceFolderId)
+    if (source) await ensureMigrationPathAccess(event, source, run.sourceDisposition === 'trash' ? 'write' : 'read')
+    const target = run.targetFolderId == null ? null : getRepos().folders.getById(run.targetFolderId)
+    if (target) await ensureMigrationPathAccess(event, target, 'write')
+    return migrations.approve(runId)
+  })
   ipcMain.handle('library-migrations:pause', (_event, value: unknown) => (
     migrations.pause(assertNonEmptyString(value, 'migration run id'))
   ))
-  ipcMain.handle('library-migrations:resume', (_event, value: unknown) => (
-    migrations.resume(assertNonEmptyString(value, 'migration run id'))
-  ))
+  ipcMain.handle('library-migrations:resume', async (event, value: unknown) => {
+    const runId = assertNonEmptyString(value, 'migration run id')
+    const run = migrations.list().find(item => item.runId === runId)
+    if (!run) throw new Error('La migración ya no existe.')
+    const source = getRepos().folders.getById(run.sourceFolderId)
+    if (source) await ensureMigrationPathAccess(event, source, run.sourceDisposition === 'trash' ? 'write' : 'read')
+    const target = run.targetFolderId == null ? null : getRepos().folders.getById(run.targetFolderId)
+    if (target) await ensureMigrationPathAccess(event, target, 'write')
+    return migrations.resume(runId)
+  })
   ipcMain.handle('library-migrations:cancel', (_event, value: unknown) => (
     migrations.cancel(assertNonEmptyString(value, 'migration run id'))
   ))
-  ipcMain.handle('library-migrations:retry-cleanup', (_event, value: unknown) => (
-    migrations.retryCleanup(assertNonEmptyString(value, 'migration run id'))
-  ))
+  ipcMain.handle('library-migrations:retry-cleanup', async (event, value: unknown) => {
+    const runId = assertNonEmptyString(value, 'migration run id')
+    const run = migrations.list().find(item => item.runId === runId)
+    if (!run) throw new Error('La migración ya no existe.')
+    const source = getRepos().folders.getById(run.sourceFolderId)
+    if (source) await ensureMigrationPathAccess(event, source, 'write')
+    return migrations.retryCleanup(runId)
+  })
 }
 
 export function disposeLibraryMigrationsChannel(): void {

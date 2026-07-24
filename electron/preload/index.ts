@@ -121,6 +121,21 @@ import type {
   LibraryMigrationProgressEvent,
   LibraryMigrationState,
 } from '@shared/types/library-locations'
+import type {
+  DuplicateAnalysisProgress,
+  DuplicateAuditionCompareSegmentRequest,
+  DuplicateAuditionOpenRequest,
+  DuplicateAuditionSeekRequest,
+  DuplicateAuditionSide,
+  DuplicateAuditionState,
+  DuplicateCandidateDetail,
+  DuplicateCandidateSummary,
+  DuplicateListRequest,
+  DuplicateResolutionRequest,
+  DuplicateResolutionResult,
+  DuplicateSummary,
+} from '@shared/types/duplicates'
+import { desktopPlatform } from '@shared/utils/computerTerms'
 
 function subscribe<T>(channel: string, handler: (payload: T) => void): EventOff {
   const listener = (_event: IpcRendererEvent, payload: T) => handler(payload)
@@ -133,6 +148,34 @@ function subscribe<T>(channel: string, handler: (payload: T) => void): EventOff 
 const api: Api = {
   meta: {
     version: packageJson.version,
+    platform: desktopPlatform(process.platform),
+  },
+  duplicates: {
+    summary: () => ipcRenderer.invoke('duplicates:summary') as Promise<DuplicateSummary>,
+    list: (request?: DuplicateListRequest) =>
+      ipcRenderer.invoke('duplicates:list', request ?? {}) as Promise<DuplicateCandidateSummary[]>,
+    detail: (candidateId: string) =>
+      ipcRenderer.invoke('duplicates:detail', candidateId) as Promise<DuplicateCandidateDetail>,
+    resolve: (request: DuplicateResolutionRequest) =>
+      ipcRenderer.invoke('duplicates:resolve', request) as Promise<DuplicateResolutionResult>,
+    reanalyze: () => ipcRenderer.invoke('duplicates:reanalyze') as Promise<void>,
+    audition: {
+      beginSession: () =>
+        ipcRenderer.invoke('duplicates:audition:beginSession') as Promise<DuplicateAuditionState>,
+      open: (request: DuplicateAuditionOpenRequest) =>
+        ipcRenderer.invoke('duplicates:audition:open', request) as Promise<DuplicateAuditionState>,
+      play: (side: DuplicateAuditionSide) =>
+        ipcRenderer.invoke('duplicates:audition:play', side) as Promise<DuplicateAuditionState>,
+      pause: () => ipcRenderer.invoke('duplicates:audition:pause') as Promise<DuplicateAuditionState>,
+      seek: (request: DuplicateAuditionSeekRequest) =>
+        ipcRenderer.invoke('duplicates:audition:seek', request) as Promise<DuplicateAuditionState>,
+      compareSegment: (request: DuplicateAuditionCompareSegmentRequest) =>
+        ipcRenderer.invoke('duplicates:audition:compareSegment', request) as Promise<DuplicateAuditionState>,
+      close: () => ipcRenderer.invoke('duplicates:audition:close') as Promise<DuplicateAuditionState>,
+    },
+    onChanged: (h) => subscribe<void>('duplicates:changed', () => h()),
+    onProgress: (h) => subscribe<DuplicateAnalysisProgress>('duplicates:progress', h),
+    onAuditionState: (h) => subscribe<DuplicateAuditionState>('duplicates:auditionState', h),
   },
   library: {
     tracks: (opts?: ListTracksOpts) =>
@@ -465,6 +508,10 @@ const api: Api = {
       ipcRenderer.invoke('library-locations:pick-local') as Promise<PickFolderResult>,
     addLocal: (input: AddLocalLibraryLocationRequest) =>
       ipcRenderer.invoke('library-locations:add-local', input) as Promise<LibraryLocation>,
+    requestLocalAccess: (folderId: number) =>
+      ipcRenderer.invoke('library-locations:request-local-access', folderId),
+    openFilePrivacySettings: () =>
+      ipcRenderer.invoke('library-locations:open-file-privacy-settings') as Promise<void>,
     getOneDriveStatus: () =>
       ipcRenderer.invoke('cloud:account:status') as Promise<CloudAccountStatus>,
     setOneDriveClientId: (clientId: string) =>

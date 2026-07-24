@@ -1,7 +1,11 @@
 import { basename, extname } from 'node:path'
 import type { Repos } from '../db/repositories'
 import { getRepos } from '../db/repositories'
-import { readTrackMetadata, type TrackMetadata } from './MetadataExtractor'
+import {
+  readTrackMetadata,
+  serializeTrackExtendedMetadata,
+  type TrackMetadata,
+} from './MetadataExtractor'
 import { parseArtistName } from './ArtistNameParser'
 import { broadcast } from '../ipc/events'
 import { createThrottledBroadcaster } from '../ipc/throttle'
@@ -69,11 +73,11 @@ export function buildTrackInsert(
     disc_number: md.discNumber,
     total_discs: md.totalDiscs,
     compilation: md.isCompilation ? 1 : 0,
-    release_date: null,
-    original_release_date: null,
+    release_date: md.releaseDate,
+    original_release_date: md.originalReleaseDate,
     bpm: md.bpm,
     musical_key: md.musicalKey,
-    media_type: null,
+    media_type: md.mediaType,
     sort_title: null,
     sort_artist: null,
     sort_album: null,
@@ -89,7 +93,7 @@ export function buildTrackInsert(
     is_duplicate: 0,
     primary_track_id: null,
     duplicate_group_id: null,
-    extended_metadata: null,
+    extended_metadata: serializeTrackExtendedMetadata(md),
     album_id: albumId,
     artist_id: artistId,
     genre_id: genreId,
@@ -209,6 +213,7 @@ export class ImportService {
               md.albumArtist ?? null,
               md.year || null,
             )
+            this.repos.albums.enrichReleaseMetadata(album.id, md)
             const genre = md.genre ? this.repos.genres.getOrCreate(md.genre) : null
             return buildTrackInsert(md, file, folderId, album.id, artist.id, genre?.id ?? null)
           } catch (err) {
@@ -279,6 +284,7 @@ export class ImportService {
     const parsedArtist = parseArtistName(md.artist)
     const artist = this.repos.artists.getOrCreate(parsedArtist.primary || md.artist)
     const album = this.repos.albums.getOrCreate(md.album, md.albumArtist ?? null, md.year || null)
+    this.repos.albums.enrichReleaseMetadata(album.id, md)
     const genre = md.genre ? this.repos.genres.getOrCreate(md.genre) : null
     const row = buildTrackInsert(md, filePath, folderId, album.id, artist.id, genre?.id ?? null)
 

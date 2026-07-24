@@ -34,6 +34,36 @@ export interface TrackMetadata {
   replayGainTrack: number | null
   replayGainAlbum: number | null
   isCompilation: boolean
+  releaseDate: string | null
+  originalReleaseDate: string | null
+  releaseTypes: string[]
+  mediaType: string | null
+  musicbrainzRecordingId: string | null
+  musicbrainzTrackId: string | null
+  musicbrainzAlbumId: string | null
+  musicbrainzReleaseGroupId: string | null
+  musicbrainzArtistIds: string[]
+  musicbrainzAlbumArtistIds: string[]
+}
+
+export function serializeTrackExtendedMetadata(md: Pick<TrackMetadata,
+  | 'releaseTypes'
+  | 'musicbrainzRecordingId'
+  | 'musicbrainzTrackId'
+  | 'musicbrainzAlbumId'
+  | 'musicbrainzReleaseGroupId'
+  | 'musicbrainzArtistIds'
+  | 'musicbrainzAlbumArtistIds'
+>): string {
+  return JSON.stringify({
+    releaseTypes: md.releaseTypes,
+    musicbrainzRecordingId: md.musicbrainzRecordingId,
+    musicbrainzTrackId: md.musicbrainzTrackId,
+    musicbrainzAlbumId: md.musicbrainzAlbumId,
+    musicbrainzReleaseGroupId: md.musicbrainzReleaseGroupId,
+    musicbrainzArtistIds: md.musicbrainzArtistIds,
+    musicbrainzAlbumArtistIds: md.musicbrainzAlbumArtistIds,
+  })
 }
 
 function asString(v: unknown, fallback = ''): string {
@@ -144,5 +174,15 @@ export async function readTrackMetadata(
     replayGainTrack: parseGainDb(common.replaygain_track_gain?.dB?.toString()),
     replayGainAlbum: parseGainDb(common.replaygain_album_gain?.dB?.toString()),
     isCompilation: Boolean(common.compilation),
+    releaseDate: asString(common.releasedate ?? common.date).trim() || null,
+    originalReleaseDate: asString(common.originaldate ?? common.originalyear).trim() || null,
+    releaseTypes: (common.releasetype ?? []).map(value => String(value).trim()).filter(Boolean),
+    mediaType: asString(common.media).trim() || null,
+    musicbrainzRecordingId: asString(common.musicbrainz_recordingid).trim() || null,
+    musicbrainzTrackId: asString(common.musicbrainz_trackid).trim() || null,
+    musicbrainzAlbumId: asString(common.musicbrainz_albumid).trim() || null,
+    musicbrainzReleaseGroupId: asString(common.musicbrainz_releasegroupid).trim() || null,
+    musicbrainzArtistIds: (common.musicbrainz_artistid ?? []).map(value => String(value).trim()).filter(Boolean),
+    musicbrainzAlbumArtistIds: (common.musicbrainz_albumartistid ?? []).map(value => String(value).trim()).filter(Boolean),
   }
 }

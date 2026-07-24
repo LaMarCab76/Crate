@@ -27,6 +27,7 @@ import { DevicesView, type DeviceDashboardTab } from './views/DevicesView'
 import { DeviceSyncView, type DeviceSyncTab } from './views/DeviceSyncView'
 import { DeviceLibraryView, type DeviceLibrarySection } from './views/DeviceLibraryView'
 import { MetadataFixView } from './views/MetadataFixView'
+import { DuplicateReviewView } from './views/DuplicateReviewView'
 import { useTweaks, useListPrefsStore } from './stores/settingsStore'
 import { useMetadataFixIntent, useNavIntentStore } from './stores/navIntentStore'
 import { useAlbumByUiId, useFavoriteTracks, useLibraryStore } from './stores/libraryStore'
@@ -61,6 +62,7 @@ export type View =
   | { kind: 'playlist'; playlist: Playlist }
   | { kind: 'favoriteTracks' }
   | { kind: 'metadataFix'; trackIds: number[]; title?: string; missingCount?: number }
+  | { kind: 'duplicates'; candidateId?: string }
 
 const SIDEBAR_WIDTH_STORAGE_KEY = 'crate.layout.sidebarWidth.v1'
 const PLAYER_PANE_OPEN_STORAGE_KEY = 'crate.layout.playerPaneOpen.v1'
@@ -313,12 +315,14 @@ export default function App() {
   const clearResolvedActivity = useActivityCenterStore(s => s.clearResolved)
   const completeActivity = useActivityCenterStore(s => s.completeActivity)
   const upsertActivity = useActivityCenterStore(s => s.upsert)
+  const candidates = useDeviceStore(s => s.candidates)
   const nowTrack = usePlaybackStore(s => s.currentTrack)
   const playbackStatus = usePlaybackStore(s => s.status)
   const nowAlbum = useAlbumByUiId(nowTrack?.albumId)
   const viewedAlbum = useAlbumByUiId(viewAlbumId)
   const favoriteTracks = useFavoriteTracks()
-  const canShowPlayerPane = nowTrack != null && !expanded
+  const duplicateReviewOpen = view.kind === 'duplicates'
+  const canShowPlayerPane = nowTrack != null && !expanded && !duplicateReviewOpen
   const isPlayerPaneOpen = playerPaneOpen && canShowPlayerPane
   const showLyricsSidePane = lyricsSidePaneOpen && canShowPlayerPane
   const showBottomPlayer = !isPlayerPaneOpen && canShowPlayerPane
@@ -468,6 +472,12 @@ export default function App() {
     if (nowTrack == null && lyricsSidePaneOpen) setLyricsSidePaneOpen(false)
   }, [nowTrack, lyricsSidePaneOpen])
 
+  useEffect(() => {
+    if (!duplicateReviewOpen) return
+    setExpanded(false)
+    setLyricsSidePaneOpen(false)
+  }, [duplicateReviewOpen])
+
   // Kick off the first library load when the renderer is ready.
   useEffect(() => {
     if (!loaded) refresh()
@@ -613,10 +623,25 @@ export default function App() {
       case 'open-updates':
         openSettingsFromActivity('actualizaciones')
         break
+      case 'open-duplicates':
+        navigate({
+          kind: 'duplicates',
+          candidateId: typeof item.metadata.candidateId === 'string' ? item.metadata.candidateId : undefined,
+        }, { replace: view.kind === 'duplicates' })
+        finishActivityNavigation()
+        break
       case 'connect-device':
         if (rootPath && pathToken) {
+          const hasCrateState = typeof item.metadata.hasCrateState === 'boolean'
+            ? item.metadata.hasCrateState
+            : candidates.some(candidate => candidate.rootPath === rootPath && candidate.hasCrateState)
           setActivityFullscreen(false)
-          setConnectTarget({ token: pathToken, displayPath: rootPath, name: volumeName })
+          setConnectTarget({
+            token: pathToken,
+            displayPath: rootPath,
+            name: volumeName,
+            hasCrateState,
+          })
         }
         break
       case 'add-library':
@@ -833,6 +858,7 @@ export default function App() {
       case 'favoriteTracks': return 'pfavorites'
       case 'devices': return 'devices'
       case 'device': return `dev-${view.deviceId}-${view.section}`
+      case 'duplicates': return 'duplicates'
       default:          return null
     }
   })()
@@ -977,6 +1003,8 @@ export default function App() {
         return <GenresView onSelectAlbum={al => navigate({ kind: 'album', album: al })} />
       case 'metadataFix':
         return <MetadataFixView trackIds={view.trackIds} missingCount={view.missingCount} onDone={goBack} />
+      case 'duplicates':
+        return <DuplicateReviewView candidateId={view.candidateId} />
       default:
         return <LibraryView />
     }
@@ -1099,7 +1127,7 @@ export default function App() {
             </div>
           </div>
 
-          {(playerPaneVisible || lyricsSidePaneVisible) && (
+          {!duplicateReviewOpen && (playerPaneVisible || lyricsSidePaneVisible) && (
             <div className="np-dock-lateral">
               <div className="pane-bg-canvas" aria-hidden="true">
                 <div className="np-bg-blob np-bg-blob-a" />
@@ -1147,7 +1175,7 @@ export default function App() {
 
         </div>
 
-        {bottomPlayerVisible && (
+        {!duplicateReviewOpen && bottomPlayerVisible && (
           <div className={`player-dock ${
             (isBottomPlayerClosing || bottomPlayerClosing) ? 'collapsed' : bottomPlayerPriming ? 'priming' : 'open'
           } ${bottomPlayerEntering && !(isBottomPlayerClosing || bottomPlayerClosing) ? 'entering' : ''}`}>
@@ -1169,11 +1197,11 @@ export default function App() {
           </div>
         )}
 
-        {expanded && nowTrack && (
+        {!duplicateReviewOpen && expanded && nowTrack && (
           <NowPlayingFull onCollapse={() => setExpanded(false)} />
         )}
 
-        <LyricsCandidates />
+        {!duplicateReviewOpen && <LyricsCandidates />}
         {setupWizardOpen && (
           <LibrarySetupWizard
             onComplete={async () => {

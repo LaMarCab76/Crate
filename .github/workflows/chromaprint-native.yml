@@ -1,0 +1,155 @@
+name: Chromaprint native assets
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/chromaprint-native.yml"
+      - ".github/workflows/release.yml"
+      - "electron-builder.yml"
+      - "package.json"
+      - "scripts/*chromaprint*.mjs"
+      - "scripts/fetch-native.mjs"
+      - "scripts/verify-native.mjs"
+      - "native/libs/licenses/chromaprint/**"
+      - "electron/main/audio/bass-constants.ts"
+      - "electron/main/audio/bass-ffi.ts"
+      - "electron/main/duplicates/fingerprint.ts"
+      - "electron/main/duplicates/native/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/chromaprint-native.yml"
+      - ".github/workflows/release.yml"
+      - "electron-builder.yml"
+      - "package.json"
+      - "scripts/*chromaprint*.mjs"
+      - "scripts/fetch-native.mjs"
+      - "scripts/verify-native.mjs"
+      - "native/libs/licenses/chromaprint/**"
+      - "electron/main/audio/bass-constants.ts"
+      - "electron/main/audio/bass-ffi.ts"
+      - "electron/main/duplicates/fingerprint.ts"
+      - "electron/main/duplicates/native/**"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the immutable native asset release after all targets pass
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: darwin
+            arch: universal
+            asset: chromaprint-1.6.0-darwin-universal
+            binary: native/libs/libchromaprint.dylib
+          - os: windows-2022
+            platform: win32
+            arch: x64
+            asset: chromaprint-1.6.0-win32-x64
+            binary: native/libs/chromaprint.dll
+          - os: ubuntu-24.04
+            platform: linux
+            arch: x64
+            asset: chromaprint-1.6.0-linux-x64
+            binary: native/libs/libchromaprint.so
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck and test native contracts
+        run: npm run typecheck:node && node --test scripts/verify-chromaprint.test.mjs electron/main/duplicates/fingerprint.test.ts electron/main/duplicates/native/ChromaprintFingerprintProvider.test.mjs
+
+      - name: Build pinned shared library
+        run: npm run build:chromaprint -- --platform=${{ matrix.platform }} --arch=${{ matrix.arch }} --force
+
+      - name: Fetch and load BASS decode libraries
+        run: npm run fetch:bass -- --platform=${{ matrix.platform }} --arch=${{ matrix.arch == 'universal' && 'x64' || matrix.arch }} && npm run verify:bass -- --platform=${{ matrix.platform }} --load
+
+      - name: Verify provenance, ABI, dependencies, and fingerprint
+        run: npm run verify:chromaprint -- --platform=${{ matrix.platform }} --arch=${{ matrix.arch }} --load
+
+      - name: Smoke BASS PCM into Chromaprint
+        run: npm run smoke:chromaprint-pipeline
+
+      - name: Upload verified native tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: |
+            ${{ matrix.binary }}
+            native/libs/chromaprint-manifest.json
+            native/libs/licenses/chromaprint/LICENSE.md
+            native/libs/licenses/chromaprint/LGPL-2.1.txt
+            native/libs/licenses/chromaprint/KISSFFT-LICENSE.txt
+            native/libs/licenses/chromaprint/SOURCE.md
+            native/libs/licenses/chromaprint/chromaprint-1.6.0.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish verified native release
+    if: inputs.publish == true
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download verified targets
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create immutable asset archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir release-assets
+          for directory in artifacts/chromaprint-1.6.0-*; do
+            asset="$(basename "${directory}").zip"
+            (
+              cd "${directory}"
+              zip -9 -r "../../release-assets/${asset}" .
+            )
+          done
+          sha256sum release-assets/*.zip | tee release-assets/SHA256SUMS
+
+      - name: Publish native asset release once
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="chromaprint-native-v1.6.0-1"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            echo "${tag} already exists; refusing to replace published native binaries" >&2
+            exit 1
+          fi
+          gh release create "${tag}" release-assets/* \
+            --target "${GITHUB_SHA}" \
+            --title "Crate Chromaprint 1.6.0 native assets (revision 1)" \
+            --notes "Verified shared-library builds from the pinned Chromaprint 1.6.0 source. Each archive includes its provenance manifest, exact source archive, and license notices."

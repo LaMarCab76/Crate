@@ -43,6 +43,46 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+/**
+ * Serializes MusicBrainz traffic and preserves a minimum interval between
+ * request starts. A timestamp-only limiter is insufficient: two callers can
+ * finish the same wait together and issue concurrent requests.
+ */
+export class MusicBrainzRequestQueue {
+  private tail: Promise<void> = Promise.resolve()
+  private lastStartedAt: number | null = null
+  private readonly spacingMs: number
+  private readonly now: () => number
+  private readonly wait: (ms: number) => Promise<void>
+
+  constructor(
+    spacingMs = MB_SPACING_MS,
+    now: () => number = Date.now,
+    wait: (ms: number) => Promise<void> = delay,
+  ) {
+    this.spacingMs = Math.max(0, spacingMs)
+    this.now = now
+    this.wait = wait
+  }
+
+  run<T>(request: () => Promise<T>): Promise<T> {
+    const run = this.tail.then(async () => {
+      if (this.lastStartedAt != null) {
+        const remaining = this.spacingMs - (this.now() - this.lastStartedAt)
+        if (remaining > 0) await this.wait(remaining)
+      }
+      this.lastStartedAt = this.now()
+      return request()
+    })
+    this.tail = run.then(() => undefined, () => undefined)
+    return run
+  }
+}
+
+// All metadata consumers share the same gate, including duplicate enrichment
+// and regular metadata completion.
+const musicBrainzRequestQueue = new MusicBrainzRequestQueue()
+
 function asString(value: unknown): string | null {
   if (value == null) return null
   const text = String(value).trim()
@@ -228,8 +268,6 @@ function appVersion(): string {
 }
 
 export class MusicBrainzMetadataClient {
-  private lastMusicBrainzAt = 0
-
   async lookupRecordingOnAlbum(query: MusicBrainzTrackQuery): Promise<MusicBrainzTrackMatch | null> {
     const result = await this.searchRecording(query)
     if (!result) return null
@@ -309,24 +347,22 @@ export class MusicBrainzMetadataClient {
   }
 
   private async fetchMusicBrainzJson(url: string): Promise<unknown> {
-    const since = Date.now() - this.lastMusicBrainzAt
-    if (since < MB_SPACING_MS) await delay(MB_SPACING_MS - since)
-    this.lastMusicBrainzAt = Date.now()
-
-    const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS)
-    try {
-      const response = await fetch(url, {
-        headers: { 'User-Agent': userAgent(), Accept: 'application/json' },
-        signal: ctrl.signal,
-      })
-      if (response.status === 404) return null
-      if (response.status === 503) throw new Error('MusicBrainz rate limit reached')
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      return await response.json()
-    } finally {
-      clearTimeout(timer)
-    }
+    return musicBrainzRequestQueue.run(async () => {
+      const ctrl = new AbortController()
+      const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS)
+      try {
+        const response = await fetch(url, {
+          headers: { 'User-Agent': userAgent(), Accept: 'application/json' },
+          signal: ctrl.signal,
+        })
+        if (response.status === 404) return null
+        if (response.status === 503) throw new Error('MusicBrainz rate limit reached')
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        return await response.json()
+      } finally {
+        clearTimeout(timer)
+      }
+    })
   }
 }
 

@@ -104,7 +104,7 @@ test('repository migration layout is contiguous and includes finalized local mig
       .map(name => [`./migrations/${name}`, readFileSync(new URL(name, directory), 'utf8')]),
   )
   const catalog = buildMigrationCatalog(source)
-  assert.equal(catalog.at(-1)?.version, 30)
+  assert.equal(catalog.at(-1)?.version, 31)
   assert.deepEqual(catalog.slice(21).map(migration => migration.name), [
     '0022_track_album_moves.sql',
     '0023_cleanup_orphaned_entities_on_track_update.sql',
@@ -115,6 +115,7 @@ test('repository migration layout is contiguous and includes finalized local mig
     '0028_library_mirror_journal.sql',
     '0029_library_location_presentation.sql',
     '0030_library_location_migrations.sql',
+    '0031_duplicate_detection.sql',
   ])
 })
 

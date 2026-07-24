@@ -1,5 +1,8 @@
 import { secureIpcMain as ipcMain } from './secureIpc'
+import { BrowserWindow } from 'electron'
 import { getDownloadManager } from '../downloads/DownloadManager'
+import { getRepos } from '../db/repositories'
+import { getLocalFileAccessService } from '../security/localFileAccessRuntime'
 import { assertId, assertNonEmptyString } from './validation'
 import type {
   DownloadProvider,
@@ -124,6 +127,23 @@ function assertEnqueueRequest(value: unknown): EnqueueDownloadRequest {
 
 export function registerDownloadsChannel(): void {
   const manager = getDownloadManager()
+  const repos = getRepos()
+
+  const withDownloadDestination = async <T>(
+    event: Electron.IpcMainInvokeEvent,
+    folderId: number | null,
+    operation: () => Promise<T>,
+  ): Promise<T> => {
+    if (folderId == null) return operation()
+    const folder = repos.folders.getById(folderId)
+    if (!folder || folder.provider !== 'local' || folder.role !== 'library') {
+      throw new Error('La biblioteca de descargas ya no está disponible.')
+    }
+    return getLocalFileAccessService().runWithAccess(folder.path, 'write', operation, {
+      owner: BrowserWindow.fromWebContents(event.sender) ?? undefined,
+      retryOnce: false,
+    })
+  }
 
   ipcMain.handle('downloads:settings:get', () => manager.getSettings())
   ipcMain.handle('downloads:settings:set', (_, patch: unknown) =>
@@ -154,14 +174,18 @@ export function registerDownloadsChannel(): void {
   ipcMain.handle('downloads:search', (_, payload: unknown) =>
     manager.search(assertSearchRequest(payload)),
   )
-  ipcMain.handle('downloads:enqueue', (_, payload: unknown) =>
-    manager.enqueue(assertEnqueueRequest(payload)),
-  )
+  ipcMain.handle('downloads:enqueue', (event, payload: unknown) => {
+    const request = assertEnqueueRequest(payload)
+    const folderId = request.folderId ?? manager.getSettings().folderId
+    return withDownloadDestination(event, folderId, () => manager.enqueue(request))
+  })
   ipcMain.handle('downloads:jobs', () => manager.jobs())
   ipcMain.handle('downloads:cancel', (_, jobId: unknown) =>
     manager.cancel(assertNonEmptyString(jobId, 'job id')),
   )
-  ipcMain.handle('downloads:retry', (_, jobId: unknown) =>
-    manager.retry(assertNonEmptyString(jobId, 'job id')),
-  )
+  ipcMain.handle('downloads:retry', (event, jobId: unknown) => {
+    const id = assertNonEmptyString(jobId, 'job id')
+    const job = manager.jobs().find(item => item.id === id)
+    return withDownloadDestination(event, job?.folderId ?? null, () => manager.retry(id))
+  })
 }

@@ -106,7 +106,7 @@ test('sync wizard stepper, two columns and per-track side toggle are styled', ()
 })
 
 test('sync diff exposes visible global side controls without artwork optimization locking them', () => {
-  assert.ok(syncSource.includes('Tomar todo de PC'), 'Diff should expose a global PC winner control')
+  assert.ok(syncSource.includes('Tomar todo de {COMPUTER.short}'), 'Diff should expose a platform-aware computer winner control')
   assert.ok(syncSource.includes('Tomar todo de MP3'), 'Diff should expose a global MP3 winner control')
   assert.ok(syncSource.includes("const planEditingLocked = applying || (syncRunning && activeProgress?.phase !== 'optimizing_artwork')"), 'Artwork-only optimization should not lock diff controls')
   assert.ok(syncSource.includes('loading={planEditingLocked}'), 'Diff controls should use the plan editing lock')

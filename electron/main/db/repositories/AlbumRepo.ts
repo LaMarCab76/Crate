@@ -89,4 +89,30 @@ export class AlbumRepo {
   setFavorite(id: number, favorite: boolean): void {
     this.stmtSetFavorite.run(favorite ? 1 : 0, Date.now(), id)
   }
+
+  enrichReleaseMetadata(id: number, metadata: {
+    releaseTypes?: readonly string[]
+    isCompilation?: boolean
+    musicbrainzAlbumId?: string | null
+    musicbrainzReleaseGroupId?: string | null
+    releaseDate?: string | null
+  }): void {
+    const releaseType = metadata.releaseTypes?.map(value => value.trim()).filter(Boolean).join(', ') || null
+    this.db.prepare(`
+      UPDATE albums
+      SET release_type = COALESCE(?, release_type),
+          is_compilation = MAX(is_compilation, ?),
+          musicbrainz_album_id = COALESCE(?, musicbrainz_album_id),
+          musicbrainz_release_group_id = COALESCE(?, musicbrainz_release_group_id),
+          release_date = COALESCE(?, release_date)
+      WHERE id = ?
+    `).run(
+      releaseType,
+      metadata.isCompilation ? 1 : 0,
+      metadata.musicbrainzAlbumId ?? null,
+      metadata.musicbrainzReleaseGroupId ?? null,
+      metadata.releaseDate ?? null,
+      id,
+    )
+  }
 }

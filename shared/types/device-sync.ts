@@ -390,6 +390,7 @@ export interface DeviceConnectPayload {
   pcTargetPath?: string
   artworkMaxEdge?: number
   sourceLibraryIds?: number[]
+  resetDeviceState?: boolean
 }
 
 export interface DeviceSettingsUpdate {

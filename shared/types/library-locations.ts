@@ -2,6 +2,26 @@ export type LibraryProvider = 'local' | 'onedrive'
 
 export type LibraryRole = 'library' | 'backup'
 
+export type DesktopPlatform = 'macos' | 'windows' | 'linux'
+
+export type LocalAccessState =
+  | 'ready'
+  | 'permission_required'
+  | 'unavailable'
+  | 'read_only'
+
+export interface LocalAccessStatus {
+  state: LocalAccessState
+  canRead: boolean
+  canWrite: boolean
+  detail: string | null
+}
+
+export interface LocalAccessRequestResult {
+  canceled: boolean
+  status: LocalAccessStatus
+}
+
 export interface LibraryLocation {
   id: number
   name: string
@@ -18,6 +38,7 @@ export interface LibraryLocation {
   displayIcon: string | null
   dateAdded: string
   dateUpdated: string
+  localAccess: LocalAccessStatus | null
 }
 
 export type LibraryMigrationMode = 'relocate' | 'merge'

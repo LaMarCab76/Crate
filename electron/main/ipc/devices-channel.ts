@@ -1,6 +1,9 @@
 import { secureIpcMain as ipcMain } from './secureIpc'
+import { BrowserWindow } from 'electron'
 import { isAbsolute } from 'node:path'
+import { platform } from 'node:os'
 import { getDeviceSyncService } from '../devices/DeviceSyncService'
+import { getLocalFileAccessService } from '../security/localFileAccessRuntime'
 import { assertNonEmptyString } from './validation'
 import {
   DEVICE_ARTWORK_EDGE_MAX,
@@ -16,6 +19,9 @@ import type {
   DeviceSyncActionKind,
   DeviceSyncPlanRequest,
 } from '@shared/types/device-sync'
+import { computerTerms, desktopPlatform } from '@shared/utils/computerTerms'
+
+const COMPUTER = computerTerms(desktopPlatform(platform()))
 
 function assertSafePath(value: unknown, label: string): string {
   const str = assertNonEmptyString(value, label)
@@ -45,12 +51,15 @@ function assertConnectPayload(value: unknown): DeviceConnectPayload {
   if (payload.musicRoot !== undefined && typeof payload.musicRoot !== 'string') {
     throw new Error('Invalid device music root')
   }
+  if (payload.resetDeviceState !== undefined && typeof payload.resetDeviceState !== 'boolean') {
+    throw new Error('Invalid reset device state flag')
+  }
   if (payload.pcTargetPath !== undefined) {
     if (typeof payload.pcTargetPath !== 'string') {
-      throw new Error('Invalid PC target path')
+      throw new Error(`Invalid ${COMPUTER.short} target path`)
     }
     if (payload.pcTargetPath.length > 0) {
-      assertSafePath(payload.pcTargetPath, 'PC target path')
+      assertSafePath(payload.pcTargetPath, `${COMPUTER.short} target path`)
     }
   }
   if (payload.sourceLibraryIds !== undefined) {
@@ -126,10 +135,10 @@ function assertSettingsUpdate(value: unknown): DeviceSettingsUpdate {
   }
   if (payload.pcTargetPath !== undefined) {
     if (typeof payload.pcTargetPath !== 'string') {
-      throw new Error('Invalid PC target path')
+      throw new Error(`Invalid ${COMPUTER.short} target path`)
     }
     if (payload.pcTargetPath.length > 0) {
-      assertSafePath(payload.pcTargetPath, 'PC target path')
+      assertSafePath(payload.pcTargetPath, `${COMPUTER.short} target path`)
     }
   }
   if (payload.sourceLibraryIds !== undefined) {
@@ -200,6 +209,20 @@ function assertApplySelection(value: unknown): DeviceSyncApplySelection | undefi
 
 export function registerDevicesChannel(): void {
   const service = getDeviceSyncService()
+  const ensureLocalAccess = async (
+    event: Electron.IpcMainInvokeEvent,
+    requirements: Array<{ rootPath: string; mode: 'read' | 'write' }>,
+  ) => {
+    const owner = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    for (const requirement of requirements) {
+      await getLocalFileAccessService().runWithAccess(
+        requirement.rootPath,
+        requirement.mode,
+        async () => undefined,
+        { owner, retryOnce: false },
+      )
+    }
+  }
 
   ipcMain.handle('devices:detectCandidates', () => service.detectCandidates())
   ipcMain.handle('devices:volumes', () => service.volumeSnapshot())
@@ -239,12 +262,17 @@ export function registerDevicesChannel(): void {
   ipcMain.handle('devices:rockboxThemes', (_, deviceId: unknown) =>
     service.rockboxThemes(assertNonEmptyString(deviceId, 'device id')),
   )
-  ipcMain.handle('devices:planSync', (_, payload: unknown) =>
-    service.planSync(assertPlanRequest(payload)),
-  )
-  ipcMain.handle('devices:applySync', (_, planId: unknown, selection: unknown) =>
-    service.applySync(assertNonEmptyString(planId, 'plan id'), assertApplySelection(selection)),
-  )
+  ipcMain.handle('devices:planSync', async (event, payload: unknown) => {
+    const request = assertPlanRequest(payload)
+    await ensureLocalAccess(event, await service.localAccessRequirementsForPlan(request))
+    return service.planSync(request)
+  })
+  ipcMain.handle('devices:applySync', async (event, planId: unknown, selection: unknown) => {
+    const id = assertNonEmptyString(planId, 'plan id')
+    const safeSelection = assertApplySelection(selection)
+    await ensureLocalAccess(event, service.localAccessRequirementsForApply(id, safeSelection))
+    return service.applySync(id, safeSelection)
+  })
   ipcMain.handle('devices:optimizeArtwork', (_, deviceId: unknown, selection: unknown) =>
     service.optimizeDeviceArtwork(
       assertNonEmptyString(deviceId, 'device id'),
@@ -264,9 +292,11 @@ export function registerDevicesChannel(): void {
     ),
   )
   ipcMain.handle('devices:listPendingJournals', () => service.listPendingJournals())
-  ipcMain.handle('devices:resumeJournal', (_, journalId: unknown) =>
-    service.resumeJournal(assertNonEmptyString(journalId, 'journal id')),
-  )
+  ipcMain.handle('devices:resumeJournal', async (event, journalId: unknown) => {
+    const id = assertNonEmptyString(journalId, 'journal id')
+    await ensureLocalAccess(event, await service.localAccessRequirementsForJournal(id))
+    return service.resumeJournal(id)
+  })
   ipcMain.handle('devices:discardJournal', (_, journalId: unknown) =>
     service.discardJournal(assertNonEmptyString(journalId, 'journal id')),
   )

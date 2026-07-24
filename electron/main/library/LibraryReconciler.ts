@@ -12,7 +12,11 @@ import { getLibraryWorkerClient } from '../workers/LibraryWorkerClient'
 import { parseArtistName } from './ArtistNameParser'
 import { buildTrackInsert, collectAudioFiles, collectLrcFiles, isAudioPath } from './ImportService'
 import { getLibraryScanSettings } from './LibraryScanSettings'
-import { readTrackMetadata, type TrackMetadata } from './MetadataExtractor'
+import {
+  readTrackMetadata,
+  serializeTrackExtendedMetadata,
+  type TrackMetadata,
+} from './MetadataExtractor'
 import { isOrphanLrc } from './orphanLrc'
 import { LibraryCollectionError } from './libraryFileCollector'
 import { requireCurrentLocalLibraryFolder, requirePathInsideLocalLibrary } from './libraryRootGuards'
@@ -454,6 +458,7 @@ class LibraryReconciler {
     const parsedArtist = parseArtistName(md.artist)
     const artist = this.repos.artists.getOrCreate(parsedArtist.primary || md.artist)
     const album = this.repos.albums.getOrCreate(md.album, md.albumArtist ?? null, md.year || null)
+    this.repos.albums.enrichReleaseMetadata(album.id, md)
     const genre = md.genre ? this.repos.genres.getOrCreate(md.genre) : null
     const row = buildTrackInsert(md, filePath, folderId, album.id, artist.id, genre?.id ?? null)
     const trackId = this.repos.tracks.insert(row)
@@ -529,6 +534,7 @@ class LibraryReconciler {
     const parsedArtist = parseArtistName(md.artist)
     const artist = this.repos.artists.getOrCreate(parsedArtist.primary || md.artist)
     const album = this.repos.albums.getOrCreate(md.album, md.albumArtist ?? null, md.year || null)
+    this.repos.albums.enrichReleaseMetadata(album.id, md)
     const genre = md.genre ? this.repos.genres.getOrCreate(md.genre) : null
 
     this.repos.tracks.updateMetadata({
@@ -545,6 +551,10 @@ class LibraryReconciler {
       discNumber: md.discNumber,
       totalDiscs: md.totalDiscs,
       compilation: md.isCompilation ? 1 : 0,
+      releaseDate: md.releaseDate,
+      originalReleaseDate: md.originalReleaseDate,
+      mediaType: md.mediaType,
+      extendedMetadata: serializeTrackExtendedMetadata(md),
       duration: md.duration,
       format: md.format,
       codec: md.codec,

@@ -115,6 +115,23 @@ function roleLabel(role: LibraryRole): string {
   return role === 'backup' ? 'Backup' : 'Biblioteca'
 }
 
+function localAccessLabel(location: LibraryLocation): string {
+  if (location.provider !== 'local' || !location.localAccess) {
+    return location.available ? 'Disponible' : 'Sin conexión'
+  }
+  switch (location.localAccess.state) {
+    case 'ready': return 'Acceso completo'
+    case 'permission_required': return 'Necesita acceso'
+    case 'unavailable': return 'Sin conexión'
+    case 'read_only': return 'Solo lectura'
+  }
+}
+
+function localAccessClass(location: LibraryLocation): string {
+  if (location.provider !== 'local' || !location.localAccess) return location.available ? 'ready' : 'unavailable'
+  return location.localAccess.state
+}
+
 export function LibraryLocationPicker({
   role,
   source = null,
@@ -488,6 +505,9 @@ export function LibraryLocationsPanel() {
   const loadLocations = useLibraryLocationsStore(state => state.load)
   const removeLocation = useLibraryLocationsStore(state => state.removeLocation)
   const updatePresentation = useLibraryLocationsStore(state => state.updatePresentation)
+  const requestLocalAccess = useLibraryLocationsStore(state => state.requestLocalAccess)
+  const openFilePrivacySettings = useLibraryLocationsStore(state => state.openFilePrivacySettings)
+  const locationPickerBusy = useLibraryLocationsStore(state => state.pickerBusy)
   const backups = useBackupStore(state => state.backups)
   const backupsLoading = useBackupStore(state => state.loading)
   const backupError = useBackupStore(state => state.error)
@@ -535,6 +555,13 @@ export function LibraryLocationsPanel() {
   useEffect(() => {
     void Promise.all([loadLocations(), loadBackups(), loadMigrations()])
   }, [loadBackups, loadLocations, loadMigrations])
+
+  useEffect(() => {
+    if (window.api.meta.platform !== 'macos') return
+    const refreshAccessState = () => { void loadLocations() }
+    window.addEventListener('focus', refreshAccessState)
+    return () => window.removeEventListener('focus', refreshAccessState)
+  }, [loadLocations])
 
   const libraryLocations = useMemo(
     () => locations.filter(location => location.role === 'library'),
@@ -664,6 +691,34 @@ export function LibraryLocationsPanel() {
     )
   }
 
+  const renderAccessActions = (location: LibraryLocation) => {
+    if (
+      window.api.meta.platform !== 'macos'
+      || location.provider !== 'local'
+      || location.localAccess?.state !== 'permission_required'
+    ) return null
+    return (
+      <>
+        <button
+          className="btn sm primary"
+          type="button"
+          disabled={locationPickerBusy}
+          onClick={() => { void requestLocalAccess(location.id) }}
+        >
+          <Icon name="folder" size={12} /> {locationPickerBusy ? 'Abriendo…' : 'Dar acceso'}
+        </button>
+        <button
+          className="btn ghost sm"
+          type="button"
+          title="Abrir Privacidad y seguridad"
+          onClick={() => { void openFilePrivacySettings() }}
+        >
+          Ajustes del Sistema
+        </button>
+      </>
+    )
+  }
+
   const renderLibrary = (library: LibraryLocation) => {
     const linked = backupLocations.find(item => item.backupSourceFolderId === library.id)
     const activeMigration = migrationForLocation(library.id)
@@ -685,14 +740,18 @@ export function LibraryLocationsPanel() {
             </div>
             <div className="loc-path" title={library.path}>{library.path}</div>
             <div className="loc-meta">
-              <span className={`loc-availability ${library.available ? 'online' : 'offline'}`}>
-                <i aria-hidden="true" /> {library.available ? 'Disponible' : 'Sin conexión'}
+              <span
+                className={`loc-availability access-${localAccessClass(library)}`}
+                title={library.localAccess?.detail ?? undefined}
+              >
+                <i aria-hidden="true" /> {localAccessLabel(library)}
               </span>
               <span>{library.trackCount.toLocaleString('es-AR')} canciones</span>
             </div>
             {renderMigrationState(activeMigration)}
           </div>
           <div className="loc-row-actions">
+            {renderAccessActions(library)}
             {renderMigrationAction(activeMigration)}
             {!activeMigration || ['completed', 'cancelled'].includes(activeMigration.status) ? (
               <button className="btn sm" type="button" onClick={() => setMigration(library)}><Icon name="sync" size={12} /> Migrar</button>
@@ -768,6 +827,12 @@ export function LibraryLocationsPanel() {
           </div>
           <div className="loc-path" title={location.path}>{location.path}</div>
           <div className="loc-backup-state">
+            <span
+              className={`loc-availability access-${localAccessClass(location)}`}
+              title={location.localAccess?.detail ?? undefined}
+            >
+              <i aria-hidden="true" /> {localAccessLabel(location)}
+            </span>
             <span className={`loc-status status-${state.status}`}>
               <i aria-hidden="true" /> {BACKUP_STATUS_LABELS[state.status]}
             </span>
@@ -783,6 +848,7 @@ export function LibraryLocationsPanel() {
           {renderMigrationState(activeMigration)}
         </div>
         <div className="loc-row-actions backup-actions">
+          {renderAccessActions(location)}
           {renderMigrationAction(activeMigration)}
           {!activeMigration || ['completed', 'cancelled'].includes(activeMigration.status) ? (
             <button className="btn sm" type="button" onClick={() => setMigration(location)}><Icon name="sync" size={12} /> Migrar</button>

@@ -81,6 +81,10 @@ export class TrackRepo {
         disc_number = @discNumber,
         total_discs = @totalDiscs,
         compilation = @compilation,
+        release_date = @releaseDate,
+        original_release_date = @originalReleaseDate,
+        media_type = @mediaType,
+        extended_metadata = @extendedMetadata,
         duration = @duration,
         format = @format,
         codec = @codec,
@@ -233,6 +237,10 @@ export class TrackRepo {
     discNumber: number | null
     totalDiscs: number | null
     compilation: number
+    releaseDate: string | null
+    originalReleaseDate: string | null
+    mediaType: string | null
+    extendedMetadata: string | null
     duration: number
     format: string
     codec: string | null
@@ -264,6 +272,10 @@ export class TrackRepo {
       discNumber: args.discNumber,
       totalDiscs: args.totalDiscs,
       compilation: args.compilation,
+      releaseDate: args.releaseDate,
+      originalReleaseDate: args.originalReleaseDate,
+      mediaType: args.mediaType,
+      extendedMetadata: args.extendedMetadata,
       duration: args.duration,
       format: args.format,
       codec: args.codec,

@@ -4,6 +4,8 @@ import type {
   LibraryLocation as SharedLibraryLocation,
   LibraryProvider,
   LibraryRole,
+  LocalAccessState,
+  LocalAccessStatus,
 } from '@shared/types/library-locations'
 
 export type { LibraryProvider, LibraryRole }
@@ -52,6 +54,8 @@ interface LibraryLocationsState {
   listOneDriveFolders(driveId: string | null, itemId: string | null): Promise<OneDriveFolderEntry[]>
   pickAndAddLocal(options: AddLocationOptions): Promise<LibraryLocation | null>
   addOneDriveFolder(entry: OneDriveFolderEntry, options: AddLocationOptions): Promise<LibraryLocation | null>
+  requestLocalAccess(folderId: number): Promise<boolean>
+  openFilePrivacySettings(): Promise<void>
   removeLocation(folderId: number): Promise<void>
   updatePresentation(folderId: number, input: { name: string; displayIcon: string | null }): Promise<void>
 }
@@ -90,6 +94,20 @@ function booleanValue(record: Record<string, unknown>, fallback: boolean, ...key
   return fallback
 }
 
+function normalizeLocalAccess(raw: unknown): LocalAccessStatus | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const value = raw as Record<string, unknown>
+  const rawState = stringValue(value, 'state')
+  const validStates: LocalAccessState[] = ['ready', 'permission_required', 'unavailable', 'read_only']
+  if (!rawState || !validStates.includes(rawState as LocalAccessState)) return null
+  return {
+    state: rawState as LocalAccessState,
+    canRead: booleanValue(value, false, 'canRead', 'can_read'),
+    canWrite: booleanValue(value, false, 'canWrite', 'can_write'),
+    detail: stringValue(value, 'detail'),
+  }
+}
+
 function normalizeLocation(raw: unknown): LibraryLocation {
   const value = asRecord(raw)
   const providerValue = stringValue(value, 'provider', 'source')
@@ -117,6 +135,7 @@ function normalizeLocation(raw: unknown): LibraryLocation {
     displayIcon: stringValue(value, 'displayIcon', 'display_icon'),
     dateAdded: stringValue(value, 'dateAdded', 'date_added') ?? '',
     dateUpdated: stringValue(value, 'dateUpdated', 'date_updated') ?? '',
+    localAccess: normalizeLocalAccess(value.localAccess ?? value.local_access),
   }
 }
 
@@ -279,6 +298,35 @@ export const useLibraryLocationsStore = create<LibraryLocationsState>((set, get)
     } catch (error) {
       set({ pickerBusy: false, error: errorMessage(error) })
       return null
+    }
+  },
+
+  async requestLocalAccess(folderId) {
+    set({ pickerBusy: true, error: null })
+    try {
+      const result = await locationsApi().requestLocalAccess(folderId)
+      set(state => ({
+        locations: state.locations.map(location => location.id === folderId
+          ? {
+              ...location,
+              localAccess: result.status,
+              available: result.status.state !== 'unavailable',
+            }
+          : location),
+        pickerBusy: false,
+      }))
+      return !result.canceled && result.status.canRead
+    } catch (error) {
+      set({ pickerBusy: false, error: errorMessage(error) })
+      return false
+    }
+  },
+
+  async openFilePrivacySettings() {
+    try {
+      await locationsApi().openFilePrivacySettings()
+    } catch (error) {
+      set({ error: errorMessage(error) })
     }
   },
 
