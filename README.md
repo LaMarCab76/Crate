@@ -4,15 +4,15 @@ Audiophile music library and player for **macOS, Windows and Linux**, built as a
 Electron + Vite + React + TypeScript desktop app on top of the
 [BASS](https://www.un4seen.com/bass.html) audio library.
 
-> Current prerelease: **v0.5.3-rc.1** — installers and release notes live in
+> Current release: **v0.6.0** — installers and release notes live in
 > [`docs/releases/`](docs/releases/).
 
 ## Quick start
 
 ```bash
 npm install
-npm run fetch:bass   # downloads the native libraries for this OS
-npm run verify:bass  # checks the complete BASS runtime before launch/package
+npm run fetch:native  # downloads the native libraries for this OS
+npm run verify:native # checks BASS + Chromaprint before launch/package
 npm run dev          # Electron dev window with Vite HMR
 npm test             # Node test suite
 npm run typecheck    # tsc for the main + renderer projects
