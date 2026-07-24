@@ -10,6 +10,7 @@ import {
   assertNoExternalAudioDependencies,
   parseArchitectures,
 } from './verify-chromaprint.mjs'
+import { releaseAssetDownloadRequest } from './fetch-chromaprint.mjs'
 import {
   chromaprintArtifactName,
   chromaprintLibraryName,
@@ -125,6 +126,24 @@ test('local fetch refuses an artifact without an explicit SHA-256', () => {
   })
   assert.equal(result.status, 1)
   assert.match(result.stderr, /--archive requires a 64-character --sha256/)
+})
+
+test('authenticated release downloads use the GitHub asset API', () => {
+  const asset = {
+    url: 'https://api.github.com/repos/owner/repo/releases/assets/123',
+    browser_download_url: 'https://github.com/owner/repo/releases/download/tag/native.zip',
+  }
+  assert.deepEqual(releaseAssetDownloadRequest(asset, 'workflow-token'), {
+    url: asset.url,
+    headers: {
+      Accept: 'application/octet-stream',
+      Authorization: 'Bearer workflow-token',
+    },
+  })
+  assert.deepEqual(releaseAssetDownloadRequest(asset), {
+    url: asset.browser_download_url,
+    headers: {},
+  })
 })
 
 const cmakeAvailable = spawnSync('cmake', ['--version'], { encoding: 'utf8' }).status === 0

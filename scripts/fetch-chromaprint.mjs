@@ -68,6 +68,21 @@ async function fetchBytes(url, headers = {}) {
   return bytes
 }
 
+export function releaseAssetDownloadRequest(asset, token) {
+  if (token) {
+    if (!asset?.url) throw new Error('Authenticated GitHub release asset has no API download URL')
+    return {
+      url: asset.url,
+      headers: {
+        Accept: 'application/octet-stream',
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  }
+  if (!asset?.browser_download_url) throw new Error('GitHub release asset has no public download URL')
+  return { url: asset.browser_download_url, headers: {} }
+}
+
 async function downloadPublishedArtifact(assetName) {
   const headers = { Accept: 'application/vnd.github+json' }
   const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN
@@ -85,15 +100,16 @@ async function downloadPublishedArtifact(assetName) {
     )
   }
   const asset = release.assets?.find((candidate) => candidate.name === assetName)
-  if (!asset?.browser_download_url) {
+  if (!asset) {
     throw new Error(`Release ${CHROMAPRINT_NATIVE_RELEASE} does not contain ${assetName}`)
   }
   if (typeof asset.digest !== 'string' || !asset.digest.startsWith('sha256:')) {
     throw new Error(`${assetName} has no GitHub SHA-256 digest; refusing an unverifiable artifact`)
   }
   const expectedDigest = asset.digest.slice('sha256:'.length).toLowerCase()
-  const bytes = await fetchBytes(asset.browser_download_url, token ? { Authorization: `Bearer ${token}` } : {})
-  return { bytes, expectedDigest, source: asset.browser_download_url }
+  const request = releaseAssetDownloadRequest(asset, token)
+  const bytes = await fetchBytes(request.url, request.headers)
+  return { bytes, expectedDigest, source: request.url }
 }
 
 async function loadArtifact(assetName) {
@@ -209,7 +225,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(`[fetch-chromaprint] fatal: ${error instanceof Error ? error.message : String(error)}`)
-  process.exitCode = 1
-})
+if (process.argv[1]?.endsWith('fetch-chromaprint.mjs')) {
+  main().catch((error) => {
+    console.error(`[fetch-chromaprint] fatal: ${error instanceof Error ? error.message : String(error)}`)
+    process.exitCode = 1
+  })
+}
