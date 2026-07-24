@@ -58,6 +58,22 @@ function sha256(buffer) {
   return createHash('sha256').update(buffer).digest('hex')
 }
 
+export function classifyManifestBinary(
+  manifestBinary,
+  binary,
+  { platform, packaged = false, sourceBinary } = {},
+) {
+  const matchesManifest = (candidate) => (
+    manifestBinary?.sha256 === sha256(candidate)
+    && manifestBinary?.bytes === candidate.length
+  )
+  if (matchesManifest(binary)) return 'exact'
+  if (platform === 'darwin' && packaged && sourceBinary && matchesManifest(sourceBinary)) {
+    return 'macos-resigned'
+  }
+  throw new Error('Chromaprint binary does not match its provenance manifest')
+}
+
 function parseMachOArchitectures(header) {
   const magic = header.subarray(0, 4).toString('hex')
   const cpuName = (value) => value === 0x01000007 ? 'x64' : value === 0x0100000c ? 'arm64' : null
@@ -314,9 +330,26 @@ async function verifyDirectory(directory, licensesDirectory) {
     throw new Error(`${libraryPath} has an unexpected size (${stats.size} bytes)`)
   }
   const binary = await readFile(libraryPath)
-  const digest = sha256(binary)
-  if (manifest.binary?.sha256 !== digest || manifest.binary?.bytes !== binary.length) {
+  const sourceBinary = PACKAGED_ROOT && TARGET.platform === 'darwin'
+    ? await readFile(join(REPO_ROOT, 'native', 'libs', expectedName))
+    : undefined
+  let integrity
+  try {
+    integrity = classifyManifestBinary(manifest.binary, binary, {
+      platform: TARGET.platform,
+      packaged: Boolean(PACKAGED_ROOT),
+      sourceBinary,
+    })
+  } catch {
     throw new Error(`${libraryPath} does not match ${CHROMAPRINT_MANIFEST}`)
+  }
+  if (integrity === 'macos-resigned') {
+    const signature = spawnSync('codesign', ['--verify', '--strict', '--verbose=2', libraryPath], {
+      encoding: 'utf8',
+    })
+    if (signature.error || signature.status !== 0) {
+      throw new Error(`${libraryPath} differs after packaging but has no valid macOS code signature`)
+    }
   }
   const architectures = parseArchitectures(binary, TARGET.platform)
   assertStringArrayEqual(architectures, expectedArchitectures(TARGET), 'native architecture')
@@ -326,6 +359,9 @@ async function verifyDirectory(directory, licensesDirectory) {
   await verifySourceBundle(licensesDirectory)
 
   console.log(`[verify-chromaprint] ${directory}: Chromaprint ${CHROMAPRINT_VERSION} ${TARGET.platform}/${TARGET.arch} provenance and binary passed`)
+  if (integrity === 'macos-resigned') {
+    console.log(`[verify-chromaprint] ${libraryPath}: accepted verified macOS code-signing mutation`)
+  }
   return libraryPath
 }
 
