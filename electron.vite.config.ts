@@ -46,6 +46,7 @@ export default defineConfig({
     root: resolve(__dirname, 'electron/renderer'),
     server: {
       port: 6100,
+      host: '127.0.0.1',
     },
     build: {
       outDir: 'out/renderer',

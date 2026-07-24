@@ -71,6 +71,7 @@ interface BassBindings {
   SetConfig: (option: number, value: number) => number
   GetConfig: (option: number) => number
   StreamCreateFile: (filetype: number, file: string, offset: bigint, length: bigint, flags: number) => number
+  StreamCreateFileUnicode: (filetype: number, file: string, offset: bigint, length: bigint, flags: number) => number
   StreamCreateFileMemory: (filetype: number, file: Buffer, offset: bigint, length: bigint, flags: number) => number
   StreamGetFilePosition: (handle: number, mode: number) => bigint
   StreamFree: (handle: number) => number
@@ -81,6 +82,8 @@ interface BassBindings {
   ChannelGetLength: (handle: number, mode: number) => bigint
   ChannelGetPosition: (handle: number, mode: number) => bigint
   ChannelSetPosition: (handle: number, pos: bigint, mode: number) => number
+  ChannelBytes2Seconds: (handle: number, pos: bigint) => number
+  ChannelSeconds2Bytes: (handle: number, seconds: number) => bigint
   ChannelSetAttribute: (handle: number, attrib: number, value: number) => number
   ChannelGetAttribute: (handle: number, attrib: number, outValue: Float32Array) => number
   ChannelSetSync: (handle: number, type: number, param: bigint, proc: unknown, user: bigint) => number
@@ -89,6 +92,7 @@ interface BassBindings {
   ChannelRemoveFX: (handle: number, fx: number) => number
   ChannelGetInfo: (handle: number, info: object) => number
   ChannelGetData: (handle: number, buffer: Float32Array, length: number) => number
+  ChannelGetDataInt16: (handle: number, buffer: Int16Array, length: number) => number
   ChannelGetLevelEx: (handle: number, levels: Float32Array, length: number, flags: number) => number
   ChannelSetDevice: (handle: number, device: number) => number
 }
@@ -113,6 +117,7 @@ export function loadBass(): BassBindings {
     SetConfig:          lib.func('int32_t BASS_SetConfig(uint32_t, uint32_t)'),
     GetConfig:          lib.func('uint32_t BASS_GetConfig(uint32_t)'),
     StreamCreateFile:   lib.func('uint32_t BASS_StreamCreateFile(int32_t, const char *, uint64_t, uint64_t, uint32_t)'),
+    StreamCreateFileUnicode: lib.func('BASS_StreamCreateFile', 'uint32_t', ['int32_t', 'str16', 'uint64_t', 'uint64_t', 'uint32_t']),
     StreamCreateFileMemory: lib.func('BASS_StreamCreateFile', 'uint32_t', ['int32_t', 'const void *', 'uint64_t', 'uint64_t', 'uint32_t']),
     StreamGetFilePosition: lib.func('uint64_t BASS_StreamGetFilePosition(uint32_t, uint32_t)'),
     StreamFree:         lib.func('int32_t BASS_StreamFree(uint32_t)'),
@@ -123,6 +128,8 @@ export function loadBass(): BassBindings {
     ChannelGetLength:   lib.func('uint64_t BASS_ChannelGetLength(uint32_t, uint32_t)'),
     ChannelGetPosition: lib.func('uint64_t BASS_ChannelGetPosition(uint32_t, uint32_t)'),
     ChannelSetPosition: lib.func('int32_t BASS_ChannelSetPosition(uint32_t, uint64_t, uint32_t)'),
+    ChannelBytes2Seconds: lib.func('double BASS_ChannelBytes2Seconds(uint32_t, uint64_t)'),
+    ChannelSeconds2Bytes: lib.func('uint64_t BASS_ChannelSeconds2Bytes(uint32_t, double)'),
     ChannelSetAttribute:lib.func('int32_t BASS_ChannelSetAttribute(uint32_t, uint32_t, float)'),
     ChannelGetAttribute:lib.func('int32_t BASS_ChannelGetAttribute(uint32_t, uint32_t, _Out_ float *)'),
     ChannelSetSync:     lib.func('uint32_t BASS_ChannelSetSync(uint32_t, uint32_t, uint64_t, SYNCPROC*, void *)'),
@@ -131,6 +138,7 @@ export function loadBass(): BassBindings {
     ChannelRemoveFX:    lib.func('int32_t BASS_ChannelRemoveFX(uint32_t, uint32_t)'),
     ChannelGetInfo:     lib.func('int32_t BASS_ChannelGetInfo(uint32_t, _Out_ BASS_CHANNELINFO *)'),
     ChannelGetData:     lib.func('uint32_t BASS_ChannelGetData(uint32_t, _Out_ float *, uint32_t)'),
+    ChannelGetDataInt16:lib.func('BASS_ChannelGetData', 'uint32_t', ['uint32_t', koffi.out(koffi.pointer('int16_t')), 'uint32_t']),
     ChannelGetLevelEx:  lib.func('int32_t BASS_ChannelGetLevelEx(uint32_t, _Out_ float *, float, uint32_t)'),
     ChannelSetDevice:   lib.func('int32_t BASS_ChannelSetDevice(uint32_t, uint32_t)'),
   } as unknown as BassBindings

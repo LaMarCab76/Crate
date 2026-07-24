@@ -295,6 +295,20 @@ export class TrackAlbumMoveService {
     }
   }
 
+  accessRootsForPreview(previewId: string): string[] {
+    this.pruneExpiredPreviews()
+    const stored = this.previews.get(previewId)
+    if (!stored?.preview.proposal) throw new Error('La vista previa expiró. Volvé a calcular el movimiento.')
+    const track = this.requireTrack(stored.preview.source.id)
+    const sourceFolder = this.deps.repos.folders.getById(track.folder_id)
+    if (!sourceFolder || sourceFolder.provider !== 'local' || sourceFolder.role !== 'library') {
+      throw new Error('La biblioteca original ya no existe.')
+    }
+    const targetAlbum = this.requireAlbum(stored.targetAlbumId)
+    const destinationFolder = this.folderForDestination(targetAlbum, resolve(stored.preview.proposal.destinationPath))
+    return [...new Set([resolve(sourceFolder.path), resolve(destinationFolder.path)])]
+  }
+
   private async buildPreview(track: DbTrack, targetAlbum: DbAlbum, trackNumberOverride: number | null): Promise<StoredPreview> {
     const previewId = randomUUID()
     const createdAt = Date.now()

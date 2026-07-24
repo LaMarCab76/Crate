@@ -11,6 +11,7 @@ import { broadcast } from './events'
 import { getRepos } from '../db/repositories'
 import { getOneDriveClient } from '../cloud/OneDriveClient'
 import { resolveCloudLoadOptions } from '../cloud/cloudTrackRef'
+import { getLocalFileAccessService } from '../security/localFileAccessRuntime'
 import { estimateLufsFromAnalysis, type LevelerLoudness } from '@shared/constants/leveler'
 import type { DbTrack } from '@shared/types/db'
 import type {
@@ -249,6 +250,21 @@ async function resolvePlaybackSource(value: unknown, channel: string): Promise<{
   throw new Error(`${channel}: unsupported playback source`)
 }
 
+async function withLocalTrackRead<T>(
+  source: Awaited<ReturnType<typeof resolvePlaybackSource>>,
+  operation: () => Promise<T>,
+  owner?: BrowserWindow,
+  interactive = true,
+): Promise<T> {
+  if (!source.track || source.track.provider !== 'local') return operation()
+  const folder = getRepos().folders.getById(source.track.folder_id)
+  if (!folder || folder.provider !== 'local') throw new Error('La biblioteca local ya no existe.')
+  return getLocalFileAccessService().runWithAccess(folder.path, 'read', operation, {
+    owner,
+    interactive,
+  })
+}
+
 export function registerAudioChannel(): void {
   const engine = getAudioEngine()
   const eq = getEQManager()
@@ -260,22 +276,24 @@ export function registerAudioChannel(): void {
   // missing a hog-transfer opportunity.
   getExclusiveModeManager()
 
-  ipcMain.handle('audio:load', async (_, payload: unknown) => {
+  ipcMain.handle('audio:load', async (event, payload: unknown) => {
     const source = await resolvePlaybackSource(payload, 'audio:load')
-    const cloud = source.track
-      ? await resolveCloudLoadOptions(source.track, getOneDriveClient())
-      : null
-    const loadResult = await engine.load(source.path, {
-      estimatedDurationSec: source.duration,
-      cloudRef: cloud?.cloudRef,
-      cloudSizeBytes: cloud?.cloudSizeBytes ?? null,
-    })
-    getGapless().bindCurrentTrackEnd()
-    eq.reapply(engine.getCurrentStream())
-    broadcastEqState()
-    applyLevelerForCurrentTrack()
-    if (loadResult.source === 'file') promoteCurrentFileStreamToMemory(source.path, source.duration)
-    return serializeStreamLoadResult(loadResult)
+    return withLocalTrackRead(source, async () => {
+      const cloud = source.track
+        ? await resolveCloudLoadOptions(source.track, getOneDriveClient())
+        : null
+      const loadResult = await engine.load(source.path, {
+        estimatedDurationSec: source.duration,
+        cloudRef: cloud?.cloudRef,
+        cloudSizeBytes: cloud?.cloudSizeBytes ?? null,
+      })
+      getGapless().bindCurrentTrackEnd()
+      eq.reapply(engine.getCurrentStream())
+      broadcastEqState()
+      applyLevelerForCurrentTrack()
+      if (loadResult.source === 'file') promoteCurrentFileStreamToMemory(source.path, source.duration)
+      return serializeStreamLoadResult(loadResult)
+    }, BrowserWindow.fromWebContents(event.sender) ?? undefined)
   })
 
   ipcMain.handle('audio:play', () => engine.play())
@@ -295,14 +313,12 @@ export function registerAudioChannel(): void {
     return stats
   }
 
-  ipcMain.handle('audio:getWaveform', async (_, payload: { source?: unknown; buckets?: number }) => {
+  ipcMain.handle('audio:getWaveform', async (event, payload: { source?: unknown; buckets?: number }) => {
     const source = await resolvePlaybackSource(payload?.source, 'audio:getWaveform')
     if (source.track?.provider === 'onedrive') throw new Error('Waveform analysis is unavailable for cloud tracks')
-    const result = await playbackAnalysis.ensure(
-      source.path,
-      normalizeBuckets(payload?.buckets),
-      source.trackId,
-    )
+    const result = await withLocalTrackRead(source, () => playbackAnalysis.ensure(
+      source.path, normalizeBuckets(payload?.buckets), source.trackId,
+    ), BrowserWindow.fromWebContents(event.sender) ?? undefined)
     broadcastPlaybackCacheStats()
     return result
   })
@@ -315,14 +331,12 @@ export function registerAudioChannel(): void {
       source.trackId,
     )
   })
-  ipcMain.handle('audio:ensurePlaybackAnalysis', async (_, payload: { source?: unknown; buckets?: number }) => {
+  ipcMain.handle('audio:ensurePlaybackAnalysis', async (event, payload: { source?: unknown; buckets?: number }) => {
     const source = await resolvePlaybackSource(payload?.source, 'audio:ensurePlaybackAnalysis')
     if (source.track?.provider === 'onedrive') throw new Error('Playback analysis is unavailable for cloud tracks')
-    const result = await playbackAnalysis.ensure(
-      source.path,
-      normalizeBuckets(payload?.buckets),
-      source.trackId,
-    )
+    const result = await withLocalTrackRead(source, () => playbackAnalysis.ensure(
+      source.path, normalizeBuckets(payload?.buckets), source.trackId,
+    ), BrowserWindow.fromWebContents(event.sender) ?? undefined)
     broadcastPlaybackCacheStats()
     return result
   })
@@ -331,13 +345,12 @@ export function registerAudioChannel(): void {
     if (source.track?.provider === 'onedrive') return null
     return playbackAnalysis.getCachedTableBars(source.path, source.trackId)
   })
-  ipcMain.handle('audio:ensureTableBars', async (_, payload: { source?: unknown }) => {
+  ipcMain.handle('audio:ensureTableBars', async (event, payload: { source?: unknown }) => {
     const source = await resolvePlaybackSource(payload?.source, 'audio:ensureTableBars')
     if (source.track?.provider === 'onedrive') throw new Error('Playback analysis is unavailable for cloud tracks')
-    const result = await playbackAnalysis.ensureTableBars(
-      source.path,
-      source.trackId,
-    )
+    const result = await withLocalTrackRead(source, () => playbackAnalysis.ensureTableBars(
+      source.path, source.trackId,
+    ), BrowserWindow.fromWebContents(event.sender) ?? undefined)
     broadcastPlaybackCacheStats()
     return result
   })
@@ -356,11 +369,12 @@ export function registerAudioChannel(): void {
   ipcMain.handle('audio:preloadNext', async (_, payload: unknown) => {
     if (!gaplessEnabled) throw new Error('Gapless playback is disabled')
     const source = await resolvePlaybackSource(payload, 'audio:preloadNext')
-    const cloud = source.track
-      ? await resolveCloudLoadOptions(source.track, getOneDriveClient())
-      : null
-    const result = await getGapless().preloadNext(source.path, cloud ?? undefined)
-    return result
+    return withLocalTrackRead(source, async () => {
+      const cloud = source.track
+        ? await resolveCloudLoadOptions(source.track, getOneDriveClient())
+        : null
+      return getGapless().preloadNext(source.path, cloud ?? undefined)
+    }, undefined, false)
   })
   ipcMain.handle('audio:setGaplessEnabled', (_, payload: { enabled?: unknown }) => {
     gaplessEnabled = payload?.enabled === true

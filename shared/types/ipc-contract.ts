@@ -67,11 +67,27 @@ import type {
   BackupProgressPhase,
   BackupRunStatus,
   CreateLibraryMigrationRequest,
+  DesktopPlatform,
   LibraryMigrationProgressEvent,
   LibraryMigrationState,
   LibraryLocation,
   LibraryRole,
+  LocalAccessRequestResult,
 } from './library-locations'
+import type {
+  DuplicateAnalysisProgress,
+  DuplicateAuditionCompareSegmentRequest,
+  DuplicateAuditionOpenRequest,
+  DuplicateAuditionSeekRequest,
+  DuplicateAuditionSide,
+  DuplicateAuditionState,
+  DuplicateCandidateDetail,
+  DuplicateCandidateSummary,
+  DuplicateListRequest,
+  DuplicateResolutionRequest,
+  DuplicateResolutionResult,
+  DuplicateSummary,
+} from './duplicates'
 
 export interface ListTracksOpts {
   limit?: number
@@ -452,6 +468,7 @@ export interface QueueApi {
 
 export interface MetaApi {
   version: string
+  platform: DesktopPlatform
 }
 
 export type AppUpdateStatus =
@@ -866,6 +883,8 @@ export interface LibraryLocationsApi {
   list(): Promise<LibraryLocation[]>
   pickLocal(): Promise<PickFolderResult>
   addLocal(input: AddLocalLibraryLocationRequest): Promise<LibraryLocation>
+  requestLocalAccess(folderId: number): Promise<LocalAccessRequestResult>
+  openFilePrivacySettings(): Promise<void>
   getOneDriveStatus(): Promise<CloudAccountStatus>
   setOneDriveClientId(clientId: string): Promise<CloudAccountStatus>
   connectOneDrive(): Promise<CloudAccountStatus>
@@ -926,6 +945,26 @@ export interface LibraryBackupsApi {
   onProgress(h: (e: BackupProgressEvent) => void): EventOff
 }
 
+export interface DuplicatesApi {
+  summary(): Promise<DuplicateSummary>
+  list(request?: DuplicateListRequest): Promise<DuplicateCandidateSummary[]>
+  detail(candidateId: string): Promise<DuplicateCandidateDetail>
+  resolve(request: DuplicateResolutionRequest): Promise<DuplicateResolutionResult>
+  reanalyze(): Promise<void>
+  audition: {
+    beginSession(): Promise<DuplicateAuditionState>
+    open(request: DuplicateAuditionOpenRequest): Promise<DuplicateAuditionState>
+    play(side: DuplicateAuditionSide): Promise<DuplicateAuditionState>
+    pause(): Promise<DuplicateAuditionState>
+    seek(request: DuplicateAuditionSeekRequest): Promise<DuplicateAuditionState>
+    compareSegment(request: DuplicateAuditionCompareSegmentRequest): Promise<DuplicateAuditionState>
+    close(): Promise<DuplicateAuditionState>
+  }
+  onChanged(h: () => void): EventOff
+  onProgress(h: (e: DuplicateAnalysisProgress) => void): EventOff
+  onAuditionState(h: (e: DuplicateAuditionState) => void): EventOff
+}
+
 export interface Api {
   meta: MetaApi
   library: LibraryApi
@@ -944,6 +983,7 @@ export interface Api {
   libraryLocations: LibraryLocationsApi
   libraryBackups: LibraryBackupsApi
   libraryMigrations: LibraryMigrationsApi
+  duplicates: DuplicatesApi
   updates: UpdatesApi
 }
 

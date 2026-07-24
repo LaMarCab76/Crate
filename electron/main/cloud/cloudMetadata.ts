@@ -42,6 +42,16 @@ export function audioFacetToMetadata(item: DriveItem): TrackMetadata {
     replayGainTrack: null,
     replayGainAlbum: null,
     isCompilation: false,
+    releaseDate: null,
+    originalReleaseDate: null,
+    releaseTypes: [],
+    mediaType: null,
+    musicbrainzRecordingId: null,
+    musicbrainzTrackId: null,
+    musicbrainzAlbumId: null,
+    musicbrainzReleaseGroupId: null,
+    musicbrainzArtistIds: [],
+    musicbrainzAlbumArtistIds: [],
   }
 }
 

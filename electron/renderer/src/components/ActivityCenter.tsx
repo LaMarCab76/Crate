@@ -28,6 +28,7 @@ const CATEGORY_LABELS: Record<ActivityCategory, string> = {
   devices: 'Dispositivos',
   lyrics: 'Letras',
   library: 'Biblioteca',
+  duplicates: 'Duplicados',
   downloads: 'Descargas',
   updates: 'Updates',
 }
@@ -36,6 +37,7 @@ const CATEGORY_ICONS: Record<ActivityCategory, IconName> = {
   devices: 'device',
   lyrics: 'lyrics',
   library: 'folder',
+  duplicates: 'duplicate',
   downloads: 'download',
   updates: 'sync',
 }
@@ -61,6 +63,7 @@ const ACTION_LABELS: Record<ActivityActionId, { label: string; icon: IconName }>
   'open-downloads': { label: 'Descargas', icon: 'download' },
   'open-import': { label: 'Fuentes', icon: 'folder' },
   'open-updates': { label: 'Updates', icon: 'sync' },
+  'open-duplicates': { label: 'Revisar', icon: 'duplicate' },
 }
 
 function formatActivityTime(value: number): string {

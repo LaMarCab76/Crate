@@ -105,7 +105,7 @@ function seedLegacyOneDriveProfile(db: Database.Database, catalog: readonly Migr
   return { localFolderId, cloudFolderId, localTrackId, cloudTrackId }
 }
 
-test('real migrations apply through 0030, resume, and are idempotent', () => {
+test('real migrations apply through 0031, resume, and are idempotent', () => {
   const catalog = realCatalog()
   const db = new Database(':memory:')
   try {
@@ -114,7 +114,7 @@ test('real migrations apply through 0030, resume, and are idempotent', () => {
     assert.equal(readUserVersion(db), 24)
 
     applyMigrationPlan(db, planMigrations(catalog, 24))
-    assert.equal(readUserVersion(db), 30)
+    assert.equal(readUserVersion(db), 31)
     assert.ok(db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = ?`).get('update_playlist_metrics_on_track_duration'))
     assert.ok(db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?`).get('idx_download_jobs_active_reservation'))
     assert.ok(db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?`).get('idx_folders_one_backup_per_source'))
@@ -122,8 +122,8 @@ test('real migrations apply through 0030, resume, and are idempotent', () => {
     assert.ok(db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get('library_location_migration_runs'))
     assert.ok((db.pragma('table_info(folders)') as Array<{ name: string }>).some(column => column.name === 'display_icon'))
 
-    applyMigrationPlan(db, planMigrations(catalog, 30))
-    assert.equal(readUserVersion(db), 30)
+    applyMigrationPlan(db, planMigrations(catalog, 31))
+    assert.equal(readUserVersion(db), 31)
   } finally {
     db.close()
   }
@@ -141,7 +141,7 @@ test('legacy origin/onedrive user_version 25 is normalized and backfilled safely
     assert.equal(readUserVersion(db), 24)
     applyMigrationPlan(db, planMigrations(catalog, readUserVersion(db)))
     assert.equal(repairLegacyOneDriveRows(db), true)
-    assert.equal(readUserVersion(db), 30)
+    assert.equal(readUserVersion(db), 31)
 
     const localFolder = db.prepare(`SELECT * FROM folders WHERE id = ?`).get(seeded.localFolderId) as Record<string, unknown>
     const cloudFolder = db.prepare(`SELECT * FROM folders WHERE id = ?`).get(seeded.cloudFolderId) as Record<string, unknown>

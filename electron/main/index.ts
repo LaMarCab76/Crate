@@ -12,6 +12,7 @@ import { registerUpdatesChannel } from './ipc/updates-channel'
 import { registerCloudChannel } from './ipc/cloud-channel'
 import { disposeLibraryLocationsChannel, registerLibraryLocationsChannel } from './ipc/library-locations-channel'
 import { disposeLibraryMigrationsChannel, registerLibraryMigrationsChannel } from './ipc/library-migrations-channel'
+import { disposeDuplicateChannel, registerDuplicateChannel } from './ipc/duplicate-channel'
 import { registerProtocolHandlers, registerProtocolSchemes } from './protocol'
 import { getDeviceSyncService } from './devices/DeviceSyncService'
 import { getFolderWatcher } from './library/FolderWatcher'
@@ -35,6 +36,9 @@ import {
 } from './library-mirror/runtime'
 import { getLibraryMigrationService, stopLibraryMigrationRuntime } from './library-migration/runtime'
 import { setLibraryLocationLockDatabase } from './library-migration/locationLocks'
+import { getDuplicateResolutionService } from './duplicates/DuplicateResolutionService'
+import { getDuplicateDecisionPortableService } from './duplicates/DuplicateDecisionPortableService'
+import { getDuplicateRuntime } from './duplicates/runtime'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -187,6 +191,7 @@ app.whenReady().then(async () => {
   registerCloudChannel()
   registerLibraryLocationsChannel()
   registerLibraryMigrationsChannel()
+  registerDuplicateChannel()
   registerUpdatesChannel()
   getDeviceSyncService().startVolumeMonitor()
 
@@ -194,6 +199,9 @@ app.whenReady().then(async () => {
   // reconciliation/backfill work is deliberately kept off the startup path.
   createMainWindow()
   await getLibraryMigrationService().recover()
+  // Complete a confirmed physical duplicate deletion before reconciliation can
+  // interpret the now-missing file as an unrelated external removal.
+  await getDuplicateResolutionService().recover()
   getAppUpdateService().startAutoCheck()
   void getDownloadManager().start().catch(err => {
     console.error('[downloads] startup recovery failed:', err)
@@ -219,6 +227,9 @@ app.whenReady().then(async () => {
     } catch (err) {
       console.error('[library-scan] startup reconciliation failed:', err)
     }
+    // The first backfill stays off the critical startup path. The duplicate
+    // runtime imports portable pair decisions before evaluating candidates.
+    getDuplicateRuntime().scheduleAll({ delayMs: 0 })
     getFolderWatcher().startAll()
     reconciler.startBackgroundSweep()
     const backfill = getLyricsBackfillService()
@@ -247,11 +258,14 @@ async function shutdownApplication(exitCode: number): Promise<void> {
   unsubscribeCloudMirror = null
   disposeLibraryLocationsChannel()
   disposeLibraryMigrationsChannel()
+  try { await disposeDuplicateChannel() } catch { /* no active duplicate review */ }
   getFolderWatcher().stopAll()
   try { await stopLibraryMigrationRuntime() } catch (err) { console.error('[library-migration] dispose failed:', err) }
+  try { await getDuplicateRuntime().dispose() } catch (err) { console.error('[duplicates] runtime dispose failed:', err) }
   // Flush any pending portable-library backup writes before we close the DB,
   // otherwise the JSON would miss the last few mutations of the session.
   try { getLibraryBackup().flushAll() } catch (err) { console.error('[backup] flush failed:', err) }
+  try { await getDuplicateDecisionPortableService().flushAll() } catch (err) { console.error('[duplicates] portable decisions flush failed:', err) }
   try { await getCloudManifestService().flushAll() } catch (err) { console.error('[cloud-manifest] flush failed:', err) }
   try { await stopLibraryMirrorRuntime() } catch (err) { console.error('[library-mirror] dispose failed:', err) }
   try { getLyricsIndexService().flushAll() } catch (err) { console.error('[lyrics-index] flush failed:', err) }

@@ -99,6 +99,7 @@ function LibraryVolumeClassificationPanel({
       token: picked.token,
       displayPath: picked.displayPath,
       name: basenameForPath(picked.displayPath),
+      hasCrateState: false,
     })
   }
 
@@ -170,7 +171,12 @@ function LibraryVolumeClassificationPanel({
                   className="btn sm"
                   type="button"
                   disabled={loading || connectedRoots.has(candidate.rootPath)}
-                  onClick={() => onConnectDevice({ token: candidate.token, displayPath: candidate.rootPath, name: candidate.name })}
+                  onClick={() => onConnectDevice({
+                    token: candidate.token,
+                    displayPath: candidate.rootPath,
+                    name: candidate.name,
+                    hasCrateState: candidate.hasCrateState,
+                  })}
                 >
                   MP3
                 </button>
@@ -199,7 +205,12 @@ function LibraryVolumeClassificationPanel({
                   className="btn sm"
                   type="button"
                   disabled={loading}
-                  onClick={() => onConnectDevice({ token: volume.token, displayPath: volume.rootPath, name: volume.name })}
+                  onClick={() => onConnectDevice({
+                    token: volume.token,
+                    displayPath: volume.rootPath,
+                    name: volume.name,
+                    hasCrateState: false,
+                  })}
                 >
                   MP3
                 </button>

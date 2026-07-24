@@ -1,5 +1,9 @@
 import { resolve } from 'node:path'
 import type { LibraryProvider, LibraryRole } from '@shared/types/library-locations'
+import { platform } from 'node:os'
+import { computerTerms, desktopPlatform } from '../../../shared/utils/computerTerms.ts'
+
+const COMPUTER = computerTerms(desktopPlatform(platform()))
 
 interface PcTargetFolder {
   path: string
@@ -17,7 +21,7 @@ export function requireRegisteredLocalLibraryPath(
   folders: readonly PcTargetFolder[],
 ): string {
   if (!rawPath || isOneDriveUri(rawPath)) {
-    throw new Error('PC destination must be a registered local library')
+    throw new Error(`${COMPUTER.short} destination must be a registered local library`)
   }
 
   const requested = resolve(rawPath)
@@ -27,6 +31,6 @@ export function requireRegisteredLocalLibraryPath(
     !isOneDriveUri(item.path) &&
     resolve(item.path) === requested,
   )
-  if (!folder) throw new Error('PC destination must be a registered local library')
+  if (!folder) throw new Error(`${COMPUTER.short} destination must be a registered local library`)
   return resolve(folder.path)
 }

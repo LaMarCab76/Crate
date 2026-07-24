@@ -1,5 +1,4 @@
 import { BrowserWindow, dialog } from 'electron'
-import { existsSync, statSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
 import type { DbFolder, DbLibraryMirrorAction, DbLibraryMirrorRun } from '@shared/types/db'
 import type {
@@ -27,6 +26,7 @@ import { getLibraryMirrorService } from '../library-mirror/runtime'
 import { assertLibraryLocationMigrationUnlocked } from '../library-migration/locationLocks'
 import { getLyricsIndexService } from '../lyrics/LyricsIndexService'
 import { getPathAuthorizationService } from '../security/PathAuthorizationService'
+import { getLocalFileAccessService } from '../security/localFileAccessRuntime'
 import { getLibraryBackup } from '../services/LibraryBackup'
 import { broadcast } from './events'
 import { secureIpcMain as ipcMain } from './secureIpc'
@@ -94,11 +94,35 @@ async function confirmReclassification(event: Electron.IpcMainInvokeEvent, folde
   if (result.response !== 1) throw new Error('La conversión a backup fue cancelada.')
 }
 
-function locationPayload(folder: DbFolder): LibraryLocation & { available: boolean } {
+async function locationPayload(folder: DbFolder): Promise<LibraryLocation & { available: boolean }> {
+  const localAccess = folder.provider === 'local'
+    ? await getLocalFileAccessService().inspect(folder.path)
+    : null
   return {
     ...toLibraryLocation(folder),
-    available: folder.provider === 'onedrive' || existsSync(folder.path),
+    available: folder.provider === 'onedrive' || localAccess?.state !== 'unavailable',
+    localAccess,
   }
+}
+
+async function ensureLocationAccess(
+  event: Electron.IpcMainInvokeEvent,
+  folder: DbFolder,
+  mode: 'read' | 'write',
+): Promise<void> {
+  if (folder.provider !== 'local') return
+  await getLocalFileAccessService().runWithAccess(folder.path, mode, async () => undefined, {
+    owner: BrowserWindow.fromWebContents(event.sender) ?? undefined,
+    retryOnce: false,
+  })
+}
+
+async function ensureBackupAccess(event: Electron.IpcMainInvokeEvent, backup: DbFolder): Promise<void> {
+  if (backup.backup_source_folder_id == null) throw new Error('El backup no tiene una biblioteca de origen.')
+  const source = getRepos().folders.getById(backup.backup_source_folder_id)
+  if (!source) throw new Error('La biblioteca de origen ya no existe.')
+  await ensureLocationAccess(event, source, 'read')
+  await ensureLocationAccess(event, backup, 'write')
 }
 
 /**
@@ -289,7 +313,7 @@ export function registerLibraryLocationsChannel(): void {
   removeProgressListener?.()
   removeProgressListener = mirror.onProgress(event => broadcast('library-backups:progress', event))
 
-  ipcMain.handle('library-locations:list', () => repos.folders.listAll().map(locationPayload))
+  ipcMain.handle('library-locations:list', () => Promise.all(repos.folders.listAll().map(locationPayload)))
 
   ipcMain.handle('library-locations:pick-local', async (): Promise<PickFolderResult> => {
     const result = await dialog.showOpenDialog({
@@ -311,11 +335,20 @@ export function registerLibraryLocationsChannel(): void {
       'library:location',
       { consume: true },
     )
-    if (!existsSync(folderPath) || !statSync(folderPath).isDirectory()) {
-      throw new Error('La carpeta elegida no está disponible.')
-    }
-    const canonicalPath = await canonicalLibraryRoot(folderPath)
+    const requiredMode = request.role === 'backup' ? 'write' : 'read'
+    const canonicalPath = await getLocalFileAccessService().runWithAccess(
+      folderPath,
+      requiredMode,
+      () => canonicalLibraryRoot(folderPath),
+      {
+        owner: BrowserWindow.fromWebContents(event.sender) ?? undefined,
+        retryOnce: false,
+      },
+    )
     if (request.role === 'backup') {
+      const source = repos.folders.getById(request.backupSourceFolderId!)
+      if (!source) throw new Error('La biblioteca de origen ya no existe.')
+      await ensureLocationAccess(event, source, 'read')
       const existing = repos.folders.getByPath(canonicalPath)
       const assigned = existing
         ? await reclassifyExistingBackup(event, request.backupSourceFolderId!, existing)
@@ -334,6 +367,25 @@ export function registerLibraryLocationsChannel(): void {
     getLibraryReconciler().scheduleFolderScan(result.folder.id, 'import', 0)
     broadcast('library:changed', { reason: 'folder-add', folderId: result.folder.id })
     return locationPayload(result.folder)
+  })
+
+  ipcMain.handle('library-locations:request-local-access', async (event, value: unknown) => {
+    const folderId = assertId(value, 'folder id')
+    const folder = repos.folders.getById(folderId)
+    if (!folder || folder.provider !== 'local') {
+      throw new Error('La ubicación local ya no existe.')
+    }
+    const window = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const result = await getLocalFileAccessService().requestAccess(folder.path, window)
+    if (!result.canceled && result.status.canRead) {
+      startLocationWatcher(folder)
+      broadcast('library:changed', { reason: 'local-access-restored', folderId })
+    }
+    return result
+  })
+
+  ipcMain.handle('library-locations:open-file-privacy-settings', async () => {
+    await getLocalFileAccessService().openPrivacySettings()
   })
 
   ipcMain.handle('library-locations:add-onedrive', async (event, value: unknown) => {
@@ -405,6 +457,10 @@ export function registerLibraryLocationsChannel(): void {
     const backupFolderId = assertId(input.backupFolderId, 'backup folder id')
     const destination = repos.folders.getById(backupFolderId)
     if (!destination) throw new Error('La ubicación de backup no existe.')
+    const source = repos.folders.getById(sourceFolderId)
+    if (!source) throw new Error('La biblioteca de origen no existe.')
+    await ensureLocationAccess(event, source, 'read')
+    await ensureLocationAccess(event, destination, 'write')
     const assigned = await reclassifyExistingBackup(event, sourceFolderId, destination)
     beginMirror(assigned.id, 'link')
     broadcast('library:changed', { reason: 'backup-assigned', folderId: assigned.id })
@@ -424,10 +480,11 @@ export function registerLibraryLocationsChannel(): void {
     return locationPayload(folder)
   })
 
-  ipcMain.handle('library-backups:start', (_event, value: unknown) => {
+  ipcMain.handle('library-backups:start', async (event, value: unknown) => {
     const backupFolderId = assertId(value, 'backup folder id')
     const backup = repos.folders.getById(backupFolderId)
     if (!backup) throw new Error('El backup no existe.')
+    await ensureBackupAccess(event, backup)
     beginMirror(backupFolderId, 'manual')
     return backupState(backup)
   })
@@ -441,18 +498,19 @@ export function registerLibraryLocationsChannel(): void {
     return backupState(backup)
   })
 
-  ipcMain.handle('library-backups:resume', (_event, value: unknown) => {
+  ipcMain.handle('library-backups:resume', async (event, value: unknown) => {
     const backupFolderId = assertId(value, 'backup folder id')
     const backup = repos.folders.getById(backupFolderId)
     const run = latestRun(backupFolderId)
     if (!backup || !run || (run.status !== 'paused' && run.status !== 'failed')) {
       throw new Error('No hay una ejecución pausada o fallida recuperable para reanudar.')
     }
+    await ensureBackupAccess(event, backup)
     beginResume(run.id)
     return backupState(backup)
   })
 
-  ipcMain.handle('library-backups:approve-diff', (_event, value: unknown) => {
+  ipcMain.handle('library-backups:approve-diff', async (event, value: unknown) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid approval request.')
     const input = value as Record<string, unknown>
     const backupFolderId = assertId(input.backupFolderId, 'backup folder id')
@@ -460,6 +518,7 @@ export function registerLibraryLocationsChannel(): void {
     const run = mirror.getRun(runId)
     const backup = repos.folders.getById(backupFolderId)
     if (!run || run.backup_folder_id !== backupFolderId || !backup) throw new Error('El lote no pertenece a este backup.')
+    await ensureBackupAccess(event, backup)
     beginApproval(runId)
     return backupState(backup)
   })

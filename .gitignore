@@ -149,4 +149,5 @@ release/
 native/libs/*.dylib
 native/libs/*.dll
 native/libs/*.so
-
+native/libs/chromaprint-manifest.json
+native/libs/licenses/chromaprint/chromaprint-*.tar.gz

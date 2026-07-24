@@ -1,4 +1,5 @@
 import { secureIpcMain as ipcMain } from './secureIpc'
+import { BrowserWindow } from 'electron'
 import type {
   AddCloudFolderRequest,
   CloudAccountStatus,
@@ -15,6 +16,8 @@ import { getOneDriveLibraryService } from '../cloud/OneDriveLibraryService'
 import { driveItemRemotePath } from '../cloud/cloudMetadata'
 import { broadcast } from './events'
 import { assertId, assertNonEmptyString } from './validation'
+import { getRepos } from '../db/repositories'
+import { getLocalFileAccessService } from '../security/localFileAccessRuntime'
 
 async function accountStatus(): Promise<CloudAccountStatus> {
   const auth = getOneDriveAuth()
@@ -203,12 +206,22 @@ export function registerCloudChannel(): void {
     getOneDriveLibraryService().resyncFolder(assertId(folderId, 'folder id')),
   )
 
-  ipcMain.handle('cloud:track:moveToCloud', (_event, value: unknown) => {
+  ipcMain.handle('cloud:track:moveToCloud', async (event, value: unknown) => {
     const request = moveRequest(value)
-    return getOneDriveLibraryService().moveTrackToCloud(
-      request.trackId,
-      request.targetFolderId,
-      request.disposition,
+    const track = getRepos().tracks.getById(request.trackId)
+    const folder = track ? getRepos().folders.getById(track.folder_id) : null
+    const operation = () => getOneDriveLibraryService().moveTrackToCloud(
+      request.trackId, request.targetFolderId, request.disposition,
+    )
+    if (track?.provider !== 'local' || folder?.provider !== 'local') return operation()
+    return getLocalFileAccessService().runWithAccess(
+      folder.path,
+      request.disposition === 'keep' ? 'read' : 'write',
+      operation,
+      {
+        owner: BrowserWindow.fromWebContents(event.sender) ?? undefined,
+        retryOnce: false,
+      },
     )
   })
 }

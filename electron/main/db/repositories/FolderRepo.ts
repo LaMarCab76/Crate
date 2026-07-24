@@ -71,6 +71,7 @@ export function toLibraryLocation(folder: DbFolder): LibraryLocation {
     displayIcon: folder.display_icon,
     dateAdded: folder.date_added,
     dateUpdated: folder.date_updated,
+    localAccess: null,
   }
 }
 

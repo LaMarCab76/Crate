@@ -77,7 +77,7 @@ electron/
       styles/       globals.css
 shared/         Cross-process TypeScript: IPC contract, library/db/device types,
                 LRC parser, equalizer + device-sync constants
-native/libs/    BASS native libs (FX, FLAC, Opus, DSD, WV, TTA, MPC, APE, HLS, WebM, MIDI…)
+native/libs/    BASS codecs plus the pinned Chromaprint duplicate-fingerprint library
 electron-build/ App icon, entitlements, Electron rebuild scripts
 docs/           Release notes + feature specs (e.g. lyrics-feature.md)
 ```
@@ -227,11 +227,11 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
 
 ### Packaging & infra
 - `electron-builder` targets: **DMG (x64 + arm64), NSIS (x64), AppImage, .deb**,
-  with `native/libs/` shipped via `extraResources` + `asarUnpack` so BASS
-  loads at runtime.
-- `fetch:bass` downloads the platform-specific core/FX/plugin set and
-  `verify:bass` validates both source and packaged resources before a release
-  artifact can be uploaded.
+  with `native/libs/` shipped via `extraResources` + `asarUnpack` so BASS and
+  Chromaprint load at runtime.
+- `fetch:native` downloads the platform-specific BASS set and the verified
+  Chromaprint package; `verify:native -- --load` validates formats,
+  architectures, provenance, dependencies and frozen native fingerprints.
 - GitHub Releases publish configuration emits updater metadata
   (`latest-mac.yml`, `latest.yml`, `latest-linux.yml`) and macOS zip artifacts
   required by the updater.

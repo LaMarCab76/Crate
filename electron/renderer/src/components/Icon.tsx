@@ -61,6 +61,7 @@ const ICONS: Record<string, ReactNode> = {
   sparkle:<g><path d="M10 3l1.5 4.5L16 9l-4.5 1.5L10 15l-1.5-4.5L4 9l4.5-1.5z" fill="currentColor" stroke="none" /></g>,
   car:    <g><rect x="3" y="9" width="14" height="6" rx="1.5"/><path d="M5 9l1.5-4h7L15 9" /><circle cx="7" cy="15" r="1.5" /><circle cx="13" cy="15" r="1.5" /></g>,
   wave:   <path d="M2 10s2-4 4-4 4 8 6 8 4-8 6-8" />,
+  duplicate: <g><circle cx="7.5" cy="10" r="5.2" /><circle cx="12.5" cy="10" r="5.2" /><path d="M10 5.45a5.2 5.2 0 010 9.1" /></g>,
   rotate: <g><path d="M16 6V3M16 6h-3" strokeLinecap="round"/><path d="M16 6A7 7 0 003 10a7 7 0 0014 0" /></g>,
   note:   <g><path d="M7 4v9.5" /><circle cx="5.5" cy="14" r="1.8" fill="currentColor" stroke="none" /><path d="M7 4l8-1.5v9.5" /><circle cx="13.5" cy="12.5" r="1.8" fill="currentColor" stroke="none" /></g>,
   check:  <path d="M4 10l4 4 8-9" strokeLinecap="round" strokeLinejoin="round" />,

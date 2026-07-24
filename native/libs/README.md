@@ -1,10 +1,11 @@
-# BASS native libraries
+# Native audio libraries
 
-This directory is populated from [un4seen.com](https://www.un4seen.com/) by:
+This directory is populated with BASS from
+[un4seen.com](https://www.un4seen.com/) and a pinned Chromaprint shared library:
 
 ```bash
-npm run fetch:bass
-npm run verify:bass -- --load
+npm run fetch:native
+npm run verify:native -- --load
 ```
 
 The binaries are intentionally ignored by Git because of their size and
@@ -22,6 +23,13 @@ Verified target versions:
 
 - BASS 2.4.18.3
 - BASS_FX 2.4.12.6
+- Chromaprint 1.6.0 (`CHROMAPRINT_ALGORITHM_DEFAULT`, KissFFT)
 
 Avoid older BASS 2.4.14 Windows builds: NVD lists crafted-media denial-of-
 service issues for that line.
+
+Chromaprint's upstream source tarball is pinned by SHA-256 and accompanies
+release binaries under `licenses/chromaprint/`. Development builds do not need
+the library until duplicate analysis runs. Build it locally with CMake using
+`npm run build:chromaprint`, or fetch a verified Crate native asset with
+`npm run fetch:chromaprint`.

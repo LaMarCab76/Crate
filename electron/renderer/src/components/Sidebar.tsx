@@ -5,6 +5,7 @@ import type { DeviceConnectTarget } from './DeviceConnectModal'
 import { Icon, type IconName } from './Icon'
 import type { View } from '@renderer/App'
 import { useDeviceStore } from '@renderer/stores/deviceStore'
+import { useDuplicateStore } from '@renderer/stores/duplicateStore'
 import {
   useFavoriteArtists,
   useLibraryStore,
@@ -63,6 +64,7 @@ export function Sidebar({
   const candidates = useDeviceStore(s => s.candidates)
   const loadDevices = useDeviceStore(s => s.load)
   const refreshVolumes = useDeviceStore(s => s.refreshVolumes)
+  const duplicateCount = useDuplicateStore(s => s.summary.pendingCount)
 
   useEffect(() => {
     void loadDevices()
@@ -118,6 +120,7 @@ export function Sidebar({
         <Item id="artists"   icon="artist"   label="Artists"         onClick={() => setView({ kind: 'artists' })} />
         <Item id="genres"    icon="genre"    label="Genres"          onClick={() => setView({ kind: 'genres' })} />
         <Item id="recent"    icon="recent"   label="Recently Added"  onClick={() => setView({ kind: 'recent' })} />
+        <Item id="duplicates" icon="duplicate" label="Duplicados" badge={duplicateCount > 0 ? duplicateCount : undefined} onClick={() => setView({ kind: 'duplicates' })} />
 
         <SectionLabel label="Devices" onAdd={addDevice} title="Administrar dispositivos" />
         {visibleDevices.length === 0 && (
@@ -145,7 +148,12 @@ export function Sidebar({
           <div
             className="sb-item sb-candidate"
             key={candidate.rootPath}
-            onClick={() => onConnectDevice({ token: candidate.token, displayPath: candidate.rootPath, name: candidate.name })}
+            onClick={() => onConnectDevice({
+              token: candidate.token,
+              displayPath: candidate.rootPath,
+              name: candidate.name,
+              hasCrateState: candidate.hasCrateState,
+            })}
             role="button"
             tabIndex={0}
             title={candidate.rootPath}

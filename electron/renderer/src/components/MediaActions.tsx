@@ -1,4 +1,4 @@
-import { type FormEvent, type MouseEvent, type ReactNode, useEffect, useMemo, useState } from 'react'
+import { type FormEvent, type MouseEvent, useEffect, useMemo, useState } from 'react'
 import type { Album, Playlist, Track } from '@shared/types/library'
 import type { TrackAlbumMovePreview, TrackAlbumMoveQuality, TrackMetadataUpdatePayload } from '@shared/types/ipc-contract'
 import type { CloudMoveDisposition, CloudMoveProgressEvent } from '@shared/types/cloud'
@@ -20,6 +20,7 @@ import {
 import { useQueueStore } from '@renderer/stores/queueStore'
 import { ContextMenu, type ContextMenuItem } from './ContextMenu'
 import { Icon } from './Icon'
+import { ModalShell } from './ModalShell'
 import { useNavIntentStore } from '@renderer/stores/navIntentStore'
 
 type TrackDialog =
@@ -87,39 +88,6 @@ function formatKbps(value: number | null | undefined): string {
 
 function formatHz(value: number | null | undefined): string {
   return value ? `${(value / 1000).toFixed(value % 1000 === 0 ? 0 : 1)} kHz` : '-'
-}
-
-function ModalShell({
-  title,
-  children,
-  footer,
-  onClose,
-}: {
-  title: string
-  children: ReactNode
-  footer?: ReactNode
-  onClose: () => void
-}) {
-  return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <div
-        className="modal-panel"
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        onMouseDown={event => event.stopPropagation()}
-      >
-        <div className="modal-head">
-          <h2>{title}</h2>
-          <button type="button" className="tb-icon-btn" onClick={onClose} title="Cerrar">
-            <Icon name="close" size={14} />
-          </button>
-        </div>
-        <div className="modal-body">{children}</div>
-        {footer && <div className="modal-foot">{footer}</div>}
-      </div>
-    </div>
-  )
 }
 
 function DetailRow({ label, value, title }: { label: string; value: React.ReactNode; title?: string }) {

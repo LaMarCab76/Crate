@@ -45,6 +45,7 @@ const titleMap: Record<View['kind'], string> = {
   devices: 'Devices',
   device: 'Device',
   metadataFix: 'Completar metadatos',
+  duplicates: 'Temas duplicados',
 }
 
 function titleForView(view: View): string {
