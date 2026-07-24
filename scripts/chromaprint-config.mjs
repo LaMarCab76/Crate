@@ -1,5 +1,3 @@
-import { join } from 'node:path'
-
 export const CHROMAPRINT_VERSION = '1.6.0'
 export const CHROMAPRINT_ALGORITHM = 1
 export const CHROMAPRINT_SOURCE_NAME = `chromaprint-${CHROMAPRINT_VERSION}.tar.gz`
@@ -14,7 +12,9 @@ export const CHROMAPRINT_NATIVE_RELEASE = `chromaprint-native-v${CHROMAPRINT_VER
 export const CHROMAPRINT_NATIVE_REPOSITORY = 'LaMarCab76/LocalLibrary'
 
 export const CHROMAPRINT_MANIFEST = 'chromaprint-manifest.json'
-export const CHROMAPRINT_LICENSE_DIR = join('licenses', 'chromaprint')
+// This is also part of the portable ZIP layout, so keep it POSIX-normalized.
+// Joining it to a local root still produces the native path on every platform.
+export const CHROMAPRINT_LICENSE_DIR = 'licenses/chromaprint'
 
 export const CHROMAPRINT_CMAKE_FLAGS = Object.freeze([
   '-DCMAKE_BUILD_TYPE=Release',

@@ -142,9 +142,9 @@ async function listFiles(root, directory = root) {
   return result.sort()
 }
 
-function expectedFiles() {
+export function expectedChromaprintArtifactFiles(platform = TARGET.platform) {
   return [
-    chromaprintLibraryName(TARGET.platform),
+    chromaprintLibraryName(platform),
     CHROMAPRINT_MANIFEST,
     `${CHROMAPRINT_LICENSE_DIR}/LICENSE.md`,
     `${CHROMAPRINT_LICENSE_DIR}/LGPL-2.1.txt`,
@@ -213,7 +213,7 @@ async function main() {
     await mkdir(staged)
     await extractZip(archivePath, { dir: staged })
     const actualFiles = await listFiles(staged)
-    const allowedFiles = expectedFiles()
+    const allowedFiles = expectedChromaprintArtifactFiles()
     if (JSON.stringify(actualFiles) !== JSON.stringify(allowedFiles)) {
       throw new Error(`Artifact layout mismatch; expected ${allowedFiles.join(', ')}, got ${actualFiles.join(', ')}`)
     }
