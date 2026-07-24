@@ -11,6 +11,7 @@ import {
   parseArchitectures,
 } from './verify-chromaprint.mjs'
 import {
+  expectedChromaprintArtifactFiles,
   releaseAssetDownloadRequest,
   validateLocalArchiveOptions,
 } from './fetch-chromaprint.mjs'
@@ -66,6 +67,18 @@ test('normalizes the supported release targets and file names', () => {
   assert.equal(chromaprintLibraryName('win32'), 'chromaprint.dll')
   assert.equal(chromaprintArtifactName('darwin', 'arm64'), 'chromaprint-1.6.0-darwin-universal.zip')
   assert.throws(() => normalizeChromaprintTarget('linux', 'arm64'), /x64 only/)
+})
+
+test('uses portable forward-slash paths for the Windows artifact layout', () => {
+  assert.deepEqual(expectedChromaprintArtifactFiles('win32'), [
+    'chromaprint-manifest.json',
+    'chromaprint.dll',
+    'licenses/chromaprint/KISSFFT-LICENSE.txt',
+    'licenses/chromaprint/LGPL-2.1.txt',
+    'licenses/chromaprint/LICENSE.md',
+    'licenses/chromaprint/SOURCE.md',
+    'licenses/chromaprint/chromaprint-1.6.0.tar.gz',
+  ])
 })
 
 test('reads the architectures from Mach-O, ELF, and PE headers', () => {
