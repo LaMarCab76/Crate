@@ -127,6 +127,23 @@ test('groups actions by playlist memberships from pc and device libraries', () =
   assert.deepEqual(groups.map(group => group.label).sort(), ['Favorites', 'Road'])
 })
 
+test('sorts artist groups alphabetically instead of by action count', () => {
+  const actions = [
+    action('zeta-1', 'copy_pc_to_device', { artist: 'Zeta' }),
+    action('alpha-1', 'copy_pc_to_device', { artist: 'Alpha' }),
+    action('zeta-2', 'copy_pc_to_device', { artist: 'Zeta' }),
+    action('beta-1', 'copy_pc_to_device', { artist: 'Beta' }),
+  ]
+
+  const groups = groupDeviceSyncActions(actions, 'artist')
+
+  assert.deepEqual(groups.map(group => group.label), ['Alpha', 'Beta', 'Zeta'])
+  assert.deepEqual(groups.find(group => group.label === 'Zeta')?.actions.map(item => item.id), [
+    'zeta-1',
+    'zeta-2',
+  ])
+})
+
 function basePlan() {
   return plan([
     action('both', 'skip_conflict'),

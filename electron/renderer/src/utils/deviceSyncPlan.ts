@@ -229,7 +229,9 @@ export function groupDeviceSyncActions(
   }
 
   return [...groups.values()].sort((a, b) =>
-    b.actions.length - a.actions.length || a.label.localeCompare(b.label),
+    groupBy === 'artist'
+      ? a.label.localeCompare(b.label)
+      : b.actions.length - a.actions.length || a.label.localeCompare(b.label),
   )
 }
 
