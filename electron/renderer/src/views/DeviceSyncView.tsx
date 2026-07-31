@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Icon } from '@renderer/components/Icon'
 import { useActivityCenterStore } from '@renderer/stores/activityCenterStore'
 import {
@@ -569,6 +569,7 @@ function SyncConfirmStep({
   applyBlockedReason,
   result,
   onApply,
+  onRecalculate,
 }: {
   plan: DeviceSyncPlan
   selection: DeviceSyncApplySelection | null
@@ -576,6 +577,7 @@ function SyncConfirmStep({
   applyBlockedReason: string | null
   result: DeviceSyncApplyResult | null
   onApply: () => void
+  onRecalculate: () => void
 }) {
   const summary = useMemo(() => summarizeDeviceSyncSelection(plan, selection), [plan, selection])
   const toDevice = summary.copyPcToDevice + summary.replaceDevice
@@ -606,14 +608,20 @@ function SyncConfirmStep({
         </div>
       )}
       <div className="device-plan-actions">
-        <button
-          className="btn primary"
-          type="button"
-          disabled={loading || !canApply || result != null || applyBlockedReason != null}
-          onClick={onApply}
-        >
-          <Icon name="sync" size={13} /> Sincronizar ahora
-        </button>
+        {result ? (
+          <button className="btn primary" type="button" disabled={loading} onClick={onRecalculate}>
+            <Icon name="rotate" size={13} /> Calcular cambios otra vez
+          </button>
+        ) : (
+          <button
+            className="btn primary"
+            type="button"
+            disabled={loading || !canApply || applyBlockedReason != null}
+            onClick={onApply}
+          >
+            <Icon name="sync" size={13} /> Sincronizar ahora
+          </button>
+        )}
       </div>
     </section>
   )
@@ -1104,7 +1112,7 @@ function ArtworkOptimizePanel({
 
 // Sub-tabs inside the Sync section. Rendered as the navbar's second row (in
 // App.tsx) so the active sub-view is driven from the top chrome.
-export type DeviceSyncTab = 'sync' | 'optimize' | 'config'
+export type DeviceSyncTab = 'sync' | 'optimize' | 'config' | 'advanced'
 
 export function DeviceSyncView({
   deviceId,
@@ -1145,6 +1153,7 @@ export function DeviceSyncView({
   const [libraryPickerOpen, setLibraryPickerOpen] = useState(false)
   const [pathError, setPathError] = useState<string | null>(null)
   const [applyResult, setApplyResult] = useState<DeviceSyncApplyResult | null>(null)
+  const [appliedPlan, setAppliedPlan] = useState<DeviceSyncPlan | null>(null)
   const [planRequestedFullSync, setPlanRequestedFullSync] = useState(false)
   // Per-action winning side the wizard mutates (global / artist / album / track).
   // The apply payload is derived from this via buildSelectionFromSides.
@@ -1153,6 +1162,8 @@ export function DeviceSyncView({
   const [planGroupBy, setPlanGroupBy] = useState<DeviceSyncPlanGroupBy>('artist')
   const [applying, setApplying] = useState(false)
   const [artworkProgressOwnedByPanel, setArtworkProgressOwnedByPanel] = useState(false)
+  const autoPlanTimerRef = useRef<number | null>(null)
+  const autoPlanGenerationRef = useRef(0)
   // Conflict base is a persisted per-device setting (Configuración tab), not
   // ephemeral UI state — it's remembered across sessions.
   const syncBase: DeviceSyncBase = selectedDevice?.syncBase ?? 'review'
@@ -1207,6 +1218,8 @@ export function DeviceSyncView({
   useEffect(() => {
     if (!selectedDevice?.id) return
     setPlanRequestedFullSync(false)
+    setAppliedPlan(null)
+    setApplyResult(null)
   }, [selectedDevice?.id])
 
   const devicePendingJournals = useMemo(
@@ -1220,7 +1233,8 @@ export function DeviceSyncView({
     playlistCount: 0,
     rockboxThemeCount: 0,
   }
-  const visiblePlan = plan?.deviceId === selectedDevice?.id ? plan : null
+  const storePlan = plan?.deviceId === selectedDevice?.id ? plan : null
+  const visiblePlan = storePlan ?? (appliedPlan?.deviceId === selectedDevice?.id ? appliedPlan : null)
   const currentPlanSelection = useMemo(
     () => visiblePlan ? buildSelectionFromSides(visiblePlan, actionSides) : null,
     [actionSides, visiblePlan],
@@ -1240,7 +1254,9 @@ export function DeviceSyncView({
     : 0
   const progressTotal = activeProgress?.total ?? 0
   const progressPct = progressTotal > 0 ? Math.min(100, Math.round((progressCompleted / progressTotal) * 100)) : 0
-  const headerProgress = artworkProgressOwnedByPanel ? null : activeProgress
+  const headerProgress = artworkProgressOwnedByPanel || activeProgress?.phase === 'complete'
+    ? null
+    : activeProgress
 
   const artworkMaxEdgeValue = Number(artworkMaxEdge)
   const artworkMaxEdgeValid =
@@ -1356,12 +1372,42 @@ export function DeviceSyncView({
     })
   }, [selectedDevice, configValid, updateSettings, mode, normalizedMusicRoot, planPcTargetPath, artworkMaxEdgeValue, selectedSourceFolders])
 
-  const buildPlan = useCallback(async (fullSync = false) => {
+  const buildPlan = useCallback(async (fullSync = false, cancelScheduledAutoPlan = true) => {
     if (!selectedDevice || !configValid) return
+    if (cancelScheduledAutoPlan) {
+      autoPlanGenerationRef.current += 1
+      if (autoPlanTimerRef.current != null) {
+        window.clearTimeout(autoPlanTimerRef.current)
+        autoPlanTimerRef.current = null
+      }
+    }
     setApplyResult(null)
+    setAppliedPlan(null)
     setPlanRequestedFullSync(fullSync)
-    await planSync(mode, planPcTargetPath || selectedDevice.pcTargetPath, fullSync)
+    const calculatedPlan = await planSync(mode, planPcTargetPath || selectedDevice.pcTargetPath, fullSync)
+    return useDeviceStore.getState().plan?.id === calculatedPlan.id ? calculatedPlan : null
   }, [selectedDevice, configValid, planSync, mode, planPcTargetPath])
+
+  const calculateFullPlan = useCallback(async () => {
+    try {
+      const calculatedPlan = await buildPlan(true)
+      if (!calculatedPlan) return
+      onSyncTabChange('sync')
+      window.requestAnimationFrame(() => {
+        document.querySelector<HTMLButtonElement>('[data-device-subtab="sync"]')?.focus()
+      })
+    } catch {
+      // The store keeps the error visible in the current advanced tab.
+    }
+  }, [buildPlan, onSyncTabChange])
+
+  const calculateIncrementalPlan = useCallback(async () => {
+    try {
+      await buildPlan(false)
+    } catch {
+      // The store keeps the calculation error visible on the sync screen.
+    }
+  }, [buildPlan])
 
   // Persisted config signature: changing any of these auto-saves and (when the
   // device is reachable) recomputes the diff after a short debounce.
@@ -1377,17 +1423,26 @@ export function DeviceSyncView({
 
   useEffect(() => {
     if (!selectedDevice || !configValid) return
+    const generation = autoPlanGenerationRef.current + 1
+    autoPlanGenerationRef.current = generation
     const handle = window.setTimeout(() => {
+      if (autoPlanTimerRef.current === handle) autoPlanTimerRef.current = null
       void (async () => {
         try {
           if (settingsChanged) await saveSettings()
-          if (deviceAvailable) await buildPlan()
+          if (autoPlanGenerationRef.current !== generation) return
+          if (deviceAvailable) await buildPlan(false, false)
         } catch {
           /* store surfaces the error */
         }
       })()
     }, 500)
-    return () => window.clearTimeout(handle)
+    autoPlanTimerRef.current = handle
+    return () => {
+      window.clearTimeout(handle)
+      if (autoPlanTimerRef.current === handle) autoPlanTimerRef.current = null
+      if (autoPlanGenerationRef.current === generation) autoPlanGenerationRef.current += 1
+    }
     // settingsChanged/saveSettings/buildPlan are intentionally captured per
     // configSignature change to avoid re-fire loops after the save round-trip.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1426,6 +1481,7 @@ export function DeviceSyncView({
       clearPlan()
       return
     }
+    setAppliedPlan(visiblePlan)
     setApplying(true)
     setWizardStep('apply')
     try {
@@ -1459,7 +1515,7 @@ export function DeviceSyncView({
   // "Is a sync actively running for this device?" — derived from the store so it
   // survives this component unmounting/remounting (the sync keeps going in main),
   // unlike the local `applying` flag which resets to false on remount.
-  const syncRunning = isSyncRun && activeProgress != null
+  const syncRunning = isSyncRun && activeProgress != null && activeProgress.phase !== 'complete'
   // Editing the plan / recalculating stays locked for the whole run, even after a
   // remount where `applying` would have been lost.
   const busy = applying || syncRunning
@@ -1476,7 +1532,12 @@ export function DeviceSyncView({
 
   if (!selectedDevice) {
     return (
-      <div className="devices-page">
+      <div
+        className="devices-page"
+        id="device-sync-panel"
+        role="tabpanel"
+        aria-labelledby={`device-sync-tab-${syncTab}`}
+      >
         <div className="lib-head">
           <div>
             <h1>Device Sync</h1>
@@ -1489,7 +1550,12 @@ export function DeviceSyncView({
   }
 
   return (
-    <div className="devices-page device-sync-page">
+    <div
+      className="devices-page device-sync-page"
+      id="device-sync-panel"
+      role="tabpanel"
+      aria-labelledby={`device-sync-tab-${syncTab}`}
+    >
       {error && <div className="device-error">{error}</div>}
       {portableWarning && <div className="device-warning">{portableWarning}</div>}
 
@@ -1704,6 +1770,44 @@ export function DeviceSyncView({
       </section>
       )}
 
+      {syncTab === 'advanced' && (
+        <section className="device-main-card device-sync-control-card">
+          <div className="device-card-head">
+            <div>
+              <h2>Resincronización completa</h2>
+              <span>Una comprobación exhaustiva para cuando el estado incremental no alcanza.</span>
+            </div>
+          </div>
+
+          {!configValid ? (
+            <div className="device-warning inline device-sync-config-cta">
+              <span>Completá la configuración antes de calcular una resincronización completa.</span>
+              <button className="btn" type="button" onClick={() => onSyncTabChange('config')}>
+                <Icon name="sliders" size={13} /> Ir a Configuración
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="device-library-note">
+                Vuelve a leer todos los archivos del MP3 y los compara con el índice actual de tus bibliotecas,
+                sin reutilizar el último estado incremental. No se aplica ningún cambio hasta que revises y
+                confirmes el plan en Sincronización.
+              </div>
+              <div className="device-plan-actions">
+                <button
+                  className="btn primary"
+                  type="button"
+                  disabled={loading || busy || !selectedDevice.isAvailable}
+                  onClick={() => void calculateFullPlan()}
+                >
+                  <Icon name="sync" size={13} /> Calcular resync completo
+                </button>
+              </div>
+            </>
+          )}
+        </section>
+      )}
+
       {syncTab === 'sync' && (
       <section className="device-sync-stage device-sync-activity-tab">
         {!configValid ? (
@@ -1720,16 +1824,8 @@ export function DeviceSyncView({
                 <h2>Cambios a sincronizar</h2>
                 <span>Calculando las diferencias del dispositivo…</span>
               </div>
-              <button className="btn" type="button" disabled={loading || !selectedDevice.isAvailable} onClick={() => void buildPlan(false)}>
+              <button className="btn" type="button" disabled={loading || !selectedDevice.isAvailable} onClick={() => void calculateIncrementalPlan()}>
                 <Icon name="rotate" size={12} /> Recalcular
-              </button>
-              <button
-                className="btn ghost"
-                type="button"
-                disabled={loading || !selectedDevice.isAvailable}
-                onClick={() => void buildPlan(true)}
-              >
-                <Icon name="sync" size={12} /> Resync completo
               </button>
             </div>
             <div className="device-empty compact">{loading ? 'Calculando cambios…' : 'No hay cambios calculados todavía.'}</div>
@@ -1742,17 +1838,9 @@ export function DeviceSyncView({
                 className="btn ghost"
                 type="button"
                 disabled={loading || busy || !selectedDevice.isAvailable}
-                onClick={() => void buildPlan(false)}
+                onClick={() => void calculateIncrementalPlan()}
               >
                 <Icon name="rotate" size={12} /> Recalcular
-              </button>
-              <button
-                className="btn ghost"
-                type="button"
-                disabled={loading || busy || !selectedDevice.isAvailable}
-                onClick={() => void buildPlan(true)}
-              >
-                <Icon name="sync" size={12} /> Resync completo
               </button>
             </div>
 
@@ -1777,7 +1865,7 @@ export function DeviceSyncView({
               />
             )}
             {wizardStep === 'apply' && (
-              activeProgress && isSyncRun ? (
+              syncRunning && activeProgress ? (
                 <SyncCurrentRunPanel
                   phase={activeProgress.phase}
                   completed={progressCompleted}
@@ -1795,6 +1883,7 @@ export function DeviceSyncView({
                   applyBlockedReason={applyBlockedReason}
                   result={applyResult}
                   onApply={() => void applyCurrentPlan()}
+                  onRecalculate={() => void calculateIncrementalPlan()}
                 />
               )
             )}
@@ -1819,6 +1908,7 @@ export function DeviceSyncView({
                     onClick={() => {
                       clearPlan()
                       setApplyResult(null)
+                      setAppliedPlan(null)
                       setActionSides({})
                       setWizardStep('diff')
                     }}

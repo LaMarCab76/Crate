@@ -193,15 +193,40 @@ test('artwork optimization progress is owned by the optimize panel to avoid a du
     'ArtworkOptimizePanel should notify the parent while it renders the same progress',
   )
   assert.ok(
-    syncSource.includes('const headerProgress = artworkProgressOwnedByPanel ? null : activeProgress'),
-    'The page header should hide progress already rendered by the optimize panel',
+    syncSource.includes("const headerProgress = artworkProgressOwnedByPanel || activeProgress?.phase === 'complete'"),
+    'The page header should hide progress already rendered by the optimize panel or already complete',
   )
 })
 
-test('device sync shows last-sync mode indicators and full sync action hooks', () => {
+test('device sync keeps repeat calculations available after applying a plan', () => {
+  assert.ok(syncSource.includes('const [appliedPlan, setAppliedPlan] = useState<DeviceSyncPlan | null>(null)'), 'Applied plans should remain locally available for their result screen')
+  assert.ok(syncSource.includes('setAppliedPlan(visiblePlan)'), 'Apply should preserve the reviewed plan before the store clears it')
+  assert.ok(syncSource.includes('Calcular cambios otra vez'), 'Completed sync results should expose a direct recalculation action')
+  assert.ok(syncSource.includes("activeProgress.phase !== 'complete'"), 'Completed progress must not leave sync controls locked')
+})
+
+test('automatic plan debounce cannot cancel or overwrite a newer configuration', () => {
+  assert.ok(syncSource.includes('const autoPlanGenerationRef = useRef(0)'), 'Automatic calculations should carry a generation')
+  assert.ok(syncSource.includes('if (autoPlanGenerationRef.current !== generation) return'), 'An obsolete autosave callback should stop before planning')
+  assert.ok(syncSource.includes('await buildPlan(false, false)'), 'An automatic build should not cancel a newer scheduled timer')
+})
+
+test('device sync shows last-sync mode indicators and isolates full sync in Advanced', () => {
+  const advancedStart = syncSource.indexOf("{syncTab === 'advanced' && (")
+  const syncStart = syncSource.indexOf("{syncTab === 'sync' && (", advancedStart)
+  const advancedBlock = syncSource.slice(advancedStart, syncStart)
+  const syncBlock = syncSource.slice(syncStart)
+
   assert.ok(syncSource.includes("activeSyncModeLabel = selectedDevice?.lastSyncAt && !planRequestedFullSync"), 'DeviceSyncView should model incremental/full mode for labels')
   assert.ok(syncSource.includes("Última sync:"), 'DeviceSyncView should display last sync label in header')
-  assert.ok(syncSource.includes('Resync completo'), 'DeviceSyncView should expose full-sync button label')
+  assert.ok(advancedStart >= 0 && syncStart > advancedStart, 'Advanced and normal sync sections should be discoverable')
+  assert.ok(advancedBlock.includes('Resincronización completa'), 'Advanced should explain the exhaustive operation')
+  assert.ok(advancedBlock.includes('Calcular resync completo'), 'Advanced should expose the full-sync action')
+  assert.ok(!syncBlock.includes('Calcular resync completo'), 'Normal synchronization should not expose the full-sync action')
   assert.ok(syncSource.includes('buildPlan(true)'), 'Resync button should pass fullSync=true to plan generation')
   assert.ok(syncSource.includes('buildPlan(false)'), 'Recalcular should pass fullSync=false path')
+  assert.ok(syncSource.includes('if (!calculatedPlan) return'), 'A stale full plan should not navigate away from Advanced')
+  assert.ok(syncSource.includes("'[data-device-subtab=\"sync\"]'"), 'Successful full planning should move focus to the selected Sync tab')
+  assert.ok(syncSource.includes('role="tabpanel"'), 'Device Sync content should expose tabpanel semantics')
+  assert.ok(syncSource.includes('aria-labelledby={`device-sync-tab-${syncTab}`}'), 'The active panel should reference its selected tab')
 })

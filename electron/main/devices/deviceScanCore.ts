@@ -44,6 +44,22 @@ export interface DeviceCollectedMusicFiles {
   changedAudioFiles: Set<string>
 }
 
+export interface DeviceScanRequestIdentity {
+  musicRoot: string
+  changedSinceMs: number | null
+}
+
+export function canJoinActiveDeviceScan(
+  active: DeviceScanRequestIdentity,
+  requested: DeviceScanRequestIdentity,
+): boolean {
+  if (active.musicRoot !== requested.musicRoot) return false
+  // A full pass is a safe superset for every request on the same root. Two
+  // incremental passes are compatible only when they use the same baseline.
+  if (active.changedSinceMs == null) return true
+  return requested.changedSinceMs != null && active.changedSinceMs === requested.changedSinceMs
+}
+
 function toPosixRelative(root: string, absPath: string): string {
   return relative(root, absPath).split(sep).join('/')
 }
@@ -67,11 +83,13 @@ export async function collectDeviceMusicFiles({
   root,
   emitProgress,
   changedSince,
+  reusableMetadataByKey,
 }: {
   deviceId: string
   root: string
   emitProgress?: DeviceScanProgressEmitter
   changedSince?: number
+  reusableMetadataByKey?: ReadonlyMap<string, DeviceScanTrackMetadata>
 }): Promise<DeviceCollectedMusicFiles> {
   const audioFiles: string[] = []
   const changedAudioFiles = new Set<string>()
@@ -129,7 +147,28 @@ export async function collectDeviceMusicFiles({
             let changed = false
             try {
               const fileStats = await stat(full)
-              changed = fileStats.mtimeMs > cutoffMs
+              const reusable = reusableMetadataByKey?.get(key)
+              const reusableMtimeMs = reusable?.dateModified
+                ? Date.parse(reusable.dateModified)
+                : Number.NaN
+              const mtimeDiffersFromReusable = Number.isFinite(reusableMtimeMs)
+                ? Math.trunc(fileStats.mtimeMs) !== Math.trunc(reusableMtimeMs)
+                : reusable != null
+              const sizeDiffersFromReusable =
+                reusable?.fileSize != null && reusable.fileSize !== fileStats.size
+              const differsFromReusable = reusableMetadataByKey != null && (
+                reusable == null ||
+                mtimeDiffersFromReusable ||
+                sizeDiffersFromReusable
+              )
+
+              // FAT/exFAT can round timestamps, and files copied by external tools
+              // may preserve or even backdate mtime. Compare the current file with
+              // the reusable baseline as well as last_sync_at so an incremental
+              // recalculation does not keep stale metadata until the app restarts.
+              changed =
+                fileStats.mtimeMs > cutoffMs ||
+                differsFromReusable
             } catch (err) {
               console.warn(`[devices] unreadable file ${full}:`, (err as Error).message)
               changed = true
@@ -264,6 +303,7 @@ export async function scanDeviceAudioTree({
     root,
     emitProgress,
     changedSince,
+    reusableMetadataByKey,
   })
   return scanDeviceAudioFiles({
     deviceId,

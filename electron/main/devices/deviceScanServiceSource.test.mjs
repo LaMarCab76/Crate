@@ -5,7 +5,7 @@ import { sanitizeLegacyDeviceSyncJournal } from './deviceSyncJournalSanitizer.ts
 
 const serviceSource = readFileSync(new URL('./DeviceSyncService.ts', import.meta.url), 'utf8')
 
-test('DeviceSyncService reuses the active device scan promise for concurrent callers', () => {
+test('DeviceSyncService reuses compatible scans without downgrading a full resync', () => {
   assert.ok(
     serviceSource.includes('private activeDeviceScans = new Map<string, ActiveDeviceScan>()'),
     'service should keep active scans by device id',
@@ -16,7 +16,19 @@ test('DeviceSyncService reuses the active device scan promise for concurrent cal
   )
   assert.ok(
     serviceSource.includes('return existing.promise'),
-    'concurrent scan callers should join the active scan promise',
+    'compatible concurrent scan callers should join the active scan promise',
+  )
+  assert.ok(
+    serviceSource.includes('const request: DeviceScanRequestIdentity = {'),
+    'scan requests should record the music root and incremental baseline',
+  )
+  assert.ok(
+    serviceSource.includes('if (canJoinActiveDeviceScan(existing.request, request))'),
+    'only compatible roots and scan strategies should share an active scan',
+  )
+  assert.ok(
+    serviceSource.includes('return this.scanDeviceRow(row, sendProgress, options)'),
+    'a full scan should start after the incompatible incremental pass settles',
   )
   assert.ok(
     serviceSource.includes('if (current === active) this.activeDeviceScans.delete(row.id)'),

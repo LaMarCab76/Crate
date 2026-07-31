@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { basename, join, relative, sep } from 'node:path'
 import { test } from 'node:test'
 import {
+  canJoinActiveDeviceScan,
   collectDeviceAudioFiles,
   collectDeviceMusicFiles,
   DEVICE_SCAN_METADATA_CONCURRENCY,
@@ -26,6 +27,18 @@ function metadataFor(file) {
 function relativePosix(root, file) {
   return relative(root, file).split(sep).join('/')
 }
+
+test('active device scans join only compatible roots and baselines', () => {
+  const full = { musicRoot: '/Volumes/DAP/Music', changedSinceMs: null }
+  const incremental = { musicRoot: '/Volumes/DAP/Music', changedSinceMs: 100 }
+
+  assert.equal(canJoinActiveDeviceScan(full, incremental), true, 'incremental may join a full pass')
+  assert.equal(canJoinActiveDeviceScan(full, full), true, 'full passes on the same root may join')
+  assert.equal(canJoinActiveDeviceScan(incremental, full), false, 'full must wait for an incremental pass')
+  assert.equal(canJoinActiveDeviceScan(incremental, { ...incremental }), true, 'equal baselines may join')
+  assert.equal(canJoinActiveDeviceScan(incremental, { ...incremental, changedSinceMs: 101 }), false, 'different baselines must serialize')
+  assert.equal(canJoinActiveDeviceScan(full, { ...incremental, musicRoot: '/Volumes/DAP/Other' }), false, 'different roots must never join')
+})
 
 test('collectDeviceAudioFiles respects database.ignore, database.unignore, dotfiles and symlinks', async () => {
   const root = await mkdtemp(join(tmpdir(), 'crate-device-scan-'))
@@ -154,6 +167,61 @@ test('collectDeviceMusicFiles marks only tracks changed after a cutoff in increm
       ['changed.mp3', 'old.mp3'],
     )
     assert.deepEqual([...collected.changedAudioFiles].sort(), ['changed.mp3'])
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('incremental collection detects size and backdated mtime changes against reusable metadata', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'crate-device-incremental-baseline-'))
+  try {
+    const resized = join(root, 'resized.mp3')
+    const backdated = join(root, 'backdated.mp3')
+    const unchanged = join(root, 'unchanged.mp3')
+    const newWithOldMtime = join(root, 'new-with-old-mtime.mp3')
+    await writeFile(resized, 'old')
+    await writeFile(backdated, 'same')
+    await writeFile(unchanged, 'steady')
+    await writeFile(newWithOldMtime, 'new')
+
+    const baselineDate = new Date(Date.now() - 30_000)
+    const olderDate = new Date(baselineDate.getTime() - 30_000)
+    await utimes(resized, baselineDate, baselineDate)
+    await utimes(backdated, olderDate, olderDate)
+    await utimes(unchanged, baselineDate, baselineDate)
+    await utimes(newWithOldMtime, olderDate, olderDate)
+    await writeFile(resized, 'new-content-with-a-different-size')
+    // Simulate FAT timestamp rounding/preservation after an external rewrite.
+    await utimes(resized, baselineDate, baselineDate)
+
+    const reusableMetadataByKey = new Map([
+      ['resized.mp3', {
+        ...metadataFor(resized),
+        fileSize: 3,
+        dateModified: baselineDate.toISOString(),
+      }],
+      ['backdated.mp3', {
+        ...metadataFor(backdated),
+        fileSize: 4,
+        dateModified: baselineDate.toISOString(),
+      }],
+      ['unchanged.mp3', {
+        ...metadataFor(unchanged),
+        fileSize: 6,
+        dateModified: baselineDate.toISOString(),
+      }],
+    ])
+    const collected = await collectDeviceMusicFiles({
+      deviceId: 'dap',
+      root,
+      changedSince: baselineDate.getTime() + 1_000,
+      reusableMetadataByKey,
+    })
+
+    assert.deepEqual(
+      [...collected.changedAudioFiles].sort(),
+      ['backdated.mp3', 'new-with-old-mtime.mp3', 'resized.mp3'],
+    )
   } finally {
     await rm(root, { recursive: true, force: true })
   }
