@@ -691,6 +691,9 @@ html, body {
   cursor: default;
 }
 .activity-center-panel {
+  --activity-success: #6ee7a5;
+  --activity-success-bg: color-mix(in oklab, var(--activity-success) 12%, var(--bg-elev));
+  --activity-success-border: color-mix(in oklab, var(--activity-success) 34%, var(--divider));
   pointer-events: auto;
   position: relative;
   min-height: 220px;
@@ -708,6 +711,11 @@ html, body {
   backdrop-filter: blur(24px) saturate(160%);
   -webkit-backdrop-filter: blur(24px) saturate(160%);
   transform: translateZ(0);
+}
+.theme-light .activity-center-panel {
+  --activity-success: #167a43;
+  --activity-success-bg: color-mix(in oklab, var(--activity-success) 11%, var(--bg-panel));
+  --activity-success-border: color-mix(in oklab, var(--activity-success) 30%, var(--divider));
 }
 .activity-center.fullscreen .activity-center-panel {
   width: min(880px, 100%);
@@ -802,6 +810,16 @@ html, body {
   border-color: color-mix(in oklab, #d99a64 28%, var(--divider));
   background: color-mix(in oklab, #d99a64 7%, var(--bg-elev));
 }
+.activity-center-row.done,
+.activity-center-row.done.unread {
+  border-color: var(--activity-success-border);
+  background: var(--activity-success-bg);
+}
+.activity-center-row.done.actionable:hover,
+.activity-center-row.done.actionable:focus-visible {
+  border-color: color-mix(in oklab, var(--activity-success) 52%, var(--divider));
+  background: color-mix(in oklab, var(--activity-success) 16%, var(--bg-elev));
+}
 .activity-center-row-icon {
   width: 28px;
   height: 28px;
@@ -814,7 +832,10 @@ html, body {
 }
 .activity-center-row.active .activity-center-row-icon { color: #d99a64; }
 .activity-center-row.active .activity-center-loader { color: #6ee7a5; }
-.activity-center-row.done .activity-center-row-icon { color: #6ee7a5; }
+.activity-center-row.done .activity-center-row-icon {
+  background: color-mix(in oklab, var(--activity-success) 12%, var(--bg-elev));
+  color: var(--activity-success);
+}
 .activity-center-row.failed .activity-center-row-icon { color: #ff8a80; }
 .activity-center-row.warn .activity-center-row-icon { color: #f4c95d; }
 .activity-center-row-main {
@@ -854,6 +875,9 @@ html, body {
 }
 .activity-center-status {
   align-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   padding: 2px 7px;
   border-radius: 999px;
   background: var(--bg-elev);
@@ -863,7 +887,10 @@ html, body {
   white-space: nowrap;
 }
 .activity-center-status.active { color: #d99a64; }
-.activity-center-status.done { color: #6ee7a5; }
+.activity-center-status.done {
+  background: color-mix(in oklab, var(--activity-success) 13%, var(--bg-elev));
+  color: var(--activity-success);
+}
 .activity-center-status.failed { color: #ff8a80; }
 .activity-center-status.warn { color: #f4c95d; }
 .activity-center-progress {

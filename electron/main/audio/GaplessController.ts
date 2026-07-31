@@ -16,6 +16,7 @@ const koffi = require('koffi') as typeof import('koffi')
 
 import { BASS_SYNC_END, BASS_SYNC_ONETIME } from './bass-constants'
 import { loadBass, SYNCPROC, type HSTREAM, type HSYNC } from './bass-ffi'
+import { isActiveEndSyncRegistration } from './endSyncOwnership'
 import { CLOUD_MEMORY_TIMEOUT_MS, PRELOAD_MEMORY_TIMEOUT_MS } from './progressiveBuffering'
 import type {
   AudioEngine,
@@ -136,13 +137,18 @@ export class GaplessController {
       this.currentTrackEndRegistration = null
     }
 
-    this.currentTrackEndRegistration = registerEndSync(currentStream, () => {
+    let registration: RegisteredCallback | null = null
+    registration = registerEndSync(currentStream, () => {
       // Keep the callback for the ending track fresh: if this handler is
       // invoked via BASS's synchronous callback path, releasing/reattaching
       // the sync inside the callback itself can cause races.
-      const endedRegistration = this.currentTrackEndRegistration
+      const endedRegistration = registration
+      // The old callback may already be queued when a delete, manual Next, or
+      // direct track selection replaces its stream. It must not consume the
+      // new stream's registration or emit a second, stale track-ended event.
+      if (!isActiveEndSyncRegistration(this.currentTrackEndRegistration, endedRegistration)) return
       this.currentTrackEndRegistration = null
-      if (endedRegistration) queueMicrotask(() => releaseCallback(endedRegistration))
+      queueMicrotask(() => releaseCallback(endedRegistration))
 
       if (!this.next) {
         broadcast('audio:track-ended')
@@ -156,6 +162,7 @@ export class GaplessController {
         broadcast('audio:track-ended')
       }
     })
+    this.currentTrackEndRegistration = registration
   }
 
   private clearCurrentTrackEndRegistration(): void {

@@ -127,7 +127,7 @@ function ActivityRow({
         </div>
         <strong>{item.title}</strong>
         {item.detail && <p title={item.detail}>{item.detail}</p>}
-        {progress && (
+        {progress && item.status !== 'success' && (
           <div className={`activity-center-progress ${progress.percent == null && active ? 'indeterminate' : ''}`}>
             <div aria-hidden="true">
               <i style={progressStyle} />
@@ -158,7 +158,10 @@ function ActivityRow({
           </div>
         )}
       </div>
-      <span className={`activity-center-status ${statusClass(item.status)}`}>{STATUS_LABELS[item.status]}</span>
+      <span className={`activity-center-status ${statusClass(item.status)}`}>
+        {item.status === 'success' && <Icon name="check" size={11} stroke={2.2} />}
+        <span>{STATUS_LABELS[item.status]}</span>
+      </span>
     </div>
   )
 }
