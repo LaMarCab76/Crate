@@ -49,6 +49,26 @@ export interface DeviceScanRequestIdentity {
   changedSinceMs: number | null
 }
 
+export function deviceFileDiffersFromReusable(
+  fileStats: { size: number; mtime: Date; mtimeMs: number },
+  reusable: Pick<DeviceScanTrackMetadata, 'dateModified' | 'fileSize'> | undefined,
+): boolean {
+  if (reusable == null) return true
+
+  const reusableMtimeMs = reusable.dateModified
+    ? Date.parse(reusable.dateModified)
+    : Number.NaN
+  const mtimeDiffers = Number.isFinite(reusableMtimeMs)
+    // MetadataExtractor persists stats.mtime.toISOString(). Comparing the Date
+    // value avoids a one-millisecond false positive from platform-specific
+    // floating-point representations of stats.mtimeMs.
+    ? fileStats.mtime.getTime() !== reusableMtimeMs
+    : true
+  const sizeDiffers = reusable.fileSize != null && reusable.fileSize !== fileStats.size
+
+  return mtimeDiffers || sizeDiffers
+}
+
 export function canJoinActiveDeviceScan(
   active: DeviceScanRequestIdentity,
   requested: DeviceScanRequestIdentity,
@@ -148,18 +168,8 @@ export async function collectDeviceMusicFiles({
             try {
               const fileStats = await stat(full)
               const reusable = reusableMetadataByKey?.get(key)
-              const reusableMtimeMs = reusable?.dateModified
-                ? Date.parse(reusable.dateModified)
-                : Number.NaN
-              const mtimeDiffersFromReusable = Number.isFinite(reusableMtimeMs)
-                ? Math.trunc(fileStats.mtimeMs) !== Math.trunc(reusableMtimeMs)
-                : reusable != null
-              const sizeDiffersFromReusable =
-                reusable?.fileSize != null && reusable.fileSize !== fileStats.size
               const differsFromReusable = reusableMetadataByKey != null && (
-                reusable == null ||
-                mtimeDiffersFromReusable ||
-                sizeDiffersFromReusable
+                deviceFileDiffersFromReusable(fileStats, reusable)
               )
 
               // FAT/exFAT can round timestamps, and files copied by external tools
