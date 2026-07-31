@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
-import { mergeDeviceRecord } from './deviceStore.ts'
+import { findUnknownVolumeByRoot, mergeDeviceRecord } from './deviceStore.ts'
 
 const deviceStoreSource = readFileSync(new URL('./deviceStore.ts', import.meta.url), 'utf8')
 
@@ -48,6 +48,20 @@ test('mergeDeviceRecord prepends a newly seen device', () => {
   const merged = mergeDeviceRecord([device('old', 1)], device('new', 9))
 
   assert.deepEqual(merged.map(item => item.id), ['new', 'old'])
+})
+
+test('unknown volume actions resolve the freshly issued token by root', () => {
+  const volumes = [
+    { token: 'fresh-a', rootPath: '/Volumes/A', name: 'A' },
+    { token: 'fresh-b', rootPath: '/Volumes/B', name: 'B' },
+  ]
+
+  assert.equal(findUnknownVolumeByRoot(volumes, '/Volumes/B')?.token, 'fresh-b')
+  assert.equal(findUnknownVolumeByRoot(volumes, '/Volumes/Missing'), null)
+  assert.ok(
+    deviceStoreSource.includes('const snapshot = await window.api.devices.volumes()'),
+    'activity volume actions should refresh their authorization before use',
+  )
 })
 
 test('discardJournal resolves the matching activity center sync entry', () => {

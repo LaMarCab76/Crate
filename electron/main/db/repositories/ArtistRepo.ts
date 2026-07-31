@@ -8,6 +8,7 @@ export class ArtistRepo {
   private stmtById
   private stmtAll
   private stmtSetFavorite
+  private stmtSetArtwork
   private stmtInsert
 
   constructor(db: BetterSqliteDatabase) {
@@ -17,6 +18,9 @@ export class ArtistRepo {
     this.stmtAll = db.prepare<unknown[], DbArtist>(`SELECT * FROM artists ORDER BY sort_name COLLATE NOCASE ASC`)
     this.stmtSetFavorite = db.prepare<[number, number, number]>(
       `UPDATE artists SET is_favorite = ?, state_updated_at = ? WHERE id = ?`,
+    )
+    this.stmtSetArtwork = db.prepare<[string | null, string | null, number]>(
+      `UPDATE artists SET artwork_path = ?, artwork_source_type = ? WHERE id = ?`,
     )
     this.stmtInsert = db.prepare(`
       INSERT INTO artists (name, normalized_name, sort_name, date_added)
@@ -42,5 +46,9 @@ export class ArtistRepo {
 
   setFavorite(id: number, favorite: boolean): void {
     this.stmtSetFavorite.run(favorite ? 1 : 0, Date.now(), id)
+  }
+
+  setArtwork(id: number, artworkPath: string | null, sourceType: 'album' | 'custom' | null): void {
+    this.stmtSetArtwork.run(artworkPath, sourceType, id)
   }
 }

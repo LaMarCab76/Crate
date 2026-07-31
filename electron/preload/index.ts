@@ -337,6 +337,12 @@ const api: Api = {
   artists: {
     setFavorite: (id: number, favorite: boolean) =>
       ipcRenderer.invoke('artist:setFavorite', { id, favorite }) as Promise<void>,
+    setArtworkFromAlbum: (artistId: number, albumId: number) =>
+      ipcRenderer.invoke('artist:setArtworkFromAlbum', { artistId, albumId }) as Promise<{ artworkPath: string }>,
+    pickArtwork: (artistId: number) =>
+      ipcRenderer.invoke('artist:pickArtwork', { artistId }) as Promise<{ canceled: boolean; artworkPath: string | null }>,
+    resetArtwork: (artistId: number) =>
+      ipcRenderer.invoke('artist:resetArtwork', { artistId }) as Promise<void>,
   },
   settings: {
     setLibraryBackup: (enabled: boolean) =>

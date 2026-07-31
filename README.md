@@ -4,7 +4,7 @@ Audiophile music library and player for **macOS, Windows and Linux**, built as a
 Electron + Vite + React + TypeScript desktop app on top of the
 [BASS](https://www.un4seen.com/bass.html) audio library.
 
-> Current release: **v0.6.0** — installers and release notes live in
+> Current release: **v0.6.2** — installers and release notes live in
 > [`docs/releases/`](docs/releases/).
 
 ## Quick start

@@ -49,6 +49,7 @@ interface DeviceState {
   loadPendingJournals(): Promise<void>
   detectCandidates(): Promise<void>
   refreshVolumes(): Promise<void>
+  refreshUnknownVolume(rootPath: string): Promise<DeviceUnknownVolume | null>
   ignoreVolume(token: string): Promise<void>
   connect(payload: DeviceConnectPayload): Promise<DeviceRecord>
   updateSettings(deviceId: string, settings: DeviceSettingsUpdate): Promise<DeviceRecord>
@@ -179,6 +180,13 @@ export function mergeDeviceRecord(devices: DeviceRecord[], next: DeviceRecord): 
   return found ? merged : [next, ...merged]
 }
 
+export function findUnknownVolumeByRoot(
+  volumes: DeviceUnknownVolume[],
+  rootPath: string,
+): DeviceUnknownVolume | null {
+  return volumes.find(volume => volume.rootPath === rootPath) ?? null
+}
+
 function canReuseDeviceLibrary(library: DeviceLibraryResult, device?: DeviceRecord): boolean {
   const storage = library.storage
   if (!storage) return false
@@ -266,6 +274,26 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
       }))
     } catch (err) {
       set({ error: (err as Error).message })
+    }
+  },
+
+  async refreshUnknownVolume(rootPath) {
+    try {
+      // Activity entries outlive path authorizations. Always request a fresh
+      // snapshot immediately before using an unknown-volume action so its
+      // single-use token cannot be stale after five minutes or an app restart.
+      const snapshot = await window.api.devices.volumes()
+      set(state => ({
+        devices: snapshot.devices,
+        candidates: snapshot.candidates,
+        unknownVolumes: snapshot.unknownVolumes,
+        selectedDeviceId: nextSelectedDeviceId(state.selectedDeviceId, snapshot.devices),
+        error: null,
+      }))
+      return findUnknownVolumeByRoot(snapshot.unknownVolumes, rootPath)
+    } catch (err) {
+      set({ error: (err as Error).message })
+      throw err
     }
   },
 

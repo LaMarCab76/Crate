@@ -295,10 +295,26 @@ test('unknown volume activities expose classification actions and resolve when a
 
   assert.deepEqual(activityActionIdsFor(item), ['connect-device', 'add-library', 'ignore-volume', 'open-libraries'])
   assert.equal(item.metadata.rootPath, '/Volumes/DAP')
+  assert.equal(item.metadata.pathToken, undefined, 'short-lived path tokens must not be persisted in activities')
 
   const resolved = syncUnknownVolumeActivities(withVolume, [], 200)
   assert.equal(resolved[0].status, 'success')
   assert.equal(resolved[0].detail, 'Volumen clasificado o desconectado.')
+})
+
+test('hydration removes legacy short-lived volume tokens', () => {
+  const legacy = {
+    ...baseActivity('unknown-volume:/Volumes/DAP', 'warning', 100),
+    metadata: {
+      activityKind: 'unknown-volume',
+      rootPath: '/Volumes/DAP',
+      pathToken: 'expired-token-that-must-not-survive',
+    },
+  }
+
+  const [hydrated] = hydrateActivityItems([legacy], 200)
+  assert.equal(hydrated.metadata.rootPath, '/Volumes/DAP')
+  assert.equal(hydrated.metadata.pathToken, undefined)
 })
 
 test('primary activity actions navigate to the matching app section', () => {
