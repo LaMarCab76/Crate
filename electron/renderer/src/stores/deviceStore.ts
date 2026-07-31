@@ -560,7 +560,10 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
   },
 
   selectDevice(id) {
-    set({ selectedDeviceId: id, plan: null, scanResult: null, error: null })
+    const previousDeviceId = get().selectedDeviceId
+    if (previousDeviceId) beginDeviceRequest('plan', previousDeviceId)
+    if (id !== previousDeviceId) beginDeviceRequest('plan', id)
+    set({ selectedDeviceId: id, plan: null, scanResult: null, loading: false, error: null })
   },
 
   async scan(deviceId) {
@@ -619,6 +622,7 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
 
   planSync: async (mode, pcTargetPath, fullSync) => {
     const deviceId = currentDeviceId(get())
+    const requestVersion = beginDeviceRequest('plan', deviceId)
     set({ loading: true, error: null, plan: null })
     try {
       const plan = await window.api.devices.planSync({
@@ -627,10 +631,15 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
         pcTargetPath,
         fullSync,
       })
+      if (!isCurrentDeviceRequest('plan', deviceId, requestVersion) || get().selectedDeviceId !== deviceId) {
+        return plan
+      }
       set({ plan, loading: false })
       return plan
     } catch (err) {
-      set({ loading: false, error: (err as Error).message })
+      if (isCurrentDeviceRequest('plan', deviceId, requestVersion) && get().selectedDeviceId === deviceId) {
+        set({ loading: false, error: (err as Error).message })
+      }
       throw err
     }
   },
@@ -758,7 +767,9 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
   },
 
   clearPlan() {
-    set({ plan: null })
+    const deviceId = get().selectedDeviceId
+    if (deviceId) beginDeviceRequest('plan', deviceId)
+    set({ plan: null, loading: false })
   },
 }))
 

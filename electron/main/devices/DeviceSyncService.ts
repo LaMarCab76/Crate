@@ -72,9 +72,11 @@ import {
 import { sidecarPathFor } from '../lyrics/providers/SidecarLrcProvider'
 import { sanitizeLegacyDeviceSyncJournal } from './deviceSyncJournalSanitizer'
 import {
+  canJoinActiveDeviceScan,
   collectDeviceAudioFiles,
   DEVICE_SCAN_METADATA_CONCURRENCY,
   scanDeviceAudioTree,
+  type DeviceScanRequestIdentity,
   type DeviceScanTrackMetadata,
   type DeviceScanInternalResult,
 } from './deviceScanCore'
@@ -282,6 +284,7 @@ interface ActiveDeviceScan {
   promise: Promise<ScanInternalResult>
   progress: boolean
   lastProgress: DeviceScanProgressEvent | null
+  request: DeviceScanRequestIdentity
 }
 
 const PLAN_CACHE_TTL_MS = 30 * 60 * 1000
@@ -3472,21 +3475,38 @@ export class DeviceSyncService {
     },
   ): Promise<ScanInternalResult> {
     const musicRoot = this.deviceMusicRoot(row)
+    const request: DeviceScanRequestIdentity = {
+      musicRoot,
+      changedSinceMs: typeof options?.changedSinceMs === 'number' && Number.isFinite(options.changedSinceMs)
+        ? options.changedSinceMs
+        : null,
+    }
     const existing = this.activeDeviceScans.get(row.id)
     if (existing) {
-      if (sendProgress) {
-        existing.progress = true
-        if (existing.lastProgress) {
-          this.emitDeviceScanProgress(existing.lastProgress, true)
+      if (canJoinActiveDeviceScan(existing.request, request)) {
+        if (sendProgress) {
+          existing.progress = true
+          if (existing.lastProgress) {
+            this.emitDeviceScanProgress(existing.lastProgress, true)
+          }
         }
+        return existing.promise
       }
-      return existing.promise
+      // Different roots/baselines and full-after-incremental requests are not
+      // interchangeable. Serialize them, then give the caller a fresh pass.
+      try {
+        await existing.promise
+      } catch {
+        // The incompatible caller still gets its own fresh attempt below.
+      }
+      return this.scanDeviceRow(row, sendProgress, options)
     }
 
     const active: ActiveDeviceScan = {
       promise: null as unknown as Promise<ScanInternalResult>,
       progress: sendProgress,
       lastProgress: null,
+      request,
     }
     const emitProgress = (event: DeviceScanProgressEvent, force: boolean) => {
       active.lastProgress = event

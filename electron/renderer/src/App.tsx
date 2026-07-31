@@ -120,12 +120,14 @@ function DeviceNavbarSubTabs<Key extends string>({
   ariaLabel,
   onChange,
   variant = 'secondary',
+  idPrefix,
 }: {
   tabs: Array<DeviceNavbarSubTab<Key>>
   active: Key
   ariaLabel: string
   onChange: (tab: Key) => void
   variant?: 'primary' | 'secondary'
+  idPrefix?: string
 }) {
   return (
     <nav
@@ -133,14 +135,32 @@ function DeviceNavbarSubTabs<Key extends string>({
       role="tablist"
       aria-label={ariaLabel}
     >
-      {tabs.map(tab => (
+      {tabs.map((tab, index) => (
         <button
           key={tab.key}
           type="button"
           role="tab"
+          id={idPrefix ? `${idPrefix}-tab-${tab.key}` : undefined}
+          aria-controls={idPrefix ? `${idPrefix}-panel` : undefined}
           aria-selected={active === tab.key}
+          tabIndex={active === tab.key ? 0 : -1}
+          data-device-subtab={tab.key}
           className={`device-section-tab ${active === tab.key ? 'active' : ''}`}
           onClick={() => onChange(tab.key)}
+          onKeyDown={event => {
+            let nextIndex: number | null = null
+            if (event.key === 'ArrowRight') nextIndex = (index + 1) % tabs.length
+            else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + tabs.length) % tabs.length
+            else if (event.key === 'Home') nextIndex = 0
+            else if (event.key === 'End') nextIndex = tabs.length - 1
+            if (nextIndex == null) return
+            event.preventDefault()
+            const tablist = event.currentTarget.parentElement
+            onChange(tabs[nextIndex].key)
+            window.requestAnimationFrame(() => {
+              tablist?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[nextIndex]?.focus()
+            })
+          }}
         >
           <Icon name={tab.icon} size={14} />
           {tab.label}
@@ -201,6 +221,7 @@ const DEVICE_SYNC_SUBTABS: Array<DeviceNavbarSubTab<DeviceSyncTab>> = [
   { key: 'sync', label: 'Sincronización', icon: 'sync' },
   { key: 'optimize', label: 'Optimizar', icon: 'sparkle' },
   { key: 'config', label: 'Configuración', icon: 'sliders' },
+  { key: 'advanced', label: 'Avanzado', icon: 'activity' },
 ]
 
 const SETTINGS_TABS: Array<DeviceNavbarSubTab<SettingsMainTab>> = [
@@ -1116,6 +1137,7 @@ export default function App() {
                 tabs={DEVICE_SYNC_SUBTABS}
                 active={syncTab}
                 ariaLabel="Vista de sincronización"
+                idPrefix="device-sync"
                 onChange={setSyncTab}
               />
             )}

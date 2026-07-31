@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
-import { findUnknownVolumeByRoot, mergeDeviceRecord } from './deviceStore.ts'
+import { findUnknownVolumeByRoot, mergeDeviceRecord, useDeviceStore } from './deviceStore.ts'
 
 const deviceStoreSource = readFileSync(new URL('./deviceStore.ts', import.meta.url), 'utf8')
 
@@ -137,4 +137,180 @@ test('planSync passes fullSync into the renderer API payload', () => {
     deviceStoreSource.includes('fullSync,'),
     'store should include fullSync in planSync payload',
   )
+  assert.ok(
+    deviceStoreSource.includes("const requestVersion = beginDeviceRequest('plan', deviceId)"),
+    'each plan calculation should receive a monotonic request version',
+  )
+  assert.ok(
+    deviceStoreSource.includes("!isCurrentDeviceRequest('plan', deviceId, requestVersion) || get().selectedDeviceId !== deviceId"),
+    'a stale plan response must not replace the latest selected-device plan',
+  )
+  assert.ok(
+    deviceStoreSource.includes("if (deviceId) beginDeviceRequest('plan', deviceId)"),
+    'clearing a plan should invalidate any calculation still in flight',
+  )
+})
+
+test('only the newest overlapping plan calculation updates the store', async () => {
+  const pending = []
+  globalThis.window = {
+    api: {
+      devices: {
+        planSync: payload => new Promise(resolve => pending.push({ payload, resolve })),
+      },
+    },
+  }
+  useDeviceStore.setState({ selectedDeviceId: 'dap', plan: null, loading: false, error: null })
+
+  try {
+    const first = useDeviceStore.getState().planSync('bidirectional_safe', '/Music', false)
+    const second = useDeviceStore.getState().planSync('bidirectional_safe', '/Music', true)
+    assert.equal(pending.length, 2)
+
+    pending[1].resolve({ id: 'newest', deviceId: 'dap', actions: [] })
+    await second
+    pending[0].resolve({ id: 'stale', deviceId: 'dap', actions: [] })
+    await first
+
+    assert.equal(useDeviceStore.getState().plan?.id, 'newest')
+    assert.equal(useDeviceStore.getState().loading, false)
+    assert.equal(pending[1].payload.fullSync, true)
+  } finally {
+    delete globalThis.window
+    useDeviceStore.setState({ selectedDeviceId: null, plan: null, loading: false, error: null })
+  }
+})
+
+test('clearing an in-flight plan ignores its response and releases loading', async () => {
+  let resolvePlan
+  globalThis.window = {
+    api: {
+      devices: {
+        planSync: () => new Promise(resolve => { resolvePlan = resolve }),
+      },
+    },
+  }
+  useDeviceStore.setState({ selectedDeviceId: 'dap', plan: null, loading: false, error: null })
+
+  try {
+    const pendingPlan = useDeviceStore.getState().planSync('bidirectional_safe', '/Music', false)
+    assert.equal(useDeviceStore.getState().loading, true)
+    useDeviceStore.getState().clearPlan()
+    assert.equal(useDeviceStore.getState().loading, false)
+
+    resolvePlan({ id: 'late', deviceId: 'dap', actions: [] })
+    await pendingPlan
+    assert.equal(useDeviceStore.getState().plan, null)
+    assert.equal(useDeviceStore.getState().loading, false)
+  } finally {
+    delete globalThis.window
+    useDeviceStore.setState({ selectedDeviceId: null, plan: null, loading: false, error: null })
+  }
+})
+
+test('switching A to B and back invalidates the original A plan request', async () => {
+  let resolvePlan
+  globalThis.window = {
+    api: {
+      devices: {
+        planSync: () => new Promise(resolve => { resolvePlan = resolve }),
+      },
+    },
+  }
+  useDeviceStore.setState({ selectedDeviceId: 'a', plan: null, loading: false, error: null })
+
+  try {
+    const staleA = useDeviceStore.getState().planSync('bidirectional_safe', '/Music/A', false)
+    useDeviceStore.getState().selectDevice('b')
+    useDeviceStore.getState().selectDevice('a')
+    resolvePlan({ id: 'stale-a', deviceId: 'a', actions: [] })
+    await staleA
+
+    assert.equal(useDeviceStore.getState().selectedDeviceId, 'a')
+    assert.equal(useDeviceStore.getState().plan, null)
+    assert.equal(useDeviceStore.getState().loading, false)
+  } finally {
+    delete globalThis.window
+    useDeviceStore.setState({ selectedDeviceId: null, plan: null, loading: false, error: null })
+  }
+})
+
+test('a stale plan rejection cannot overwrite a newer successful plan', async () => {
+  const pending = []
+  globalThis.window = {
+    api: {
+      devices: {
+        planSync: () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
+      },
+    },
+  }
+  useDeviceStore.setState({ selectedDeviceId: 'dap', plan: null, loading: false, error: null })
+
+  try {
+    const stale = useDeviceStore.getState().planSync('bidirectional_safe', '/Music', false)
+    const latest = useDeviceStore.getState().planSync('bidirectional_safe', '/Music', true)
+    pending[1].resolve({ id: 'latest', deviceId: 'dap', actions: [] })
+    await latest
+    pending[0].reject(new Error('stale failure'))
+    await assert.rejects(stale, /stale failure/)
+
+    assert.equal(useDeviceStore.getState().plan?.id, 'latest')
+    assert.equal(useDeviceStore.getState().loading, false)
+    assert.equal(useDeviceStore.getState().error, null)
+  } finally {
+    delete globalThis.window
+    useDeviceStore.setState({ selectedDeviceId: null, plan: null, loading: false, error: null })
+  }
+})
+
+test('a completed apply can calculate and expose a second plan without remounting the store', async () => {
+  globalThis.window = {
+    api: {
+      devices: {
+        applySync: async planId => ({
+          planId,
+          deviceId: 'dap',
+          applied: 1,
+          failed: [],
+          completedAt: '2026-07-31T20:00:00.000Z',
+        }),
+        list: async () => [],
+        listPendingJournals: async () => [],
+        library: async () => { throw new Error('not needed for this cycle test') },
+        planSync: async () => ({ id: 'second-plan', deviceId: 'dap', actions: [] }),
+      },
+    },
+  }
+  useDeviceStore.setState({
+    selectedDeviceId: 'dap',
+    plan: { id: 'first-plan', deviceId: 'dap', actions: [] },
+    syncProgress: {
+      deviceId: 'dap',
+      planId: 'first-plan',
+      phase: 'complete',
+      completed: 1,
+      total: 1,
+    },
+    loading: false,
+    error: null,
+  })
+
+  try {
+    await useDeviceStore.getState().applyPlan('first-plan')
+    assert.equal(useDeviceStore.getState().plan, null)
+    assert.equal(useDeviceStore.getState().syncProgress, null)
+
+    await useDeviceStore.getState().planSync('bidirectional_safe', '/Music', false)
+    assert.equal(useDeviceStore.getState().plan?.id, 'second-plan')
+    assert.equal(useDeviceStore.getState().loading, false)
+  } finally {
+    delete globalThis.window
+    useDeviceStore.setState({
+      selectedDeviceId: null,
+      plan: null,
+      syncProgress: null,
+      loading: false,
+      error: null,
+    })
+  }
 })

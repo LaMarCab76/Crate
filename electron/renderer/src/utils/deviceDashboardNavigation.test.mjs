@@ -25,6 +25,29 @@ test('device Sync keeps the primary device navbar above its subtabs', () => {
   assert.ok(!syncSubtabsBlock.includes('variant="primary"'), 'Sync subtabs should use the secondary navbar row styling')
 })
 
+test('device Sync exposes full resync in a final Advanced subtab', () => {
+  const syncTabsStart = appSource.indexOf('const DEVICE_SYNC_SUBTABS')
+  const syncTabsEnd = appSource.indexOf('const SETTINGS_TABS', syncTabsStart)
+  const syncTabs = appSource.slice(syncTabsStart, syncTabsEnd)
+  const configIndex = syncTabs.indexOf("{ key: 'config', label: 'Configuración'")
+  const advancedIndex = syncTabs.indexOf("{ key: 'advanced', label: 'Avanzado'")
+
+  assert.ok(syncTabsStart >= 0 && syncTabsEnd > syncTabsStart, 'Sync subtab definition should be discoverable')
+  assert.ok(configIndex >= 0, 'Sync should keep its configuration subtab')
+  assert.ok(advancedIndex > configIndex, 'Advanced should be the final sync subtab after Configuration')
+})
+
+test('shared device subtabs support roving keyboard focus', () => {
+  assert.ok(appSource.includes('tabIndex={active === tab.key ? 0 : -1}'), 'Only the active tab should stay in the tab order')
+  assert.ok(appSource.includes("event.key === 'ArrowRight'"), 'Right arrow should advance through tabs')
+  assert.ok(appSource.includes("event.key === 'ArrowLeft'"), 'Left arrow should move back through tabs')
+  assert.ok(appSource.includes("event.key === 'Home'"), 'Home should focus the first tab')
+  assert.ok(appSource.includes("event.key === 'End'"), 'End should focus the last tab')
+  assert.ok(appSource.includes('data-device-subtab={tab.key}'), 'Programmatic tab changes should have a stable focus target')
+  assert.ok(appSource.includes('aria-controls={idPrefix ? `${idPrefix}-panel` : undefined}'), 'Associated tab sets should identify their controlled panel')
+  assert.ok(appSource.includes('idPrefix="device-sync"'), 'Device Sync should opt into the tab-to-panel association')
+})
+
 test('DevicesView no longer renders old inline segmented tabs', () => {
   assert.ok(!devicesSource.includes('device-dashboard-tabs'), 'DevicesView should not render the old segmented tab row')
   assert.ok(!devicesSource.includes('onDashboardTabChange'), 'DevicesView should not own tab changes locally')
