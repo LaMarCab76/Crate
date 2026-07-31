@@ -50,3 +50,27 @@ test('activity rows navigate through a primary action without duplicating button
   assert.ok(centerSource.includes('onKeyDown={onRowKeyDown}'), 'Rows should support keyboard navigation')
   assert.ok(css.includes('.activity-center-row.actionable'), 'Clickable rows should expose a visual affordance')
 })
+
+test('completed activities become green confirmations without a progress bar', () => {
+  const centerSource = readFileSync(new URL('../components/ActivityCenter.tsx', import.meta.url), 'utf8')
+  assert.match(
+    centerSource,
+    /progress && item\.status !== 'success'/,
+    'Completed activities should not keep rendering their progress bar',
+  )
+  assert.match(
+    centerSource,
+    /item\.status === 'success' && <Icon name="check"/,
+    'Completed activities should show a check beside their status',
+  )
+  assert.match(
+    css,
+    /\.activity-center-row\.done[\s\S]*?background:\s*var\(--activity-success-bg\)/,
+    'Completed activity rows should use the semantic green background',
+  )
+  assert.match(
+    css,
+    /\.activity-center-status\.done\s*\{[\s\S]*?color:\s*var\(--activity-success\)/,
+    'The completed status and check should use the semantic green color',
+  )
+})
