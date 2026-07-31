@@ -229,7 +229,7 @@ app.whenReady().then(async () => {
     }
     // The first backfill stays off the critical startup path. The duplicate
     // runtime imports portable pair decisions before evaluating candidates.
-    getDuplicateRuntime().scheduleAll({ delayMs: 0 })
+    getDuplicateRuntime().scheduleAll({ delayMs: 0, activityOrigin: 'startup' })
     getFolderWatcher().startAll()
     reconciler.startBackgroundSweep()
     const backfill = getLyricsBackfillService()

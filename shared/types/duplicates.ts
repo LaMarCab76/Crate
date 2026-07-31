@@ -152,6 +152,8 @@ export interface DuplicateSummary {
   analyzingCount: number
   failedCount: number
   lastAnalyzedAt: string | null
+  /** Present while a runtime pass is active so Activity Center can recover late subscription state. */
+  activityOrigin?: 'startup' | 'background'
   /** Additive IPC field; absent means the analysis engine is available. */
   blocker?: DuplicateAnalysisBlocker
 }
@@ -192,6 +194,8 @@ export type DuplicateAnalysisPhase =
   | 'error'
 
 export interface DuplicateAnalysisProgress {
+  /** Activity Center visibility; omitted by the detector and assigned by the runtime. */
+  activityOrigin?: 'startup' | 'background'
   phase: DuplicateAnalysisPhase
   completed: number
   total: number

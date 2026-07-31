@@ -429,6 +429,14 @@ export function activityFromImportComplete(event: ImportCompleteEvent): Activity
   }
 }
 
+export function shouldShowLibraryActivity(
+  event: Pick<ImportProgressEvent, 'scanReason'>,
+): boolean {
+  // ImportService events have no scanReason and remain user-visible. Reconciler
+  // passes only surface during startup; watch/manual/periodic scans stay quiet.
+  return event.scanReason == null || event.scanReason === 'startup'
+}
+
 export function activityFromDuplicateSummary(summary: DuplicateSummary): ActivityUpsert | null {
   if (!summary.running && summary.pendingCount === 0 && summary.failedCount === 0 && !summary.blocker) return null
   const progress = summary.progress
@@ -525,6 +533,32 @@ export function activityFromDuplicateProgress(event: DuplicateAnalysisProgress):
     },
     actionIds: ['open-duplicates'],
   }
+}
+
+export function shouldShowDuplicateProgressActivity(
+  event: Pick<DuplicateAnalysisProgress, 'phase' | 'activityOrigin'>,
+): boolean {
+  // The startup pass explains initial work. Later maintenance stays quiet, but
+  // errors remain actionable regardless of which pass produced them.
+  return event.activityOrigin === 'startup' || event.phase === 'error'
+}
+
+export function shouldShowDuplicateSummaryActivity(
+  summary: Pick<DuplicateSummary, 'running' | 'activityOrigin'>,
+): boolean {
+  return !summary.running || summary.activityOrigin === 'startup'
+}
+
+export function duplicateSummaryReadState(
+  previous: ActivityItem | undefined,
+  next: ActivityUpsert,
+): boolean | undefined {
+  if (!previous) return undefined
+  const changed = previous.status !== next.status
+    || previous.title !== next.title
+    || previous.detail !== (next.detail ?? null)
+  const newlyActionable = (next.status === 'error' || next.status === 'waiting') && changed
+  return newlyActionable ? undefined : previous.read
 }
 
 export function activityFromLyricsSelectionProgress(event: LyricsSelectionProgress): ActivityUpsert {
@@ -673,9 +707,20 @@ function recordUpdateState(state: AppUpdateState): void {
 }
 
 function recordDuplicateSummary(summary: DuplicateSummary): void {
+  // A late renderer subscription can recover the visible startup pass from the
+  // summary. Running background maintenance remains silent.
+  if (!shouldShowDuplicateSummaryActivity(summary)) return
   const activity = activityFromDuplicateSummary(summary)
-  if (activity) useActivityCenterStore.getState().upsert(activity)
-  else useActivityCenterStore.getState().remove('duplicates:pending')
+  const store = useActivityCenterStore.getState()
+  const previous = store.items.find(item => item.id === 'duplicates:pending')
+  if (activity) {
+    store.upsert({
+      ...activity,
+      read: duplicateSummaryReadState(previous, activity),
+    })
+  } else if (previous?.status !== 'success') {
+    store.remove('duplicates:pending')
+  }
 }
 
 function refreshDuplicateActivity(): void {
@@ -811,10 +856,14 @@ function initializeActivityCenterListeners(): void {
   }
 
   const offImportProgress = window.api.library.onImportProgress(event => {
-    useActivityCenterStore.getState().upsert(activityFromImportProgress(event))
+    if (shouldShowLibraryActivity(event)) {
+      useActivityCenterStore.getState().upsert(activityFromImportProgress(event))
+    }
   })
   const offImportComplete = window.api.library.onImportComplete(event => {
-    useActivityCenterStore.getState().upsert(activityFromImportComplete(event))
+    if (shouldShowLibraryActivity(event)) {
+      useActivityCenterStore.getState().upsert(activityFromImportComplete(event))
+    }
   })
   const offLyrics = window.api.lyrics.onSelectionProgress(event => {
     useActivityCenterStore.getState().upsert(activityFromLyricsSelectionProgress(event))
@@ -840,8 +889,9 @@ function initializeActivityCenterListeners(): void {
   })
   const offDuplicatesChanged = window.api.duplicates.onChanged(refreshDuplicateActivity)
   const offDuplicatesProgress = window.api.duplicates.onProgress(event => {
-    useActivityCenterStore.getState().upsert(activityFromDuplicateProgress(event))
-    if (event.phase === 'complete' || event.phase === 'error') refreshDuplicateActivity()
+    if (shouldShowDuplicateProgressActivity(event)) {
+      useActivityCenterStore.getState().upsert(activityFromDuplicateProgress(event))
+    }
   })
 
   void window.api.devices.volumes().then(recordVolumeSnapshot).catch(() => undefined)
