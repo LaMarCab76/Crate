@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react'
-import type { PlayerTintSource, Tweak } from '@renderer/stores/settingsStore'
+import type { ArtistCreditSource, PlayerTintSource, Tweak } from '@renderer/stores/settingsStore'
 import type { DbFolder } from '@shared/types/db'
 import { useEqStore } from '@renderer/stores/eqStore'
 import { useLevelerStore } from '@renderer/stores/levelerStore'
@@ -380,6 +380,12 @@ function LibraryFoldersPanel() {
 }
 
 function AppearanceSection({ tweak, setTweak }: Props) {
+  const artistCreditOptions: Array<{ value: ArtistCreditSource, label: string }> = [
+    { value: 'album', label: 'Solo álbum' },
+    { value: 'both', label: 'Álbum y temas' },
+    { value: 'track', label: 'Solo temas' },
+  ]
+
   return (
     <section className="set-section">
       <h2>Apariencia</h2>
@@ -438,6 +444,26 @@ function AppearanceSection({ tweak, setTweak }: Props) {
             aria-label="Barra lateral translúcida"
             tabIndex={0}
           />
+        </div>
+        <div className="set-row artist-credit-source-setting">
+          <div>
+            <div className="lbl">Artistas visibles</div>
+            <div className="sub">Elegí qué créditos generan artistas: el del álbum, los de cada tema o ambos.</div>
+          </div>
+          <div className="rule-row artist-credit-source-options" role="radiogroup" aria-label="Origen de los artistas visibles">
+            {artistCreditOptions.map(option => (
+              <button
+                key={option.value}
+                className={`select ${tweak.artistCreditSource === option.value ? 'active' : ''}`}
+                type="button"
+                role="radio"
+                aria-checked={tweak.artistCreditSource === option.value}
+                onClick={() => setTweak('artistCreditSource', option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
     </section>

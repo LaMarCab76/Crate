@@ -301,6 +301,7 @@ export default function App() {
   const subscribeMigrations = useMigrationStore(s => s.subscribe)
   const loadPendingDeviceJournals = useDeviceStore(s => s.loadPendingJournals)
   const refreshDeviceVolumes = useDeviceStore(s => s.refreshVolumes)
+  const refreshUnknownVolume = useDeviceStore(s => s.refreshUnknownVolume)
   const ignoreVolume = useDeviceStore(s => s.ignoreVolume)
   const selectedDeviceId = useDeviceStore(s => s.selectedDeviceId)
   const activityItems = useActivityCenterStore(s => s.items)
@@ -315,7 +316,6 @@ export default function App() {
   const clearResolvedActivity = useActivityCenterStore(s => s.clearResolved)
   const completeActivity = useActivityCenterStore(s => s.completeActivity)
   const upsertActivity = useActivityCenterStore(s => s.upsert)
-  const candidates = useDeviceStore(s => s.candidates)
   const nowTrack = usePlaybackStore(s => s.currentTrack)
   const playbackStatus = usePlaybackStore(s => s.status)
   const nowAlbum = useAlbumByUiId(nowTrack?.albumId)
@@ -590,8 +590,16 @@ export default function App() {
   const handleActivityAction = async (actionId: ActivityActionId, item: ActivityItem) => {
     const deviceId = typeof item.metadata.deviceId === 'string' ? item.metadata.deviceId : null
     const rootPath = typeof item.metadata.rootPath === 'string' ? item.metadata.rootPath : null
-    const pathToken = typeof item.metadata.pathToken === 'string' ? item.metadata.pathToken : null
     const volumeName = typeof item.metadata.volumeName === 'string' ? item.metadata.volumeName : undefined
+
+    const currentUnknownVolume = async () => {
+      if (!rootPath) throw new Error('No se pudo identificar el volumen de esta actividad.')
+      const volume = await refreshUnknownVolume(rootPath)
+      if (!volume) {
+        completeActivity(item.id, 'El volumen ya fue clasificado o no está conectado.')
+      }
+      return volume
+    }
 
     switch (actionId) {
       case 'open-device':
@@ -631,23 +639,25 @@ export default function App() {
         finishActivityNavigation()
         break
       case 'connect-device':
-        if (rootPath && pathToken) {
-          const hasCrateState = typeof item.metadata.hasCrateState === 'boolean'
-            ? item.metadata.hasCrateState
-            : candidates.some(candidate => candidate.rootPath === rootPath && candidate.hasCrateState)
+        try {
+          const volume = await currentUnknownVolume()
+          if (!volume) break
           setActivityFullscreen(false)
           setConnectTarget({
-            token: pathToken,
-            displayPath: rootPath,
-            name: volumeName,
-            hasCrateState,
+            token: volume.token,
+            displayPath: volume.rootPath,
+            name: volumeName ?? volume.name,
+            hasCrateState: false,
           })
+        } catch (err) {
+          activityError(item, err)
         }
         break
       case 'add-library':
-        if (!pathToken) break
         try {
-          await addFolder(pathToken)
+          const volume = await currentUnknownVolume()
+          if (!volume) break
+          await addFolder(volume.token)
           await refreshDeviceVolumes()
           completeActivity(item.id, 'Volumen agregado como biblioteca.')
         } catch (err) {
@@ -655,9 +665,10 @@ export default function App() {
         }
         break
       case 'ignore-volume':
-        if (!pathToken) break
         try {
-          await ignoreVolume(pathToken)
+          const volume = await currentUnknownVolume()
+          if (!volume) break
+          await ignoreVolume(volume.token)
           completeActivity(item.id, 'Volumen ignorado.')
         } catch (err) {
           activityError(item, err)

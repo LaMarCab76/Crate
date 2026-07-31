@@ -71,6 +71,7 @@ export interface Artist {
   palette: [string, string, string]
   pattern: Pattern
   artworkPath?: string
+  artworkSourceType?: string
   bio?: string
   favorite?: boolean
   trackCount: number

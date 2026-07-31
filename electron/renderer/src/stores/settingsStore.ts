@@ -14,6 +14,7 @@ import type { SourceDisplayPreferences } from '@shared/types/library-locations'
 export type Layout = 'classic' | 'editorial' | 'dense'
 export type Density = 'compact' | 'regular' | 'comfy'
 export type ArtistsMode = 'manual' | 'topPlays'
+export type ArtistCreditSource = 'album' | 'both' | 'track'
 export type PlayerTintSource = 'default' | 'preset' | 'custom' | 'artwork'
 
 export interface Tweak {
@@ -26,6 +27,7 @@ export interface Tweak {
   artistsPrincipalOnly: boolean
   artistsMode: ArtistsMode
   artistsTopN: number
+  artistCreditSource: ArtistCreditSource
   libraryBackup: boolean
   libraryScanLogRetentionDays: number | null
   deviceArtworkMaxEdge: number
@@ -70,6 +72,7 @@ const TWEAK_DEFAULTS: Tweak = {
   artistsPrincipalOnly: false,
   artistsMode: 'manual',
   artistsTopN: 20,
+  artistCreditSource: 'track',
   libraryBackup: true,
   libraryScanLogRetentionDays: 30,
   deviceArtworkMaxEdge: DEVICE_ARTWORK_EDGE_DEFAULT,
@@ -117,6 +120,9 @@ function load(): Tweak {
     if (!raw) return TWEAK_DEFAULTS
     const parsed = JSON.parse(raw) as Partial<Tweak> & { bgSource?: string; fullPlayerFileDataVisible?: unknown; soundcheck?: unknown }
     const merged = { ...TWEAK_DEFAULTS, ...parsed } as Tweak & { fullPlayerFileDataVisible?: unknown; soundcheck?: unknown }
+    if (!['album', 'both', 'track'].includes(merged.artistCreditSource)) {
+      merged.artistCreditSource = TWEAK_DEFAULTS.artistCreditSource
+    }
     merged.sourceDisplay = {
       ...TWEAK_DEFAULTS.sourceDisplay,
       ...(parsed.sourceDisplay ?? {}),

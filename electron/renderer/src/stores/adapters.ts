@@ -180,7 +180,8 @@ export function dbToUiArtist(ar: DbArtist, albums: Album[] = []): Artist {
     seed,
     palette: palette(seed),
     pattern: patternFor(seed),
-    artworkPath: latestArt,
+    artworkPath: ar.artwork_path ?? latestArt,
+    artworkSourceType: ar.artwork_source_type ?? undefined,
     favorite: ar.is_favorite === 1,
     trackCount: ar.track_count,
   }

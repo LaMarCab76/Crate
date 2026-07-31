@@ -72,12 +72,12 @@ export function AlbumView({ album }: Props) {
           <h1>{a.title}</h1>
           <div className="credits">
             <a>{a.artist}</a> · {a.year} · {a.tracks.length} tracks · {fmtTime(totalDur)} · {fmtFileSize(totalSize)}
-          </div>
-          <div className="album-source-summary">
+            <span className="album-credit-separator" aria-hidden>·</span>
             <SourceBadge
               folderIds={sourceIds}
               provider={a.tracks[0]?.provider}
               appearance="plain"
+              className="album-source-inline"
             />
           </div>
           {isUnresolvedAlbum && (

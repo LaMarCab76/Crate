@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, shell } from 'electron'
+import { BrowserWindow, dialog, nativeImage, shell } from 'electron'
 import { secureIpcMain as ipcMain } from './secureIpc'
 import { existsSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
@@ -19,6 +19,7 @@ import { getOneDriveLibraryService } from '../cloud/OneDriveLibraryService'
 import { getPathAuthorizationService } from '../security/PathAuthorizationService'
 import { getLocalFileAccessService } from '../security/localFileAccessRuntime'
 import { sidecarPathFor } from '../lyrics/providers/SidecarLrcProvider'
+import { artworkAbsolutePath, saveArtwork } from '../library/ArtworkCache'
 import { broadcast } from './events'
 import { assertId, assertNonEmptyString, sanitizeIds } from './validation'
 import type { DbTrack } from '@shared/types/db'
@@ -460,6 +461,78 @@ export function registerLibraryChannel(): void {
     getLibraryBackup().scheduleWriteForArtist(payload.id)
     getCloudManifestService().scheduleWriteForArtist(payload.id)
     broadcast('library:changed', { reason: 'artist-favorite' })
+  })
+
+  ipcMain.handle('artist:setArtworkFromAlbum', (_, payload: { artistId: number; albumId: number }) => {
+    const artistId = assertId(payload?.artistId, 'artistId')
+    const albumId = assertId(payload?.albumId, 'albumId')
+    if (!repos.artists.getById(artistId)) throw new Error('El artista ya no existe.')
+
+    const belongsToArtist = repos.entityTracks
+      .getTracksForArtist(artistId)
+      .some(track => track.album_id === albumId)
+    if (!belongsToArtist) throw new Error('El álbum no pertenece a este artista.')
+
+    const album = repos.albums.getById(albumId)
+    const artworkPath = album?.artwork_path
+      ?? repos.entityTracks.getTracksForAlbum(albumId).find(track => track.artwork_path)?.artwork_path
+      ?? null
+    if (
+      !artworkPath ||
+      basename(artworkPath) !== artworkPath ||
+      !existsSync(artworkAbsolutePath(artworkPath))
+    ) {
+      throw new Error('La portada elegida ya no está disponible.')
+    }
+
+    repos.artists.setArtwork(artistId, artworkPath, 'album')
+    broadcast('library:changed', { reason: 'artist-artwork' })
+    return { artworkPath }
+  })
+
+  ipcMain.handle('artist:pickArtwork', async (event, payload: { artistId: number }) => {
+    const artistId = assertId(payload?.artistId, 'artistId')
+    if (!repos.artists.getById(artistId)) throw new Error('El artista ya no existe.')
+
+    const owner = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const result = owner
+      ? await dialog.showOpenDialog(owner, {
+          title: 'Elegir imagen del artista',
+          properties: ['openFile'],
+          filters: [{ name: 'Imágenes', extensions: ['jpg', 'jpeg', 'png', 'webp', 'heic'] }],
+        })
+      : await dialog.showOpenDialog({
+          title: 'Elegir imagen del artista',
+          properties: ['openFile'],
+          filters: [{ name: 'Imágenes', extensions: ['jpg', 'jpeg', 'png', 'webp', 'heic'] }],
+        })
+    if (result.canceled || result.filePaths.length === 0) {
+      return { canceled: true, artworkPath: null }
+    }
+
+    let image = nativeImage.createFromPath(resolve(result.filePaths[0]))
+    if (image.isEmpty()) throw new Error('El archivo elegido no es una imagen compatible.')
+    const size = image.getSize()
+    const longestEdge = Math.max(size.width, size.height)
+    if (longestEdge > 2400) {
+      const scale = 2400 / longestEdge
+      image = image.resize({
+        width: Math.max(1, Math.round(size.width * scale)),
+        height: Math.max(1, Math.round(size.height * scale)),
+        quality: 'best',
+      })
+    }
+    const saved = saveArtwork(image.toPNG(), 'image/png')
+    repos.artists.setArtwork(artistId, saved.filename, 'custom')
+    broadcast('library:changed', { reason: 'artist-artwork' })
+    return { canceled: false, artworkPath: saved.filename }
+  })
+
+  ipcMain.handle('artist:resetArtwork', (_, payload: { artistId: number }) => {
+    const artistId = assertId(payload?.artistId, 'artistId')
+    if (!repos.artists.getById(artistId)) throw new Error('El artista ya no existe.')
+    repos.artists.setArtwork(artistId, null, null)
+    broadcast('library:changed', { reason: 'artist-artwork' })
   })
 
   // Renderer-side preference push. The renderer reads its tweak from

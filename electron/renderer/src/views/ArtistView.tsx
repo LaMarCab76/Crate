@@ -17,7 +17,7 @@ import { fmtFileSize, fmtTotal } from '@renderer/utils/format'
 import { toggleArtistFavorite, useArtistByUiId } from '@renderer/stores/libraryStore'
 import { extractDominantColor } from '@renderer/utils/colorExtract'
 import { useQueueStore } from '@renderer/stores/queueStore'
-import { SourceBadge } from '@renderer/components/SourceBadge'
+import { ArtistArtworkPicker } from '@renderer/components/ArtistArtworkPicker'
 
 interface Props {
   artist: Artist
@@ -69,8 +69,6 @@ function ArtistAlbumBlock({
   )
   const total = tracks.reduce((s, t) => s + t.d, 0)
   const totalSize = tracks.reduce((s, t) => s + (t.fileSize ?? 0), 0)
-  const sourceIds = [...new Set(tracks.map(track => track.folderId).filter((id): id is number => id != null))]
-
   useEffect(() => {
     setTint(al.palette[1])
     if (!al.artworkPath) return
@@ -108,7 +106,6 @@ function ArtistAlbumBlock({
             {al.title}
           </div>
           <div className="aa-sub">{tracks.length} tracks · {fmtTotal(total)} · {fmtFileSize(totalSize)}</div>
-          <SourceBadge folderIds={sourceIds} provider={tracks[0]?.provider} compact />
         </div>
         <div className="aa-actions">
           <button className="btn sm" type="button" onClick={() => { if (tracks[0]) void playNow(tracks[0], tracks) }}><Icon name="play" size={11} /> Play</button>
@@ -129,7 +126,7 @@ function ArtistAlbumBlock({
         showPlays={false}
         showSize
         showTrackNo
-        showSource={sourceIds.length > 1}
+        showSource={false}
         compact
       />
     </div>
@@ -138,6 +135,7 @@ function ArtistAlbumBlock({
 
 export function ArtistView({ artist, onSelectAlbum }: Props) {
   const [mode, setMode] = useState<'discography' | 'albums'>('discography')
+  const [artworkPickerOpen, setArtworkPickerOpen] = useState(false)
   const fresh = useArtistByUiId(artist?.id)
   const ar = fresh ?? artist
   const albumActions = useAlbumActions()
@@ -153,8 +151,6 @@ export function ArtistView({ artist, onSelectAlbum }: Props) {
   )
 
   const totalPlays = allTracks.reduce((s, t) => s + t.plays, 0)
-  const artistSourceIds = [...new Set(allTracks.map(track => track.folderId).filter((id): id is number => id != null))]
-
   if (!ar) return null
 
   return (
@@ -163,6 +159,17 @@ export function ArtistView({ artist, onSelectAlbum }: Props) {
         <div className="bg">
           <Artwork album={ar} radius={0} />
         </div>
+        {ar.dbId != null && (
+          <button
+            className="artist-artwork-edit"
+            type="button"
+            aria-haspopup="dialog"
+            onClick={() => setArtworkPickerOpen(true)}
+          >
+            <Icon name="edit" size={13} />
+            <span>Cambiar imagen</span>
+          </button>
+        )}
         <div className="meta">
           <div className="kicker">Artist</div>
           <div className="artist-title-row">
@@ -182,67 +189,68 @@ export function ArtistView({ artist, onSelectAlbum }: Props) {
             {` · Álbumes ordenadas por ${albumSortLabel(prefs.albumSortBy)} (${prefs.albumSortDir})`}
             {` · Tracks ordenados por ${trackSortLabel(prefs.trackSortBy)} (${prefs.trackSortDir})`}
           </div>
-          <div style={{ marginTop: 9 }}>
-            <SourceBadge folderIds={artistSourceIds} provider={allTracks[0]?.provider} />
-          </div>
           <div style={{ display: 'flex', gap: 8, marginTop: 14, alignItems: 'center', flexWrap: 'wrap' }}>
             <button className="btn primary" type="button" onClick={() => { if (allTracks[0]) void playNow(allTracks[0], allTracks) }}><Icon name="play" size={12} /> Play</button>
             <button className="btn" type="button" onClick={() => { void playShuffled(allTracks) }}><Icon name="shuffle" size={14} /> Shuffle</button>
-            <div className="view-toggle" style={{ marginLeft: 'auto' }}>
-              <button className={mode === 'discography' ? 'on' : ''} onClick={() => setMode('discography')} title="Albums with tracks">
-                <Icon name="list" size={13} /> Discography
-              </button>
-              <button className={mode === 'albums' ? 'on' : ''} onClick={() => setMode('albums')} title="Albums only">
-                <Icon name="grid" size={13} /> Albums
-              </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="artist-view-controls">
+        <div aria-hidden />
+        <div className="view-toggle" role="group" aria-label="Vista del artista">
+          <button className={mode === 'discography' ? 'on' : ''} onClick={() => setMode('discography')} title="Álbumes con pistas">
+            <Icon name="list" size={13} /> Discografía
+          </button>
+          <button className={mode === 'albums' ? 'on' : ''} onClick={() => setMode('albums')} title="Sólo álbumes">
+            <Icon name="grid" size={13} /> Álbumes
+          </button>
+        </div>
+        <div className="actions list-toolbar artist-view-filter">
+          <ListPrefsMenu
+            buttonLabel="Filtro"
+            menuTitle="Artista"
+            onReset={() => setPrefs(defaults.artist)}
+          >
+            <div className="list-prefs-row">
+              <div className="list-prefs-label">Ordenar álbumes</div>
+              <div className="list-prefs-row-inline">
+                <select
+                  className="list-select"
+                  value={prefs.albumSortBy}
+                  onChange={e => setPrefs({ albumSortBy: e.target.value as ArtistAlbumSortBy })}
+                  aria-label="Ordenar álbumes"
+                >
+                  {ALBUM_SORT_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <SortDirectionButton
+                  direction={prefs.albumSortDir}
+                  onToggle={() => setPrefs({ albumSortDir: prefs.albumSortDir === 'asc' ? 'desc' : 'asc' })}
+                />
+              </div>
             </div>
-          </div>
-          <div className="actions list-toolbar" style={{ marginTop: 12, flexWrap: 'wrap' }}>
-            <ListPrefsMenu
-              buttonLabel="Filtro"
-              menuTitle="Artista"
-              onReset={() => setPrefs(defaults.artist)}
-            >
-              <div className="list-prefs-row">
-                <div className="list-prefs-label">Ordenar álbumes</div>
-                <div className="list-prefs-row-inline">
-                  <select
-                    className="list-select"
-                    value={prefs.albumSortBy}
-                    onChange={e => setPrefs({ albumSortBy: e.target.value as ArtistAlbumSortBy })}
-                    aria-label="Ordenar álbumes"
-                  >
-                    {ALBUM_SORT_OPTIONS.map(option => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                  <SortDirectionButton
-                    direction={prefs.albumSortDir}
-                    onToggle={() => setPrefs({ albumSortDir: prefs.albumSortDir === 'asc' ? 'desc' : 'asc' })}
-                  />
-                </div>
+            <div className="list-prefs-row">
+              <div className="list-prefs-label">Ordenar tracks</div>
+              <div className="list-prefs-row-inline">
+                <select
+                  className="list-select"
+                  value={prefs.trackSortBy}
+                  onChange={e => setPrefs({ trackSortBy: e.target.value as ArtistTrackSortBy })}
+                  aria-label="Ordenar tracks"
+                >
+                  {TRACK_SORT_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <SortDirectionButton
+                  direction={prefs.trackSortDir}
+                  onToggle={() => setPrefs({ trackSortDir: prefs.trackSortDir === 'asc' ? 'desc' : 'asc' })}
+                />
               </div>
-              <div className="list-prefs-row">
-                <div className="list-prefs-label">Ordenar tracks</div>
-                <div className="list-prefs-row-inline">
-                  <select
-                    className="list-select"
-                    value={prefs.trackSortBy}
-                    onChange={e => setPrefs({ trackSortBy: e.target.value as ArtistTrackSortBy })}
-                    aria-label="Ordenar tracks"
-                  >
-                    {TRACK_SORT_OPTIONS.map(option => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                  <SortDirectionButton
-                    direction={prefs.trackSortDir}
-                    onToggle={() => setPrefs({ trackSortDir: prefs.trackSortDir === 'asc' ? 'desc' : 'asc' })}
-                  />
-                </div>
-              </div>
-            </ListPrefsMenu>
-          </div>
+            </div>
+          </ListPrefsMenu>
         </div>
       </div>
 
@@ -274,15 +282,11 @@ export function ArtistView({ artist, onSelectAlbum }: Props) {
               </div>
               <div className="ti">{al.title}</div>
               <div className="su">{al.year} · {al.tracks.length} tracks</div>
-              <SourceBadge
-                folderIds={al.tracks.map(track => track.folderId)}
-                provider={al.tracks[0]?.provider}
-                compact
-              />
             </div>
           ))}
         </div>
       )}
+      {artworkPickerOpen && <ArtistArtworkPicker artist={ar} onClose={() => setArtworkPickerOpen(false)} />}
       {albumActions.elements}
     </div>
   )

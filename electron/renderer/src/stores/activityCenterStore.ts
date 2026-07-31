@@ -44,7 +44,6 @@ export interface ActivityMetadata {
   deviceId?: string
   planId?: string
   rootPath?: string
-  pathToken?: string
   volumeName?: string
   folderId?: number
   downloadJobId?: string
@@ -159,11 +158,20 @@ function storageAvailable(): boolean {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined'
 }
 
+function withoutTransientPathTokens(metadata: ActivityMetadata): ActivityMetadata {
+  const { pathToken: _expiredPathToken, ...safeMetadata } = metadata
+  return safeMetadata
+}
+
+function withoutTransientActivityTokens(item: ActivityItem): ActivityItem {
+  return { ...item, metadata: withoutTransientPathTokens(item.metadata) }
+}
+
 function persistActivityCenterState(state: PersistedActivityCenterState): void {
   if (!storageAvailable()) return
   try {
     window.localStorage.setItem(ACTIVITY_STORAGE_KEY, JSON.stringify({
-      items: pruneActivityItems(state.items),
+      items: pruneActivityItems(state.items).map(withoutTransientActivityTokens),
       pinned: state.pinned,
     }))
   } catch {
@@ -255,10 +263,10 @@ export function upsertActivityItem(
     read: input.read ?? false,
     createdAt: previous?.createdAt ?? now,
     updatedAt: now,
-    metadata: {
+    metadata: withoutTransientPathTokens({
       ...(previous?.metadata ?? {}),
       ...(input.metadata ?? {}),
-    },
+    }),
     actionIds: input.actionIds ?? previous?.actionIds ?? [],
   }
   return pruneActivityItems([
@@ -269,12 +277,13 @@ export function upsertActivityItem(
 
 export function hydrateActivityItems(items: ActivityItem[], now = Date.now()): ActivityItem[] {
   return pruneActivityItems(items.filter(shouldHydrateActivityItem).map(item => {
-    if (!isActiveActivityStatus(item.status)) return item
+    const safeItem = withoutTransientActivityTokens(item)
+    if (!isActiveActivityStatus(safeItem.status)) return safeItem
     return {
-      ...item,
+      ...safeItem,
       status: 'warning',
-      detail: item.detail || 'Actividad interrumpida al cerrar la app.',
-      progress: item.progress,
+      detail: safeItem.detail || 'Actividad interrumpida al cerrar la app.',
+      progress: safeItem.progress,
       read: false,
       updatedAt: now,
     } satisfies ActivityItem
@@ -594,7 +603,6 @@ export function activityFromUnknownVolume(volume: DeviceUnknownVolume): Activity
     metadata: {
       activityKind: 'unknown-volume',
       rootPath: volume.rootPath,
-      pathToken: volume.token,
       volumeName: volume.name,
     },
     actionIds: ['connect-device', 'add-library', 'ignore-volume', 'open-libraries'],

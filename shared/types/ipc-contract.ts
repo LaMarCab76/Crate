@@ -761,6 +761,9 @@ export interface AlbumsApi {
 
 export interface ArtistsApi {
   setFavorite(id: number, favorite: boolean): Promise<void>
+  setArtworkFromAlbum(artistId: number, albumId: number): Promise<{ artworkPath: string }>
+  pickArtwork(artistId: number): Promise<{ canceled: boolean; artworkPath: string | null }>
+  resetArtwork(artistId: number): Promise<void>
 }
 
 export interface LyricsApi {

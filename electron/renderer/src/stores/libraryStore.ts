@@ -4,6 +4,7 @@
 
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
+import { useMemo } from 'react'
 import type { Album, Artist, Pattern, Playlist, Track } from '@shared/types/library'
 import type { DbFolder, DbTrack } from '@shared/types/db'
 import type {
@@ -31,6 +32,8 @@ import { useQueueStore } from './queueStore'
 import { useActivityCenterStore } from './activityCenterStore'
 import { useLibraryLocationsStore } from './libraryLocationsStore'
 import { runTrackDeletionLifecycle } from '@renderer/utils/trackDeletionLifecycle'
+import { useTweakStore } from './settingsStore'
+import { buildDisplayedArtists } from '@renderer/utils/artistDisplay'
 
 const TRACK_NO_WITHOUT = Number.MAX_SAFE_INTEGER
 const DISC_NO_WITHOUT = Number.MAX_SAFE_INTEGER
@@ -441,6 +444,36 @@ export async function toggleArtistFavorite(artistDbId: number, favorite: boolean
   }))
 }
 
+function applyLocalArtistArtwork(artistDbId: number, artworkPath: string, sourceType: 'album' | 'custom'): void {
+  useLibraryStore.setState(state => ({
+    artists: state.artists.map(ar => (
+      ar.dbId === artistDbId ? { ...ar, artworkPath, artworkSourceType: sourceType } : ar
+    )),
+  }))
+}
+
+export async function setArtistArtworkFromAlbum(
+  artistDbId: number,
+  albumUiId: string,
+): Promise<void> {
+  const albumDbId = toAlbumDbId(albumUiId)
+  if (!albumDbId || albumDbId <= 0) throw new Error('El álbum elegido no está persistido.')
+  const result = await window.api.artists.setArtworkFromAlbum(artistDbId, albumDbId)
+  applyLocalArtistArtwork(artistDbId, result.artworkPath, 'album')
+}
+
+export async function pickArtistArtwork(artistDbId: number): Promise<boolean> {
+  const result = await window.api.artists.pickArtwork(artistDbId)
+  if (result.canceled || !result.artworkPath) return false
+  applyLocalArtistArtwork(artistDbId, result.artworkPath, 'custom')
+  return true
+}
+
+export async function resetArtistArtwork(artistDbId: number): Promise<void> {
+  await window.api.artists.resetArtwork(artistDbId)
+  await useLibraryStore.getState().refresh()
+}
+
 export async function toggleAlbumFavorite(albumUiIdOrDbId: string | number, favorite: boolean): Promise<void> {
   const albumDbId =
     typeof albumUiIdOrDbId === 'number'
@@ -843,7 +876,13 @@ export function useVisibleAlbums(): Album[] {
   return useLibraryStore(s => s.albums)
 }
 export function useVisibleArtists(): Artist[] {
-  return useLibraryStore(s => s.artists)
+  const artists = useLibraryStore(s => s.artists)
+  const albums = useLibraryStore(s => s.albums)
+  const source = useTweakStore(s => s.tweak.artistCreditSource)
+  return useMemo(
+    () => buildDisplayedArtists(artists, albums, source),
+    [albums, artists, source],
+  )
 }
 
 export const useDeletingTrackIds = (): Set<number> => useLibraryStore(s => s.deletingTrackIds)
@@ -902,5 +941,9 @@ export function useAlbumByUiId(uiId: string | undefined): Album | undefined {
 }
 
 export function useArtistByUiId(uiId: string | undefined): Artist | undefined {
-  return useLibraryStore(s => (uiId ? s.artists.find(a => a.id === uiId) : undefined))
+  const artists = useVisibleArtists()
+  return useMemo(
+    () => (uiId ? artists.find(artist => artist.id === uiId) : undefined),
+    [artists, uiId],
+  )
 }
