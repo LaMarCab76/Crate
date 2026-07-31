@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert'
-import { mkdtemp, mkdir, symlink, utimes, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, stat, symlink, utimes, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, relative, sep } from 'node:path'
 import { test } from 'node:test'
@@ -187,34 +187,49 @@ test('incremental collection detects size and backdated mtime changes against re
     const baselineDate = new Date(Date.now() - 30_000)
     const olderDate = new Date(baselineDate.getTime() - 30_000)
     await utimes(resized, baselineDate, baselineDate)
-    await utimes(backdated, olderDate, olderDate)
+    await utimes(backdated, baselineDate, baselineDate)
     await utimes(unchanged, baselineDate, baselineDate)
     await utimes(newWithOldMtime, olderDate, olderDate)
+
+    // Filesystems may round the timestamp passed to utimes. Mirror production by
+    // recording the value observed on disk instead of the value requested above.
+    const [resizedBaseline, backdatedBaseline, unchangedBaseline] = await Promise.all([
+      stat(resized),
+      stat(backdated),
+      stat(unchanged),
+    ])
+
     await writeFile(resized, 'new-content-with-a-different-size')
     // Simulate FAT timestamp rounding/preservation after an external rewrite.
     await utimes(resized, baselineDate, baselineDate)
+    await utimes(backdated, olderDate, olderDate)
 
     const reusableMetadataByKey = new Map([
       ['resized.mp3', {
         ...metadataFor(resized),
-        fileSize: 3,
-        dateModified: baselineDate.toISOString(),
+        fileSize: resizedBaseline.size,
+        dateModified: resizedBaseline.mtime.toISOString(),
       }],
       ['backdated.mp3', {
         ...metadataFor(backdated),
-        fileSize: 4,
-        dateModified: baselineDate.toISOString(),
+        fileSize: backdatedBaseline.size,
+        dateModified: backdatedBaseline.mtime.toISOString(),
       }],
       ['unchanged.mp3', {
         ...metadataFor(unchanged),
-        fileSize: 6,
-        dateModified: baselineDate.toISOString(),
+        fileSize: unchangedBaseline.size,
+        dateModified: unchangedBaseline.mtime.toISOString(),
       }],
     ])
+    const baselineCutoff = Math.max(
+      resizedBaseline.mtimeMs,
+      backdatedBaseline.mtimeMs,
+      unchangedBaseline.mtimeMs,
+    )
     const collected = await collectDeviceMusicFiles({
       deviceId: 'dap',
       root,
-      changedSince: baselineDate.getTime() + 1_000,
+      changedSince: baselineCutoff + 1_000,
       reusableMetadataByKey,
     })
 
