@@ -8,6 +8,7 @@ import {
   collectDeviceAudioFiles,
   collectDeviceMusicFiles,
   DEVICE_SCAN_METADATA_CONCURRENCY,
+  deviceFileDiffersFromReusable,
   scanDeviceAudioFiles,
 } from './deviceScanCore.ts'
 
@@ -38,6 +39,25 @@ test('active device scans join only compatible roots and baselines', () => {
   assert.equal(canJoinActiveDeviceScan(incremental, { ...incremental }), true, 'equal baselines may join')
   assert.equal(canJoinActiveDeviceScan(incremental, { ...incremental, changedSinceMs: 101 }), false, 'different baselines must serialize')
   assert.equal(canJoinActiveDeviceScan(full, { ...incremental, musicRoot: '/Volumes/DAP/Other' }), false, 'different roots must never join')
+})
+
+test('reusable metadata comparison uses the persisted Date precision', () => {
+  const persistedMtime = new Date('2026-07-31T19:45:30.123Z')
+  const persistedMtimeMs = persistedMtime.getTime()
+  const floatingMtimeMs = persistedMtimeMs - 0.0005
+
+  assert.notEqual(Math.trunc(floatingMtimeMs), persistedMtimeMs)
+
+  assert.equal(deviceFileDiffersFromReusable({
+    size: 6,
+    mtime: persistedMtime,
+    // Linux can expose the same filesystem timestamp just below the integer
+    // millisecond through mtimeMs while mtime serializes to the persisted value.
+    mtimeMs: floatingMtimeMs,
+  }, {
+    fileSize: 6,
+    dateModified: persistedMtime.toISOString(),
+  }), false)
 })
 
 test('collectDeviceAudioFiles respects database.ignore, database.unignore, dotfiles and symlinks', async () => {
