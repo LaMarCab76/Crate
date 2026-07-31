@@ -122,12 +122,16 @@ export interface ImportProgressEvent {
   imported: number
   total: number
   phase: 'discovering' | 'scanning' | 'writing'
+  /** Present for reconciler scans so the renderer can keep background passes quiet. */
+  scanReason?: LibraryScanReason
 }
 
 export interface ImportCompleteEvent {
   folderId: number
   totalImported: number
   total: number
+  /** Present for reconciler scans so the renderer can keep background passes quiet. */
+  scanReason?: LibraryScanReason
 }
 
 export type LibraryScanReason = 'startup' | 'watch' | 'background' | 'manual' | 'import'

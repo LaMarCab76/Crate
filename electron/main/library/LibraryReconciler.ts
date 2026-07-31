@@ -147,7 +147,7 @@ class LibraryReconciler {
       if (!existsSync(folder.path)) {
         this.recordUnavailableRoot(folder, run.id)
       } else {
-        await this.reconcileExistingRoot(folder, run.id, counts)
+        await this.reconcileExistingRoot(folder, run.id, counts, reason)
       }
 
       const finished = this.repos.libraryScanLog.finishRun({
@@ -203,13 +203,19 @@ class LibraryReconciler {
     })
   }
 
-  private async reconcileExistingRoot(folder: DbFolder, runId: number, counts: ScanCounts): Promise<void> {
+  private async reconcileExistingRoot(
+    folder: DbFolder,
+    runId: number,
+    counts: ScanCounts,
+    reason: LibraryScanReason,
+  ): Promise<void> {
     broadcast('library:import:progress', {
       folderId: folder.id,
       scanned: 0,
       imported: 0,
       total: 0,
       phase: 'discovering',
+      scanReason: reason,
     })
     const files = await collectAudioFiles(folder.path)
     // Discovery yields to the event loop. Re-read the DB before the scan starts
@@ -308,6 +314,7 @@ class LibraryReconciler {
         imported: counts.added,
         total,
         phase: 'scanning',
+        scanReason: reason,
       })
     }
     emitProgress()
@@ -373,7 +380,12 @@ class LibraryReconciler {
     if (counts.added > 0 || counts.updated > 0 || counts.removed > 0) {
       getLibraryBackup().scheduleWriteForFolder(folder.id)
     }
-    broadcast('library:import:complete', { folderId: folder.id, totalImported: counts.added, total })
+    broadcast('library:import:complete', {
+      folderId: folder.id,
+      totalImported: counts.added,
+      total,
+      scanReason: reason,
+    })
   }
 
   // Deletes .lrc sidecar files whose matching audio (same basename, any audio

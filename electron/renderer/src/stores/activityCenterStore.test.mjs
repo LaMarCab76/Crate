@@ -9,11 +9,15 @@ import {
   activityFromDuplicateSummary,
   activityFromUnknownVolume,
   activityProgress,
+  duplicateSummaryReadState,
   hydrateActivityItems,
   isActiveActivityStatus,
   primaryActivityActionIdFor,
   resolveDeviceArtworkOptimizationActivity,
   resolveDeviceSyncActivityDiscarded,
+  shouldShowDuplicateProgressActivity,
+  shouldShowDuplicateSummaryActivity,
+  shouldShowLibraryActivity,
   syncUnknownVolumeActivities,
   upsertActivityItem,
 } from './activityCenterStore.ts'
@@ -110,6 +114,56 @@ test('normalizes activity progress with a bounded percentage', () => {
     label: '10/10',
   })
   assert.equal(activityProgress(4, 0).percent, null)
+})
+
+test('shows only startup reconciliation in the activity center', () => {
+  assert.equal(shouldShowLibraryActivity({}), true, 'direct imports remain visible')
+  assert.equal(shouldShowLibraryActivity({ scanReason: 'startup' }), true)
+
+  for (const scanReason of ['watch', 'background', 'manual', 'import']) {
+    assert.equal(shouldShowLibraryActivity({ scanReason }), false, `${scanReason} scan should stay quiet`)
+  }
+})
+
+test('shows duplicate analysis progress only for the initial app pass', () => {
+  assert.equal(shouldShowDuplicateProgressActivity({ phase: 'prefiltering', activityOrigin: 'startup' }), true)
+  assert.equal(shouldShowDuplicateProgressActivity({ phase: 'complete', activityOrigin: 'startup' }), true)
+  assert.equal(shouldShowDuplicateProgressActivity({ phase: 'fingerprinting', activityOrigin: 'background' }), false)
+  assert.equal(shouldShowDuplicateProgressActivity({ phase: 'complete', activityOrigin: 'background' }), false)
+  assert.equal(shouldShowDuplicateProgressActivity({ phase: 'complete' }), false, 'missing origin fails closed')
+  assert.equal(shouldShowDuplicateProgressActivity({ phase: 'error', activityOrigin: 'background' }), true)
+})
+
+test('recovers a running startup analysis from summary without surfacing background work', () => {
+  assert.equal(shouldShowDuplicateSummaryActivity({ running: true, activityOrigin: 'startup' }), true)
+  assert.equal(shouldShowDuplicateSummaryActivity({ running: true, activityOrigin: 'background' }), false)
+  assert.equal(shouldShowDuplicateSummaryActivity({ running: true }), false)
+  assert.equal(shouldShowDuplicateSummaryActivity({ running: false, activityOrigin: 'background' }), true)
+})
+
+test('background duplicate summaries do not re-notify routine changes', () => {
+  const previous = {
+    ...baseActivity('duplicates:pending', 'warning', 100),
+    category: 'duplicates',
+    title: 'Posibles temas duplicados',
+    detail: 'Hay 2 comparaciones pendientes de revisión.',
+    read: true,
+  }
+
+  assert.equal(duplicateSummaryReadState(previous, {
+    id: 'duplicates:pending',
+    category: 'duplicates',
+    status: 'warning',
+    title: 'Posible tema duplicado',
+    detail: 'Hay una comparación pendiente de revisión.',
+  }), true)
+  assert.equal(duplicateSummaryReadState(previous, {
+    id: 'duplicates:pending',
+    category: 'duplicates',
+    status: 'error',
+    title: 'No se completó el análisis de duplicados',
+    detail: '1 tema requiere un nuevo intento.',
+  }), undefined, 'a new error remains unread and actionable')
 })
 
 test('maps download statuses to success, warning and error activity states', () => {

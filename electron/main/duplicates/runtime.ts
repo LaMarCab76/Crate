@@ -13,6 +13,10 @@ import { createDuplicateRootPreflight } from './DuplicateRootPreflight'
 import type { FingerprintProvider } from './fingerprint'
 import { getMusicBrainzDuplicateEnricher } from './MusicBrainzDuplicateEnricher'
 import { createChromaprintFingerprintProvider } from './native'
+import {
+  mergeDuplicateActivityOrigin,
+  type DuplicateActivityOrigin,
+} from './activityOrigin'
 
 const SCHEDULE_DELAY_MS = 750
 
@@ -20,6 +24,12 @@ interface LibraryChangedPayload {
   reason?: string
   folderId?: number
   trackId?: number
+}
+
+interface DuplicateScheduleOptions {
+  force?: boolean
+  delayMs?: number
+  activityOrigin?: DuplicateActivityOrigin
 }
 
 const RELEVANT_LIBRARY_REASONS = new Set([
@@ -49,6 +59,8 @@ export class DuplicateRuntime {
   private readonly queuedFolderIds = new Set<number>()
   private queuedAll = false
   private forceNext = false
+  private queuedActivityOrigin: DuplicateActivityOrigin = 'background'
+  private activeActivityOrigin: DuplicateActivityOrigin = 'background'
   private timer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
   private disposed = false
@@ -70,7 +82,10 @@ export class DuplicateRuntime {
       },
     )
     this.unsubscribeProgress = this.detection.onProgress(progress => {
-      broadcast('duplicates:progress', progress)
+      broadcast('duplicates:progress', {
+        ...progress,
+        activityOrigin: this.activeActivityOrigin,
+      })
     })
     this.unsubscribeLibrary = onMainEvent('library:changed', raw => {
       const payload = raw && typeof raw === 'object' ? raw as LibraryChangedPayload : {}
@@ -86,32 +101,47 @@ export class DuplicateRuntime {
   }
 
   summary(): DuplicateSummary {
-    return this.detection.getSummary()
+    const summary = this.detection.getSummary()
+    return summary.running
+      ? { ...summary, activityOrigin: this.activeActivityOrigin }
+      : summary
   }
 
   get service(): DuplicateDetectionService {
     return this.detection
   }
 
-  scheduleAll(options: { force?: boolean; delayMs?: number } = {}): void {
+  scheduleAll(options: DuplicateScheduleOptions = {}): void {
     if (this.disposed) return
     this.queuedAll = true
     this.queuedTrackIds.clear()
     if (options.force) this.forceNext = true
+    this.queuedActivityOrigin = mergeDuplicateActivityOrigin(
+      this.queuedActivityOrigin,
+      options.activityOrigin,
+    )
     this.arm(options.delayMs)
   }
 
-  scheduleFolder(folderId: number, options: { force?: boolean; delayMs?: number } = {}): void {
+  scheduleFolder(folderId: number, options: DuplicateScheduleOptions = {}): void {
     if (this.disposed || !Number.isInteger(folderId) || folderId <= 0) return
     this.queuedFolderIds.add(folderId)
     if (options.force) this.forceNext = true
+    this.queuedActivityOrigin = mergeDuplicateActivityOrigin(
+      this.queuedActivityOrigin,
+      options.activityOrigin,
+    )
     this.arm(options.delayMs)
   }
 
-  scheduleTracks(trackIds: readonly number[], options: { force?: boolean; delayMs?: number } = {}): void {
+  scheduleTracks(trackIds: readonly number[], options: DuplicateScheduleOptions = {}): void {
     if (this.disposed) return
     for (const id of trackIds) if (Number.isInteger(id) && id > 0) this.queuedTrackIds.add(id)
     if (options.force) this.forceNext = true
+    this.queuedActivityOrigin = mergeDuplicateActivityOrigin(
+      this.queuedActivityOrigin,
+      options.activityOrigin,
+    )
     this.arm(options.delayMs)
   }
 
@@ -129,9 +159,11 @@ export class DuplicateRuntime {
       while (!this.disposed && (this.queuedAll || this.queuedTrackIds.size > 0 || this.queuedFolderIds.size > 0)) {
         const all = this.queuedAll
         const force = this.forceNext
+        const activityOrigin = this.queuedActivityOrigin
         const folderIds = [...this.queuedFolderIds]
         this.queuedAll = false
         this.forceNext = false
+        this.queuedActivityOrigin = 'background'
         this.queuedFolderIds.clear()
         const trackIds = new Set(this.queuedTrackIds)
         this.queuedTrackIds.clear()
@@ -156,6 +188,7 @@ export class DuplicateRuntime {
         try {
           const controller = new AbortController()
           this.activeController = controller
+          this.activeActivityOrigin = activityOrigin
           const result = await this.detection.analyze({
             trackIds: all ? undefined : [...trackIds],
             force,
@@ -192,6 +225,7 @@ export class DuplicateRuntime {
           }
         } finally {
           this.activeController = null
+          this.activeActivityOrigin = 'background'
         }
         broadcast('duplicates:changed', { reason: 'analysis', summary: this.detection.getSummary() })
       }

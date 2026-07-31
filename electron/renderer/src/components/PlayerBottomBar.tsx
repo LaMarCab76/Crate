@@ -11,9 +11,6 @@ import {
 } from '@renderer/stores/libraryStore'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
 import { useQueueStore } from '@renderer/stores/queueStore'
-import { useTweakStore } from '@renderer/stores/settingsStore'
-import { extractDominantColor } from '@renderer/utils/colorExtract'
-import { vivify } from '@renderer/utils/colorAdjust'
 import type { AudioOutputDevice, ExclusiveModeState } from '@shared/types/ipc-contract'
 import type { Album, Artist, Track } from '@shared/types/library'
 
@@ -59,10 +56,6 @@ export function PlayerBottomBar({
   const artist = useArtistByUiId(track?.artistId)
   const [lastAlbum, setLastAlbum] = useState<Album | null>(null)
   const displayAlbum = album ?? (track?.albumId === lastAlbum?.id ? lastAlbum : undefined)
-  const playerTintSource = useTweakStore(s => s.tweak.playerTintSource)
-  const playerTintColor = useTweakStore(s => s.tweak.playerTintColor)
-  const artworkPath = track?.artworkPath ?? displayAlbum?.artworkPath ?? null
-  const [artworkTint, setArtworkTint] = useState<string | null>(null)
   const [dragProgress, setDragProgress] = useState<number | null>(null)
   const [deviceMenuOpen, setDeviceMenuOpen] = useState(false)
   const [outputDevices, setOutputDevices] = useState<AudioOutputDevice[]>([])
@@ -80,19 +73,6 @@ export function PlayerBottomBar({
   useEffect(() => {
     if (album) setLastAlbum(album)
   }, [album])
-
-  useEffect(() => {
-    if (playerTintSource !== 'artwork' || !artworkPath) {
-      setArtworkTint(null)
-      return
-    }
-    let cancelled = false
-    const src = `crate://artwork/${encodeURIComponent(artworkPath)}`
-    void extractDominantColor(src).then(hex => {
-      if (!cancelled) setArtworkTint(vivify(hex))
-    })
-    return () => { cancelled = true }
-  }, [playerTintSource, artworkPath])
 
   useEffect(() => {
     void window.api.audio.getExclusiveMode().then(state => {
@@ -131,10 +111,6 @@ export function PlayerBottomBar({
 
   const { primary: artistPrimary, featured: artistFeatured } = splitArtist(track.artist)
   const barTitle = titleWithFeatured(track.t, artistFeatured)
-  const tint =
-    playerTintSource === 'artwork' ? artworkTint
-    : playerTintSource === 'preset' || playerTintSource === 'custom' ? playerTintColor
-    : null
   const playing = status === 'playing'
   const progress = durationSec > 0 ? positionSec / durationSec : 0
   const displayProgress = dragProgress ?? progress
@@ -249,10 +225,15 @@ export function PlayerBottomBar({
   }
 
   return (
-    <div
-      className={`player-bottom-shell ${closing ? 'closing' : ''}`}
-      style={{ '--np-tint': tint ?? 'transparent' } as CSSProperties}
-    >
+    <div className={`player-bottom-shell ${closing ? 'closing' : ''}`}>
+      <div className="pane-bg-canvas" aria-hidden="true">
+        <div className="np-bg-blob np-bg-blob-a" />
+        <div className="np-bg-blob np-bg-blob-b" />
+        <div className="np-bg-blob np-bg-blob-c" />
+        <div className="np-bg-blob np-bg-blob-d" />
+      </div>
+      <div className="pane-bg-scrim" aria-hidden="true" />
+
       <div
         className="pb-top-progress"
         style={{ '--pct': `${displayProgress * 100}%` } as CSSProperties}

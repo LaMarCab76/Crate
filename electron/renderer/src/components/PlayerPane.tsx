@@ -28,8 +28,6 @@ import {
   LEVELER_TARGET_STEP,
   formatLevelerGain,
 } from '@shared/constants/leveler'
-import { extractDominantColor } from '@renderer/utils/colorExtract'
-import { vivify } from '@renderer/utils/colorAdjust'
 import type { AudioOutputDevice, ExclusiveModeState } from '@shared/types/ipc-contract'
 import type { Album, Artist, Track } from '@shared/types/library'
 
@@ -89,15 +87,11 @@ export function PlayerPane({
   const artist = useArtistByUiId(track?.artistId)
   const [lastAlbum, setLastAlbum] = useState<Album | null>(null)
   const displayAlbum = album ?? (track?.albumId === lastAlbum?.id ? lastAlbum : undefined)
-  const playerTintSource = useTweakStore(s => s.tweak.playerTintSource)
-  const playerTintColor = useTweakStore(s => s.tweak.playerTintColor)
   const showVisualizer = useTweakStore(s => s.tweak.showPlayerVisualizer)
   const showLyrics = useTweakStore(s => s.tweak.showPlayerLyrics)
   const setTweak = useTweakStore(s => s.setTweak)
   const [visualizerVisible, setVisualizerVisible] = useState(() => showVisualizer)
   const [visualizerClosing, setVisualizerClosing] = useState(false)
-  const artworkPath = track?.artworkPath ?? displayAlbum?.artworkPath ?? null
-  const [artworkTint, setArtworkTint] = useState<string | null>(null)
   const [dragProgress, setDragProgress] = useState<number | null>(null)
   const [activeTab, setActiveTab] = useState<PlayerTab>('nowPlaying')
   const [deviceMenuOpen, setDeviceMenuOpen] = useState(false)
@@ -320,24 +314,6 @@ export function PlayerPane({
   }, [isOpen])
 
   useEffect(() => {
-    if (playerTintSource !== 'artwork' || !artworkPath) {
-      setArtworkTint(null)
-      return
-    }
-    let cancelled = false
-    const src = `crate://artwork/${encodeURIComponent(artworkPath)}`
-    void extractDominantColor(src).then(hex => {
-      if (!cancelled) setArtworkTint(vivify(hex))
-    })
-    return () => { cancelled = true }
-  }, [playerTintSource, artworkPath])
-
-  const tint =
-    playerTintSource === 'artwork' ? artworkTint
-    : playerTintSource === 'preset' || playerTintSource === 'custom' ? playerTintColor
-    : null
-
-  useEffect(() => {
     void window.api.audio.getExclusiveMode().then(state => {
       setExclusiveState(state)
       setExclusiveError(state.reason && !state.enabled ? state.reason : null)
@@ -509,7 +485,6 @@ export function PlayerPane({
     <div
       className={`player-pane ${isOpen ? 'player-pane-open' : 'player-pane-collapsed'}`}
       aria-hidden={!isOpen}
-      style={{ '--np-tint': tint ?? 'transparent' } as CSSProperties}
     >
       <div className="pp-header">
         <div className="pp-header-nav" role="tablist" aria-label="Player panel">

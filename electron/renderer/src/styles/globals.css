@@ -35,6 +35,11 @@
   --np-pal-0: transparent;
   --np-pal-1: transparent;
   --np-pal-2: transparent;
+  --np-player-surface-background:
+    radial-gradient(ellipse at 30% 14%,
+      color-mix(in oklab, var(--np-pal-0, var(--np-tint, #b45b4f)) 60%, #16110f) 0%,
+      color-mix(in oklab, var(--np-pal-0, var(--np-tint, #b45b4f)) 26%, #0d0a09) 82%),
+    #0d0a09;
   --scrollbar-thumb: color-mix(in srgb, var(--text-primary) 28%, transparent);
   --scrollbar-thumb-hover: color-mix(in srgb, var(--text-primary) 42%, transparent);
   --up-next-toast-bg: rgba(18, 18, 22, 0.24);
@@ -183,6 +188,15 @@ html, body {
   background: var(--bg-content);
   overflow: hidden;
   letter-spacing: -0.005em;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input,
+textarea,
+[contenteditable]:not([contenteditable="false"]) {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 #root { width: 100vw; height: 100vh; }
@@ -2357,15 +2371,12 @@ html, body {
   flex-shrink: 0;
   position: relative;
   z-index: 30;
-  background:
-    linear-gradient(
-      color-mix(in oklab, var(--np-tint) 55%, transparent),
-      color-mix(in oklab, var(--np-tint) 55%, transparent)),
-    var(--bg-panel);
+  background: var(--np-player-surface-background);
   border-top: 0.5px solid color-mix(in srgb, var(--divider) 92%, transparent);
   border-radius: 0;
   overflow: visible;
   box-shadow: none;
+  transition: background 400ms ease;
   --pb-content-inset: 14px;
   --pb-art-size: 64px;
   --pb-inline: var(--pb-content-inset);
@@ -2684,6 +2695,7 @@ html, body {
   display: block;
   padding: var(--pb-content-inset);
   position: relative;
+  z-index: 1;
 }
 
 .pb-now {
@@ -4866,7 +4878,8 @@ button:disabled { cursor: not-allowed; }
    floating blobs + grain + scrim). Light-on-dark chrome is forced here
    (independent of the active theme) so text stays legible over the backdrop. */
 .player-pane,
-.lyrics-side-pane {
+.lyrics-side-pane,
+.player-bottom-shell {
   color: #fff;
   --text-primary: rgba(255, 255, 255, 0.95);
   --text-secondary: rgba(255, 255, 255, 0.64);
@@ -4924,11 +4937,7 @@ button:disabled { cursor: not-allowed; }
   flex: 0 0 auto;
   min-height: 0;
   overflow: hidden;
-  background:
-    radial-gradient(ellipse at 30% 14%,
-      color-mix(in oklab, var(--np-pal-0, var(--np-tint, #b45b4f)) 60%, #16110f) 0%,
-      color-mix(in oklab, var(--np-pal-0, var(--np-tint, #b45b4f)) 26%, #0d0a09) 82%),
-    #0d0a09;
+  background: var(--np-player-surface-background);
   transition: background 400ms ease;
 }
 .np-dock-lateral > .player-pane,
