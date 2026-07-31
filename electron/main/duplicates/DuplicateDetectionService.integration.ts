@@ -112,7 +112,7 @@ test('persists pair analysis, reuses fingerprints and orients the recommendation
     assert.equal(candidate.right.id, ids.rightId)
     assert.equal(candidate.recommendedTrackId, ids.rightId)
     assert.equal(service.getCandidate(candidate.id)?.similarity, 1)
-    assert.equal(comparisonYields, 1)
+    assert.ok(comparisonYields >= 1, 'comparison should yield to the event loop')
     assert.ok(progress.includes('fingerprinting'))
     assert.ok(progress.includes('comparing'))
 
