@@ -24,6 +24,7 @@ import type {
 } from '@shared/types/ipc-contract'
 import {
   albumDiscOccupants,
+  albumMovePreviewPlacementFlags,
   albumMoveTitlesMatch,
   findAlbumMoveDuplicate,
   findTracklistSlot,
@@ -539,10 +540,11 @@ export class TrackAlbumMoveService {
       }
     }
 
+    const isReady = errors.length === 0 && proposal != null && artwork != null
     const preview: TrackAlbumMovePreview = {
       previewId,
       createdAt,
-      status: errors.length === 0 && proposal && artwork ? 'ready' : 'blocked',
+      status: isReady ? 'ready' : 'blocked',
       source: sourceEndpoint(track),
       targetAlbum: {
         id: targetAlbum.id,
@@ -561,8 +563,7 @@ export class TrackAlbumMoveService {
       suggestedTrackNumber,
       trackNumberFromMusicBrainz,
       placementSource,
-      isEstimated: placementSource !== 'override' && placementSource !== 'musicbrainz',
-      isAppend: placementSource === 'append',
+      ...albumMovePreviewPlacementFlags(isReady ? proposal : null, placementSource),
       replacement,
       errors,
       warnings,

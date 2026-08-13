@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import {
   albumDiscOccupants,
   albumMoveFilename,
+  albumMovePreviewPlacementFlags,
   albumMoveTitlesMatch,
   chooseAlbumMoveDirectory,
   findAlbumMoveDuplicate,
@@ -12,6 +13,21 @@ import {
   planAlbumMoveDestination,
   sanitizeAlbumMoveFilenamePart,
 } from './trackAlbumMovePlanner.ts'
+
+test('blocked album move previews do not claim an estimated append placement', () => {
+  assert.deepEqual(albumMovePreviewPlacementFlags(null, 'append'), {
+    isEstimated: false,
+    isAppend: false,
+  })
+  assert.deepEqual(albumMovePreviewPlacementFlags({}, 'append'), {
+    isEstimated: true,
+    isAppend: true,
+  })
+  assert.deepEqual(albumMovePreviewPlacementFlags({}, 'musicbrainz'), {
+    isEstimated: false,
+    isAppend: false,
+  })
+})
 
 function track(patch) {
   return {

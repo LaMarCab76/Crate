@@ -1,18 +1,8 @@
 import type { Database as BetterSqliteDatabase, Statement } from 'better-sqlite3'
 import type { DbTrack, DbTrackInsert } from '@shared/types/db'
+import { dbTrackSelectColumns } from './trackColumns.ts'
 
-const ALL_COLUMNS = `
-  id, path, filename, title, artist, album, duration, format, folder_id,
-  file_size, date_modified, album_artist, composer, genre, year,
-  is_favorite, play_count, last_played_date, rating,
-  track_number, total_tracks, disc_number, total_discs,
-  compilation, release_date, original_release_date, bpm, musical_key, media_type,
-  sort_title, sort_artist, sort_album, sort_album_artist,
-  bitrate, sample_rate, channels, codec, bit_depth,
-  artwork_data, artwork_path, date_added, is_duplicate, primary_track_id, duplicate_group_id,
-  extended_metadata, album_id, artist_id, genre_id, r128_integrated_loudness,
-  state_updated_at, provider, drive_id, item_id, etag, remote_path, quickxor_hash
-`
+const ALL_COLUMNS = dbTrackSelectColumns()
 
 export interface ListOpts {
   limit?: number

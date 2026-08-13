@@ -1,5 +1,6 @@
 import { dirname, extname, join } from 'node:path'
 import type { DbTrack } from '@shared/types/db'
+import type { TrackAlbumMovePlacementSource, TrackAlbumMoveProposal } from '@shared/types/ipc-contract'
 
 export interface AlbumMoveDestinationPlan {
   directory: string
@@ -13,6 +14,17 @@ export interface AlbumMoveDuplicate {
   title: string
   path: string
   reason: 'slot' | 'title'
+}
+
+export function albumMovePreviewPlacementFlags(
+  proposal: TrackAlbumMoveProposal | null,
+  placementSource: TrackAlbumMovePlacementSource,
+): { isEstimated: boolean; isAppend: boolean } {
+  const hasProposal = proposal != null
+  return {
+    isEstimated: hasProposal && placementSource !== 'override' && placementSource !== 'musicbrainz',
+    isAppend: hasProposal && placementSource === 'append',
+  }
 }
 
 function normalizeText(value: string | null | undefined): string {
