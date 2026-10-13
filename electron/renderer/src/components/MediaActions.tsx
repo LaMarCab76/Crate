@@ -18,7 +18,8 @@ import {
   usePlaylists,
 } from '@renderer/stores/libraryStore'
 import { useQueueStore } from '@renderer/stores/queueStore'
-import { ContextMenu, type ContextMenuItem } from './ContextMenu'
+import { Artwork } from './Artwork'
+import { ContextMenu, type ContextMenuHeader, type ContextMenuItem } from './ContextMenu'
 import { Icon } from './Icon'
 import { ModalShell } from './ModalShell'
 import { useNavIntentStore } from '@renderer/stores/navIntentStore'
@@ -54,6 +55,23 @@ function playlistDbId(playlist: Playlist): number | null {
 function albumDbId(album: Album): number | null {
   const match = /^a(\d+)$/.exec(album.id)
   return match ? Number.parseInt(match[1], 10) : null
+}
+
+// "a · b" for the context menu header, skipping blank parts.
+function joinMeta(...parts: Array<string | number | null | undefined>): string {
+  return parts.filter(part => part != null && part !== '' && part !== 0).join(' · ')
+}
+
+// Also used by the Up Next queue menus (player card, island sheet).
+export function trackMenuHeader(track: Track): ContextMenuHeader {
+  // Snapshot read: the menu is transient, no need to subscribe to albums.
+  const album = useLibraryStore.getState().albums.find(a => a.id === track.albumId)
+  const art = album && track.artworkPath ? { ...album, artworkPath: track.artworkPath } : album
+  return {
+    title: track.t,
+    subtitle: joinMeta(track.artist, track.albumTitle),
+    art: art ? <Artwork album={art} radius={8} /> : undefined,
+  }
 }
 
 function parseOptionalInt(value: string): number | null {
@@ -1068,10 +1086,11 @@ export function useTrackActions() {
       },
     ]
   }, [hasCloudLibrary, menu, requestMetadataFix])
+  const header = useMemo(() => (menu ? trackMenuHeader(menu.target) : undefined), [menu])
 
   const elements = (
     <>
-      {menu && <ContextMenu x={menu.x} y={menu.y} items={items} onClose={() => setMenu(null)} />}
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={items} header={header} onClose={() => setMenu(null)} />}
       {dialog?.kind === 'playlist' && <PlaylistPickerModal tracks={dialog.tracks} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'details' && <TrackDetailsModal track={dialog.track} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'edit' && <TrackMetadataEditor track={dialog.track} onClose={() => setDialog(null)} />}
@@ -1172,10 +1191,19 @@ export function useAlbumActions() {
       },
     ]
   }, [menu, requestMetadataFix])
+  const header = useMemo<ContextMenuHeader | undefined>(() => {
+    if (!menu) return undefined
+    const album = menu.target
+    return {
+      title: album.title,
+      subtitle: joinMeta(album.artist, album.year),
+      art: <Artwork album={album} radius={8} />,
+    }
+  }, [menu])
 
   const elements = (
     <>
-      {menu && <ContextMenu x={menu.x} y={menu.y} items={items} onClose={() => setMenu(null)} />}
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={items} header={header} onClose={() => setMenu(null)} />}
       {dialog?.kind === 'details' && <AlbumDetailsModal album={dialog.album} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'edit' && <AlbumMetadataEditor album={dialog.album} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'trash' && (

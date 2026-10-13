@@ -1,4 +1,4 @@
-import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, useEffect } from 'react'
+import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, useEffect, useLayoutEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   activityActionIdsFor,
@@ -180,6 +180,14 @@ export function ActivityCenter({
 }: ActivityCenterProps) {
   const activeCount = items.filter(item => isActiveActivityStatus(item.status)).length
   const unreadCount = items.filter(item => !item.read).length
+  // Portal into the app window rather than <body> so the overlay still
+  // inherits the shell's geometry vars (--gl-tb-r) set on .window. Resolved
+  // once after mount: on the very first render .window isn't in the DOM yet,
+  // and switching containers later would remount the panel.
+  const [portalHost, setPortalHost] = useState<HTMLElement | null>(null)
+  useLayoutEffect(() => {
+    setPortalHost(document.querySelector<HTMLElement>('.window') ?? document.body)
+  }, [])
 
   useEffect(() => {
     if (!open) return
@@ -205,9 +213,12 @@ export function ActivityCenter({
         pointerEvents: 'auto',
       }
     : {
+        // Below the floating toolbar pill, aligned to its right edge but kept
+        // on screen (--gl-ac-r clamps --gl-tb-r and animates dock changes
+        // only; see .activity-center in globals.css).
         position: 'fixed',
-        top: 60,
-        right: 16,
+        top: 66,
+        right: 'var(--gl-ac-r, 16px)',
         zIndex: 120,
         width: 430,
         maxWidth: 'calc(100vw - 32px)',
@@ -217,15 +228,15 @@ export function ActivityCenter({
   const panelStyle: CSSProperties = {
     position: 'relative',
     minHeight: 220,
-    maxHeight: fullscreen ? 'min(760px, calc(100vh - 64px))' : 'min(620px, calc(100vh - var(--tb-h) - 28px))',
+    maxHeight: fullscreen ? 'min(760px, calc(100vh - 64px))' : 'min(620px, calc(100vh - 86px))',
     width: fullscreen ? 'min(880px, 100%)' : undefined,
     display: 'grid',
     gridTemplateRows: 'auto auto minmax(0, 1fr)',
     overflow: 'hidden',
-    border: '0.5px solid rgba(255,255,255,0.12)',
-    borderRadius: 8,
-    background: 'var(--bg-panel)',
-    boxShadow: '0 20px 70px rgba(0,0,0,0.38), 0 0 0 0.5px rgba(255,255,255,0.05)',
+    border: 'none',
+    borderRadius: 'var(--gl-r-pop)',
+    background: 'var(--gl-pop-fill)',
+    boxShadow: 'var(--gl-pop-shadow)',
     color: 'var(--text-primary)',
     pointerEvents: 'auto',
   }
@@ -293,5 +304,7 @@ export function ActivityCenter({
   )
 
   if (typeof document === 'undefined') return panel
-  return createPortal(panel, document.body)
+  // First render only; the layout effect fills the host in before paint.
+  if (!portalHost) return null
+  return createPortal(panel, portalHost)
 }

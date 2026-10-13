@@ -3,7 +3,7 @@ import type { AlbumsSortBy } from '@renderer/utils/listSort'
 import type { Album } from '@shared/types/library'
 import { Artwork } from '@renderer/components/Artwork'
 import { Icon } from '@renderer/components/Icon'
-import { ListPrefsMenu, SortDirectionButton } from '@renderer/components/ListPrefsMenu'
+import { ListPrefsDivider, ListPrefsMenu, ListPrefsOptions, SortDirectionButton } from '@renderer/components/ListPrefsMenu'
 import { useVisibleAlbums } from '@renderer/stores/libraryStore'
 import { useListPrefs } from '@renderer/stores/settingsStore'
 import { createListPrefsDefaults, albumMatchesQuery, sortAlbums } from '@renderer/utils/listSort'
@@ -73,10 +73,6 @@ export function AlbumsView({
     )
   }
 
-  if (visibleAlbums.length === 0) {
-    return <div style={{ padding: 48, color: 'var(--text-tertiary)' }}>No hay resultados para este filtro.</div>
-  }
-
   const sortLabel = formatAlbumSort(prefs.sortBy)
   const filters = [
     ...prefs.query.trim() ? [`texto “${prefs.query.trim()}”`] : [],
@@ -97,41 +93,32 @@ export function AlbumsView({
       <div className="lib-head">
         <div>
           <h1>{title}</h1>
-          <div className="sub">{subtitle}</div>
+          <div className="sub" title={subtitle}>{subtitle}</div>
         </div>
         {mode === 'albums' && (
         <div className="actions list-toolbar">
           <ListPrefsMenu buttonLabel="Filtro" menuTitle="Albums" onReset={() => setPrefs(defaults.albums)}>
-            <div className="list-prefs-row">
-              <div className="list-prefs-label">Ordenar por</div>
-              <div className="list-prefs-row-inline">
-                <select
-                  className="list-select"
-                  value={prefs.sortBy}
-                  onChange={e => setPrefs({ sortBy: e.target.value as AlbumsSortBy })}
-                >
-                  {ALBUMS_SORT_OPTIONS.map(option => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                <SortDirectionButton
-                  direction={prefs.sortDir}
-                  onToggle={() => setPrefs({ sortDir: prefs.sortDir === 'asc' ? 'desc' : 'asc' })}
-                />
-              </div>
-            </div>
-            <div className="list-prefs-row-inline">
-              <label className="list-toggle">
-                <input
-                  type="checkbox"
-                  checked={prefs.onlyWithArtwork}
-                  onChange={e => setPrefs({ onlyWithArtwork: e.target.checked })}
-                />
-                Solo con arte
-              </label>
-            </div>
+            <ListPrefsOptions
+              label="Ordenar por"
+              ariaLabel="Ordenar álbumes"
+              value={prefs.sortBy}
+              options={ALBUMS_SORT_OPTIONS}
+              onChange={sortBy => setPrefs({ sortBy })}
+            />
+            <ListPrefsDivider />
+            <SortDirectionButton
+              direction={prefs.sortDir}
+              onToggle={() => setPrefs({ sortDir: prefs.sortDir === 'asc' ? 'desc' : 'asc' })}
+            />
+            <label className="list-toggle">
+              <input
+                type="checkbox"
+                checked={prefs.onlyWithArtwork}
+                onChange={e => setPrefs({ onlyWithArtwork: e.target.checked })}
+              />
+              Solo con arte
+            </label>
+            <ListPrefsDivider />
             <div className="list-prefs-row">
               <div className="list-prefs-label">Filtrar por año</div>
               <div className="list-prefs-row-inline">
@@ -163,46 +150,54 @@ export function AlbumsView({
         </div>
         )}
       </div>
-      <div className="grid">
-        {visibleAlbums.map(al => (
-          <div
-            key={al.id}
-            className="card"
-            onClick={() => onSelect?.(al)}
-            onKeyDown={event => {
-              if (event.key !== 'Enter' && event.key !== ' ') return
-              event.preventDefault()
-              onSelect?.(al)
-            }}
-            onContextMenu={e => albumActions.openAlbumMenu(e, al)}
-            role="button"
-            tabIndex={0}
-          >
-            <div className="art">
-              <Artwork album={al} radius={6} />
-              <div className="play-overlay">
-                <button
-                  type="button"
-                  className="pb"
-                  onClick={e => {
-                    playAlbum(al, e)
-                  }}
-                  title="Play album"
-                >
-                  <Icon name="play" size={14} />
-                </button>
+      {visibleAlbums.length === 0 ? (
+        <div className="list-empty">No hay resultados para este filtro.</div>
+      ) : (
+        <div className="grid">
+          {visibleAlbums.map(al => (
+            <div
+              key={al.id}
+              className="card"
+              onClick={() => onSelect?.(al)}
+              onKeyDown={event => {
+                // Keys on the inner play button belong to that button.
+                if (event.target !== event.currentTarget) return
+                if (event.key !== 'Enter' && event.key !== ' ') return
+                event.preventDefault()
+                onSelect?.(al)
+              }}
+              onContextMenu={e => albumActions.openAlbumMenu(e, al)}
+              role="button"
+              tabIndex={0}
+            >
+              <div className="art">
+                <Artwork album={al} radius={0} />
+                <div className="play-overlay">
+                  <button
+                    type="button"
+                    className="pb"
+                    onClick={e => {
+                      playAlbum(al, e)
+                    }}
+                    title="Play album"
+                  >
+                    <Icon name="play" size={14} />
+                  </button>
+                </div>
+              </div>
+              <div className="ti">{al.title}</div>
+              <div className="su with-source">
+                <span>{[al.artist, al.year > 0 ? al.year : null].filter(Boolean).join(' · ')}</span>
+                <SourceBadge
+                  folderIds={al.tracks.map(track => track.folderId)}
+                  provider={al.tracks[0]?.provider}
+                  appearance="icon"
+                />
               </div>
             </div>
-            <div className="ti">{al.title}</div>
-            <div className="su">{al.artist}</div>
-            <SourceBadge
-              folderIds={al.tracks.map(track => track.folderId)}
-              provider={al.tracks[0]?.provider}
-              appearance="icon"
-            />
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
       {albumActions.elements}
     </>
   )

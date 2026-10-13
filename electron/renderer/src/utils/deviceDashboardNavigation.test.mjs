@@ -14,7 +14,7 @@ test('standalone Devices route uses the shared top chrome dashboard tabs', () =>
 })
 
 test('device Sync keeps the primary device navbar above its subtabs', () => {
-  const primaryDeviceTabsIndex = appSource.indexOf("{view.kind === 'device' && (\n              <DeviceSectionTabs")
+  const primaryDeviceTabsIndex = appSource.search(/\{view\.kind === 'device' && \(\n\s*<DeviceSectionTabs/)
   const syncSubtabsIndex = appSource.indexOf("{view.kind === 'device' && view.section === 'sync' && (")
   const syncSubtabsBlock = appSource.slice(syncSubtabsIndex, appSource.indexOf('            )}', syncSubtabsIndex) + 15)
 
@@ -23,6 +23,18 @@ test('device Sync keeps the primary device navbar above its subtabs', () => {
   assert.ok(syncSubtabsIndex > primaryDeviceTabsIndex, 'Sync subtabs should render after the primary device navbar')
   assert.ok(syncSubtabsBlock.includes('tabs={DEVICE_SYNC_SUBTABS}'), 'Sync should keep its own subtab definition')
   assert.ok(!syncSubtabsBlock.includes('variant="primary"'), 'Sync subtabs should use the secondary navbar row styling')
+})
+
+test('section tabs render as a stack at the top of the scrolling content', () => {
+  const contentIndex = appSource.indexOf('className="content"')
+  const sectionNavIndex = appSource.indexOf('<div className="gl-section-nav">')
+  const renderContentIndex = appSource.indexOf('{renderContent()}', sectionNavIndex)
+
+  assert.ok(contentIndex >= 0, 'App should render the scrolling content area')
+  assert.ok(sectionNavIndex > contentIndex, 'Section tabs should live inside .content, not as a toolbar row')
+  assert.ok(renderContentIndex > sectionNavIndex, 'Section tabs should sit above the view content')
+  assert.ok(appSource.indexOf('<DeviceSectionTabs', sectionNavIndex) > sectionNavIndex, 'Device sections should render inside the section nav')
+  assert.ok(appSource.indexOf('<SettingsSectionTabs', sectionNavIndex) > sectionNavIndex, 'Preferences tabs should render inside the section nav')
 })
 
 test('device Sync exposes full resync in a final Advanced subtab', () => {

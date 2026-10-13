@@ -3,9 +3,9 @@ import type { Track } from '@shared/types/library'
 import { useVirtualRows } from '@renderer/utils/useVirtualRows'
 import { Artwork } from './Artwork'
 import { CodecStrip } from './CodecStrip'
+import { EQBars } from './EQBars'
 import { Icon } from './Icon'
 import { fmtFileSize, fmtTime } from '@renderer/utils/format'
-import { extractDominantColor } from '@renderer/utils/colorExtract'
 import {
   TRACK_DELETE_ROW_EASE,
   TRACK_DELETE_ROW_MS,
@@ -230,30 +230,30 @@ export function TrackTable({
   const playing = status === 'playing'
   const showRefreshAction = onRefreshMetadata != null
   const trackActions = useTrackActions()
-  const playingAlbum = currentTrack ? albumById.get(currentTrack.albumId) : undefined
-  const playingArtworkPath = currentTrack?.artworkPath ?? playingAlbum?.artworkPath ?? null
-  const playingFallbackTint = playingAlbum?.palette[1] ?? 'var(--color-playing)'
-  const [playingTint, setPlayingTint] = useState<string | null>(null)
-  const playingRowStyle = {
-    '--track-playing-tint': playingTint ?? playingFallbackTint,
-  } as CSSProperties
 
-  useEffect(() => {
-    setPlayingTint(null)
-    if (!playingArtworkPath) return
+  // Every row (and the sticky header) is its own CSS grid with this template,
+  // so the column set stays aligned without table layout. The now-playing row
+  // tint comes from the shared --gl-nt glass token (set by App).
+  const tableStyle = useMemo(() => {
+    const columns = [
+      '36px',
+      ...(showArt ? ['calc(var(--tbl-art) + 14px)'] : []),
+      'minmax(0, 1.35fr)',
+      ...(showAlbum ? ['minmax(0, 1fr)'] : []),
+      ...(showPath ? ['minmax(0, 1.4fr)'] : []),
+      ...(showSource ? ['minmax(112px, 0.5fr)'] : []),
+      ...(showPlays ? ['52px'] : []),
+      ...(showFmt ? ['190px'] : []),
+      ...(showSize ? ['72px'] : []),
+      '60px',
+      ...(showRefreshAction ? ['44px'] : []),
+    ]
+    return { '--tbl-cols': columns.join(' ') } as CSSProperties
+  }, [showArt, showAlbum, showPath, showSource, showPlays, showFmt, showSize, showRefreshAction])
 
-    let cancelled = false
-    const src = `crate://artwork/${encodeURIComponent(playingArtworkPath)}`
-    void extractDominantColor(src).then(hex => {
-      if (!cancelled && hex) setPlayingTint(hex)
-    })
-
-    return () => { cancelled = true }
-  }, [playingArtworkPath])
-
-  // Row virtualization. table-layout is fixed and every row is the same height, so
-  // we measure one real row and replace off-screen rows with two spacer rows —
-  // keeping the scrollbar geometry and the sticky <thead> intact.
+  // Row virtualization. Every row is the same height, so we measure one real
+  // row and replace off-screen rows with two spacer rows — keeping the
+  // scrollbar geometry and the sticky <thead> intact.
   const [measuredRowH, setMeasuredRowH] = useState(0)
   const rowHeight = measuredRowH || (compact ? 40 : 56)
   const { setBody, window: vwin } = useVirtualRows(tracks.length, rowHeight)
@@ -267,7 +267,7 @@ export function TrackTable({
 
   return (
     <>
-      <table className={`tbl${compact ? ' compact' : ''}`}>
+      <table className={`tbl${compact ? ' compact' : ''}`} style={tableStyle}>
         <thead>
           <tr>
             <th className="num">{showTrackNo ? '#' : null}</th>
@@ -308,60 +308,65 @@ export function TrackTable({
                 }}
                 key={t.id}
                 className={[isP ? 'playing' : '', isDeleting ? 'deleting' : ''].filter(Boolean).join(' ')}
-                style={isP ? playingRowStyle : undefined}
                 onContextMenu={e => trackActions.openTrackMenu(e, t)}
                 onDoubleClick={() => { void playNow(t, playbackTracks) }}
               >
-                <td className={`num ${t.dbId != null ? 'has-like' : ''}`}>
-                  <span className="track-index">
-                    {isP ? (
-                      <button
-                        type="button"
-                        className="tb-icon-btn"
-                        style={{
-                          width: '100%',
-                          height: 22,
-                          color: 'inherit',
-                          padding: 0,
-                          justifyContent: 'center',
-                        }}
-                        title={playing ? 'Pause' : 'Play'}
-                        aria-label={playing ? 'Pause' : 'Play'}
-                        onClick={e => {
-                          e.stopPropagation()
-                          void togglePlay()
-                        }}
-                        onDoubleClick={e => e.stopPropagation()}
-                      >
-                        <Icon name={playing ? 'pause' : 'play'} size={13} />
-                      </button>
-                    ) : displayTrackNumber}
-                  </span>
-                  {t.dbId != null && (
+                <td className={`num${!isP && t.dbId != null ? ' has-like' : ''}`}>
+                  {isP ? (
+                    // Now playing: live EQ bars (pause on hover) or a play button
+                    // while paused.
                     <button
                       type="button"
-                      className="tb-icon-btn track-like"
+                      className="tbl-icon-btn track-now"
+                      title={playing ? 'Pause' : 'Play'}
+                      aria-label={playing ? 'Pause' : 'Play'}
                       onClick={e => {
                         e.stopPropagation()
-                        void toggleTrackFavorite(t.dbId!, !t.loved)
+                        void togglePlay()
                       }}
                       onDoubleClick={e => e.stopPropagation()}
-                      title={t.loved ? 'Remove from favorites' : 'Mark as favorite'}
                     >
-                      <Icon name={t.loved ? 'heartF' : 'heart'} size={13} />
+                      {playing ? (
+                        <>
+                          <EQBars />
+                          {/* Wrapped: Icon sets an inline display, so the
+                              hover swap toggles this span instead. */}
+                          <span className="track-now-pause"><Icon name="pause" size={13} /></span>
+                        </>
+                      ) : (
+                        <Icon name="play" size={13} />
+                      )}
                     </button>
+                  ) : (
+                    <>
+                      <span className="track-index">{displayTrackNumber}</span>
+                      {t.dbId != null && (
+                        <button
+                          type="button"
+                          className="tbl-icon-btn track-like"
+                          onClick={e => {
+                            e.stopPropagation()
+                            void toggleTrackFavorite(t.dbId!, !t.loved)
+                          }}
+                          onDoubleClick={e => e.stopPropagation()}
+                          title={t.loved ? 'Remove from favorites' : 'Mark as favorite'}
+                        >
+                          <Icon name={t.loved ? 'heartF' : 'heart'} size={13} />
+                        </button>
+                      )}
+                    </>
                   )}
                 </td>
                 {showArt && (
                   <td className="art">
                     <div className="mini-art">
-                      <Artwork album={album} radius={3} />
+                      <Artwork album={album} radius={0} />
                     </div>
                   </td>
                 )}
                 <td className="title">
                   <span className="title-main">{t.t}</span>
-                  {!showArt && showAlbum && <span className="title-sub">{t.artist}</span>}
+                  {showAlbum && <span className="title-sub">{t.artist}</span>}
                 </td>
                 {showAlbum && <td className="sec">{t.albumTitle}</td>}
                 {showPath && <td className="path" title={t.path}>{pathValue}</td>}
@@ -374,7 +379,7 @@ export function TrackTable({
                   <td className="actions">
                     <button
                       type="button"
-                      className="tb-icon-btn"
+                      className="tbl-icon-btn"
                       onClick={e => {
                         e.stopPropagation()
                         if (canRefresh) onRefreshMetadata(t)

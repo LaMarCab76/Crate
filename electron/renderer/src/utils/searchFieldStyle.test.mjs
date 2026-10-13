@@ -20,15 +20,19 @@ function declaration(block, property) {
 
 test('search fields inherit the app background instead of fixed elevated panels', () => {
   const root = cssBlock(':root')
-  const toolbarSearch = cssBlock('.tb-search')
-  const toolbarSearchActive = cssBlock('.tb-search.is-active')
   const artworkSearch = cssBlock('.device-artwork-search')
   const artworkSearchActive = cssBlock('.device-artwork-search.is-active')
 
   assert.match(declaration(root, '--search-field-bg'), /var\(--bg-tint\)/)
   assert.match(declaration(root, '--search-field-bg-active'), /var\(--bg-tint\)/)
-  assert.equal(declaration(toolbarSearch, 'background'), 'var(--search-field-bg)')
-  assert.equal(declaration(toolbarSearchActive, 'background'), 'var(--search-field-bg-active)')
   assert.equal(declaration(artworkSearch, 'background'), 'var(--search-field-bg)')
   assert.equal(declaration(artworkSearchActive, 'background'), 'var(--search-field-bg-active)')
+})
+
+test('toolbar search is a recessed glass well inside the floating pill', () => {
+  const toolbarSearch = cssBlock('.tb-search')
+
+  assert.equal(declaration(toolbarSearch, 'background'), 'var(--gl-well)')
+  assert.equal(declaration(toolbarSearch, 'box-shadow'), 'var(--gl-well-shadow)')
+  assert.equal(declaration(toolbarSearch, 'border-radius'), '999px')
 })

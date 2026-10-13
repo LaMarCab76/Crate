@@ -20,19 +20,47 @@ function declaration(block, property) {
   return match.groups.value.trim()
 }
 
-test('horizontal and side players share the global palette surface', () => {
+test('the global palette surface stays derived from the artwork palette', () => {
   const root = cssBlock(':root')
-  const bottom = cssBlock('.player-bottom-shell')
-  const side = cssBlock('.np-dock-lateral')
   const surface = declaration(root, '--np-player-surface-background')
 
   assert.match(surface, /--np-pal-0/)
   assert.doesNotMatch(surface, /--bg-panel/)
-  assert.equal(declaration(bottom, 'background'), 'var(--np-player-surface-background)')
-  assert.equal(declaration(side, 'background'), 'var(--np-player-surface-background)')
-  assert.match(css, /\.player-pane,\s*\.lyrics-side-pane,\s*\.player-bottom-shell\s*\{/)
-  assert.equal((bottomPlayerSource.match(/np-bg-blob np-bg-blob-/g) ?? []).length, 4)
-  assert.match(bottomPlayerSource, /className="pane-bg-scrim"/)
+})
+
+test('the bottom island is theme-aware glass tinted by the playing track', () => {
+  const island = cssBlock('.pb-island')
+
+  // The island glass mixes in --gl-nt (the playing track's tint, set by App)
+  // instead of painting its own animated blob canvas.
+  assert.match(css, /--gl-island-fill:[^;]*var\(--gl-nt\)/)
+  assert.equal(declaration(island, 'background'), 'var(--gl-island-fill)')
+  assert.equal(declaration(island, 'backdrop-filter'), 'var(--gl-island-filter)')
+  assert.equal(declaration(island, 'box-shadow'), 'var(--gl-island-shadow)')
+  assert.equal(declaration(island, 'color'), 'var(--gl-text)')
+  assert.doesNotMatch(bottomPlayerSource, /np-bg-blob|pane-bg-canvas|pane-bg-scrim/)
+})
+
+test('the right dock is a transparent, click-through holder for glass cards', () => {
+  const dock = cssBlock('.np-dock-lateral')
+  const lyrics = cssBlock('.lyrics-side-pane')
+
+  assert.equal(declaration(dock, 'position'), 'absolute')
+  assert.equal(declaration(dock, 'pointer-events'), 'none')
+  assert.doesNotMatch(dock, /(?:^|\n)\s*background\s*:/, 'The dock should not paint its own backdrop')
+  assert.equal(declaration(lyrics, 'background'), 'var(--gl-panel-fill)')
+  assert.equal(declaration(lyrics, 'border-radius'), 'var(--gl-r-panel)')
+  assert.doesNotMatch(css, /\.lyrics-side-pane,\s*\.player-bottom-shell\s*\{/, 'The lyrics card follows the theme instead of forced light-on-dark text')
+})
+
+test('the player card is theme-aware panel glass', () => {
+  const pane = cssBlock('.player-pane')
+
+  assert.equal(declaration(pane, 'background'), 'var(--gl-panel-fill)')
+  assert.equal(declaration(pane, 'backdrop-filter'), 'var(--gl-panel-filter)')
+  assert.equal(declaration(pane, 'border-radius'), 'var(--gl-r-panel)')
+  assert.equal(declaration(pane, 'color'), 'var(--gl-text)')
+  assert.doesNotMatch(css, /\.player-pane,\s*\.player-bottom-shell\s*\{/, 'The player card follows the theme instead of forced light-on-dark text')
 })
 
 test('player variants inherit the single tint source managed by App', () => {

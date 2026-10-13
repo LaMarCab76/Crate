@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import { useFolders } from '@renderer/stores/libraryStore'
 import { useDeviceStore } from '@renderer/stores/deviceStore'
 import { basenameForPath, isValidDeviceMusicRoot, normalizeDeviceMusicRoot } from '@renderer/utils/devicePaths'
@@ -52,6 +52,7 @@ export function DeviceConnectModal({
   const musicRootValid = isValidDeviceMusicRoot(musicRoot)
   const canConnect = !loading && musicRootValid && selectedFolder != null
   const targetName = target.name ?? basenameForPath(target.displayPath)
+  const stateLabelId = useId()
 
   useEffect(() => {
     setSelectedFolderId(current => {
@@ -114,16 +115,18 @@ export function DeviceConnectModal({
     >
       <div className="device-connect-modal">
         <div className="device-connect-target">
-          <Icon name="device" size={15} />
+          <span className="device-connect-target-icon" aria-hidden="true">
+            <Icon name="device" size={17} />
+          </span>
           <span>
             <strong>{targetName}</strong>
             <em>{target.displayPath}</em>
           </span>
         </div>
 
-        <label className="device-field">
-          <span>Carpeta en MP3</span>
-          <div className="device-path-control">
+        <label className="device-connect-field">
+          <span className="device-connect-label">Carpeta en MP3</span>
+          <div className="device-connect-path">
             <input
               value={musicRoot}
               onChange={event => setMusicRoot(event.target.value)}
@@ -131,7 +134,7 @@ export function DeviceConnectModal({
               aria-invalid={!musicRootValid}
             />
             <button className="btn icon" type="button" disabled={loading} title="Elegir carpeta en el MP3" onClick={() => void pickMusicRoot()}>
-              <Icon name="folder" size={13} />
+              <Icon name="folder" size={14} />
             </button>
           </div>
         </label>
@@ -139,10 +142,10 @@ export function DeviceConnectModal({
           <div className="device-error inline">La carpeta del MP3 no puede usar segmentos ..</div>
         )}
         {target.hasCrateState && (
-          <div className="device-state-mode">
-            <span>Estado encontrado en el dispositivo</span>
-            <div className="migration-radio-row">
-              <label>
+          <div className="device-connect-field">
+            <span className="device-connect-label" id={stateLabelId}>Estado encontrado en el dispositivo</span>
+            <div className="device-connect-seg" role="radiogroup" aria-labelledby={stateLabelId}>
+              <label className={!resetDeviceState ? 'on' : undefined}>
                 <input
                   type="radio"
                   name={`crate-state-mode-${target.token}`}
@@ -151,7 +154,7 @@ export function DeviceConnectModal({
                 />
                 Usar configuración existente
               </label>
-              <label>
+              <label className={resetDeviceState ? 'on' : undefined}>
                 <input
                   type="radio"
                   name={`crate-state-mode-${target.token}`}
@@ -165,28 +168,39 @@ export function DeviceConnectModal({
         )}
         {localError && <div className="device-error inline">{localError}</div>}
 
-        <div className="device-connect-library-head">
-          <span>{COMPUTER.library}</span>
-          <strong>{selectedFolder?.path ?? 'Seleccioná una biblioteca'}</strong>
-        </div>
-        <div className="device-library-list device-connect-library-list">
-          {destinationFolders.length === 0 ? (
-            <div className="device-empty compact">Agregá una biblioteca local antes de conectar el dispositivo.</div>
-          ) : (
-            destinationFolders.map(folder => (
-              <label className="device-library-row" key={folder.id} title={folder.path}>
-                <input
-                  type="radio"
-                  name="device-connect-library"
-                  checked={selectedFolderId === folder.id}
-                  disabled={loading}
-                  onChange={() => setSelectedFolderId(folder.id)}
-                />
-                <span className="device-library-name">{folderLabel(folder)}</span>
-                <span className="mono">{folder.track_count}</span>
-              </label>
-            ))
-          )}
+        <div className="device-connect-field">
+          <div className="device-connect-library-head">
+            <span className="device-connect-label">{COMPUTER.library}</span>
+            <strong>{selectedFolder?.path ?? 'Seleccioná una biblioteca'}</strong>
+          </div>
+          <div className="device-connect-library-list">
+            {destinationFolders.length === 0 ? (
+              <div className="device-empty compact">Agregá una biblioteca local antes de conectar el dispositivo.</div>
+            ) : (
+              destinationFolders.map(folder => (
+                <label
+                  className={`device-connect-library-row ${selectedFolderId === folder.id ? 'on' : ''}`}
+                  key={folder.id}
+                  title={folder.path}
+                >
+                  <input
+                    type="radio"
+                    name="device-connect-library"
+                    checked={selectedFolderId === folder.id}
+                    disabled={loading}
+                    onChange={() => setSelectedFolderId(folder.id)}
+                  />
+                  <span className="device-connect-radio" aria-hidden="true" />
+                  <span className="device-connect-library-name">
+                    {folderLabel(folder)} <em>· Local</em>
+                  </span>
+                  <span className="device-connect-library-count">
+                    {folder.track_count.toLocaleString('es-AR')} tracks
+                  </span>
+                </label>
+              ))
+            )}
+          </div>
         </div>
       </div>
     </ModalShell>

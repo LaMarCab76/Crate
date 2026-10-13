@@ -1,4 +1,5 @@
 import { type KeyboardEvent, type ReactNode, useEffect, useId, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { Icon } from './Icon'
 
 const FOCUSABLE_SELECTOR = [
@@ -24,6 +25,9 @@ function isolateBackground(backdrop: HTMLElement): () => void {
     const parent: HTMLElement | null = branch.parentElement
     for (const sibling of Array.from(parent.children)) {
       if (!(sibling instanceof HTMLElement) || sibling === branch) continue
+      // Portaled into <body>: only the app root and modals stacked below go
+      // inert; other body-level nodes (scripts, portaled menus) are left alone.
+      if (parent === document.body && sibling.id !== 'root' && !sibling.classList.contains('modal-backdrop')) continue
       restored.push({
         element: sibling,
         inert: sibling.getAttribute('inert'),
@@ -32,7 +36,7 @@ function isolateBackground(backdrop: HTMLElement): () => void {
       sibling.setAttribute('inert', '')
       sibling.setAttribute('aria-hidden', 'true')
     }
-    if (parent.id === 'root') break
+    if (parent.id === 'root' || parent === document.body) break
     branch = parent
   }
   return () => {
@@ -45,8 +49,8 @@ function isolateBackground(backdrop: HTMLElement): () => void {
   }
 }
 
-// Shared modal chrome (backdrop + panel + head/body/foot). Mirrors the private
-// shell in MediaActions.tsx so lyrics dialogs match the rest of the app.
+// Shared modal chrome (scrim + glass panel + head/body/foot) used by every
+// dialog in the app.
 export function ModalShell({
   title,
   children,
@@ -115,7 +119,9 @@ export function ModalShell({
     }
   }
 
-  return (
+  // Portaled so a modal opened from inside a floating glass card (transformed /
+  // backdrop-filtered ancestor) still covers the whole window.
+  return createPortal(
     <div ref={backdropRef} className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <div
         ref={panelRef}
@@ -131,17 +137,18 @@ export function ModalShell({
           <h2 id={titleId}>{title}</h2>
           <button
             type="button"
-            className="tb-icon-btn"
+            className="modal-close"
             onClick={onClose}
             title="Cerrar"
             aria-label={`Cerrar ${title}`}
           >
-            <Icon name="close" size={14} />
+            <Icon name="close" size={13} stroke={1.8} />
           </button>
         </div>
         <div className="modal-body">{children}</div>
         {footer && <div className="modal-foot">{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

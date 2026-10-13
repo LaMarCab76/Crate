@@ -67,8 +67,126 @@
   --tb-h: 52px;
   --device-nav-row-height: 38px;
   --np-h: 84px;
-  --sb-w: 240px;
+  --sb-w: 248px;
   --pp-w: 340px;
+}
+
+/* ── Liquid Glass ────────────────────────────────────────────────────────────
+   Shared tokens for the floating glass shell. The tint colors are registered
+   so artwork changes cross-fade instead of snapping: App.tsx sets them from
+   the extracted palettes (--gl-t/--gl-p* follow the viewed album, else the
+   playing track; --gl-nt/--gl-n* always follow the playing track) and removes
+   them to fall back to the neutral defaults below. */
+@property --gl-t  { syntax: '<color>'; inherits: true; initial-value: #8e8e93; }
+@property --gl-p0 { syntax: '<color>'; inherits: true; initial-value: #3a3a40; }
+@property --gl-p1 { syntax: '<color>'; inherits: true; initial-value: #232327; }
+@property --gl-p2 { syntax: '<color>'; inherits: true; initial-value: #55555c; }
+@property --gl-nt { syntax: '<color>'; inherits: true; initial-value: #8e8e93; }
+@property --gl-n0 { syntax: '<color>'; inherits: true; initial-value: #3a3a40; }
+@property --gl-n1 { syntax: '<color>'; inherits: true; initial-value: #232327; }
+@property --gl-n2 { syntax: '<color>'; inherits: true; initial-value: #55555c; }
+
+/* The tints change once at :root and the cross-fade runs only on the leaf
+   surface that shows them over the whole window (the artwork wash, a
+   childless pseudo-element). Transitioning these inherited properties on
+   :root itself would restyle every element of the document on each frame of
+   the fade (large Albums/Artists grids included); the small tinted accents
+   (icons, Filtro pill, island fill) switch with the artwork instead. */
+.window::before { transition: --gl-p0 900ms ease; }
+
+:root {
+  --gl-base: 0.42;   /* chrome fill opacity */
+  --gl-blur: 30px;   /* panel blur */
+  --gl-amb: 1;       /* strength of the artwork wash behind everything */
+  --gl-bg: #101012;  /* window base under the artwork wash */
+
+  --gl-ease: cubic-bezier(0.2, 0.9, 0.2, 1);        /* layout moves */
+  --gl-spring: cubic-bezier(0.3, 1.3, 0.5, 1);      /* thumbs, knobs, hovers */
+  --gl-spring-soft: cubic-bezier(0.32, 1.12, 0.4, 1); /* island ↔ sheet morph */
+
+  --gl-text: rgba(255, 255, 255, 0.95);
+  --gl-text-2: rgba(255, 255, 255, 0.64);
+  --gl-text-3: rgba(255, 255, 255, 0.44);
+  --gl-hover: rgba(255, 255, 255, 0.065);     /* list rows */
+  --gl-btn-hover: rgba(255, 255, 255, 0.11);  /* round icon buttons */
+  --gl-hairline: rgba(255, 255, 255, 0.12);
+
+  /* Chrome glass: toolbar pill. */
+  --gl-chrome-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.13) 0%, rgba(255, 255, 255, 0.05) 100%), rgba(34, 34, 38, var(--gl-base));
+  --gl-chrome-filter: blur(24px) saturate(190%);
+  --gl-chrome-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.42), inset 0 0 0 0.5px rgba(255, 255, 255, 0.12), 0 8px 26px rgba(0, 0, 0, 0.30);
+
+  /* Panel glass: floating sidebar and player card. */
+  --gl-panel-fill: rgba(255, 255, 255, 0.06);
+  --gl-panel-solid: rgb(30, 30, 34);
+  --gl-panel-filter: blur(var(--gl-blur)) saturate(160%);
+  --gl-panel-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.2), inset 0 0 0 0.5px rgba(255, 255, 255, 0.08);
+
+  /* Popover glass: context menus, filter popover. */
+  --gl-pop-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.13) 0%, rgba(255, 255, 255, 0.04) 100%), rgba(28, 28, 32, 0.62);
+  --gl-pop-filter: blur(30px) saturate(190%);
+  --gl-pop-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.42), inset 0 0 0 0.5px rgba(255, 255, 255, 0.12), 0 20px 60px rgba(0, 0, 0, 0.5);
+
+  /* Modal glass. */
+  --gl-modal-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.03) 100%), rgba(28, 28, 32, 0.66);
+  --gl-modal-filter: blur(34px) saturate(190%);
+  --gl-modal-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.42), inset 0 0 0 0.5px rgba(255, 255, 255, 0.12), 0 30px 80px rgba(0, 0, 0, 0.55);
+  --gl-scrim: rgba(0, 0, 0, 0.38);
+
+  /* Island glass, tinted by what's playing. */
+  --gl-island-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.04) 100%), color-mix(in oklab, var(--gl-nt) 22%, rgba(28, 28, 32, 0.5));
+  --gl-island-filter: blur(30px) saturate(190%);
+  --gl-island-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.45), inset 0 0 0 0.5px rgba(255, 255, 255, 0.13), 0 18px 50px rgba(0, 0, 0, 0.45);
+
+  /* Tinted glass button (e.g. the list "Filtro" button). */
+  --gl-tinted-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.05) 100%), color-mix(in oklab, var(--gl-t) 22%, rgba(34, 34, 38, 0.4));
+  --gl-tinted-filter: blur(22px) saturate(190%);
+  --gl-tinted-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.42), inset 0 0 0 0.5px rgba(255, 255, 255, 0.12), 0 6px 22px rgba(0, 0, 0, 0.28);
+
+  /* Segmented controls: recessed track + raised sliding thumb. */
+  --gl-seg-track: rgba(0, 0, 0, 0.22);
+  --gl-seg-track-shadow: inset 0 0.5px 1px rgba(0, 0, 0, 0.3);
+  --gl-seg-thumb: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.1));
+  --gl-seg-thumb-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.55), inset 0 0 0 0.5px rgba(255, 255, 255, 0.18), 0 2px 6px rgba(0, 0, 0, 0.25);
+  --gl-seg-on: #fff;
+  --gl-seg-off: rgba(255, 255, 255, 0.56);
+
+  /* Recessed wells: search field, text inputs. */
+  --gl-well: rgba(0, 0, 0, 0.22);
+  --gl-well-shadow: inset 0 0.5px 1.5px rgba(0, 0, 0, 0.35), inset 0 -0.5px 0 rgba(255, 255, 255, 0.08);
+
+  /* Sticky list headers. */
+  --gl-header-fill: rgba(22, 22, 26, 0.42);
+  --gl-header-filter: blur(20px) saturate(170%);
+  --gl-header-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.16), inset 0 0 0 0.5px rgba(255, 255, 255, 0.06);
+
+  /* Selected nav item. */
+  --gl-active-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.17), rgba(255, 255, 255, 0.09));
+  --gl-active-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.35), inset 0 0 0 0.5px rgba(255, 255, 255, 0.1), 0 2px 8px rgba(0, 0, 0, 0.2);
+
+  /* Buttons. */
+  --gl-primary-fill: linear-gradient(180deg, #fff, rgba(255, 255, 255, 0.86));
+  --gl-primary-fg: #121214;
+  --gl-primary-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+  --gl-secondary-fill: rgba(255, 255, 255, 0.1);
+  --gl-secondary-fill-hover: rgba(255, 255, 255, 0.16);
+  --gl-secondary-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.25);
+
+  /* Accents derived from the tints. */
+  --gl-accent-ic: color-mix(in oklab, var(--gl-t) 60%, #fff);  /* active nav icon, checkmarks */
+  --gl-now-ic: color-mix(in oklab, var(--gl-nt) 65%, #fff);    /* shuffle/repeat on, eq bars */
+  --gl-switch-on: color-mix(in oklab, var(--gl-t) 80%, #fff);
+  --gl-switch-off: rgba(255, 255, 255, 0.16);
+  --gl-danger: #ff8a80;
+
+  /* Now-playing row highlight. */
+  --gl-current-fill: linear-gradient(90deg, color-mix(in oklab, var(--gl-nt) 40%, transparent) 0%, color-mix(in oklab, var(--gl-nt) 16%, transparent) 55%, color-mix(in oklab, var(--gl-nt) 9%, transparent) 100%);
+  --gl-current-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.2), inset 0 0 0 0.5px color-mix(in oklab, var(--gl-nt) 45%, rgba(255, 255, 255, 0.1));
+
+  --gl-r-panel: 24px;
+  --gl-r-pop: 18px;
+  --gl-r-modal: 28px;
+  --gl-r-row: 12px;
 }
 
 .cloud-move-form {
@@ -131,6 +249,70 @@
 
   --shadow-window: 0 30px 80px rgba(0,0,0,0.18), 0 0 0 0.5px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.06);
   --shadow-pop: 0 12px 32px rgba(0,0,0,0.18), 0 0 0 0.5px rgba(0,0,0,0.1);
+}
+
+/* Liquid Glass, light theme: the design is dark-first, so light swaps the
+   smoked glass for frosted white while keeping the same structure. */
+.theme-light {
+  --gl-bg: #f4f3f0;
+
+  --gl-text: rgba(0, 0, 0, 0.88);
+  --gl-text-2: rgba(0, 0, 0, 0.58);
+  --gl-text-3: rgba(0, 0, 0, 0.4);
+  --gl-hover: rgba(0, 0, 0, 0.045);
+  --gl-btn-hover: rgba(0, 0, 0, 0.07);
+  --gl-hairline: rgba(0, 0, 0, 0.1);
+
+  --gl-chrome-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.72) 0%, rgba(255, 255, 255, 0.46) 100%), rgba(246, 245, 242, var(--gl-base));
+  --gl-chrome-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.9), inset 0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 8px 26px rgba(0, 0, 0, 0.12);
+
+  --gl-panel-fill: rgba(255, 255, 255, 0.5);
+  --gl-panel-solid: #efeeea;
+  --gl-panel-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.8), inset 0 0 0 0.5px rgba(0, 0, 0, 0.07);
+
+  --gl-pop-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.86) 0%, rgba(255, 255, 255, 0.7) 100%), rgba(246, 245, 242, 0.7);
+  --gl-pop-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.9), inset 0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 20px 60px rgba(0, 0, 0, 0.18);
+
+  --gl-modal-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.88) 0%, rgba(255, 255, 255, 0.72) 100%), rgba(246, 245, 242, 0.72);
+  --gl-modal-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.9), inset 0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 30px 80px rgba(0, 0, 0, 0.22);
+  --gl-scrim: rgba(0, 0, 0, 0.18);
+
+  --gl-island-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.8) 0%, rgba(255, 255, 255, 0.55) 100%), color-mix(in oklab, var(--gl-nt) 14%, rgba(250, 250, 248, 0.6));
+  --gl-island-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.9), inset 0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 18px 50px rgba(0, 0, 0, 0.16);
+
+  --gl-tinted-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.78) 0%, rgba(255, 255, 255, 0.5) 100%), color-mix(in oklab, var(--gl-t) 14%, rgba(250, 250, 248, 0.6));
+  --gl-tinted-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.9), inset 0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 6px 22px rgba(0, 0, 0, 0.1);
+
+  --gl-seg-track: rgba(0, 0, 0, 0.06);
+  --gl-seg-track-shadow: inset 0 0.5px 1px rgba(0, 0, 0, 0.12);
+  --gl-seg-thumb: linear-gradient(180deg, #fff, rgba(255, 255, 255, 0.82));
+  --gl-seg-thumb-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.15);
+  --gl-seg-on: rgba(0, 0, 0, 0.88);
+  --gl-seg-off: rgba(0, 0, 0, 0.5);
+
+  --gl-well: rgba(0, 0, 0, 0.05);
+  --gl-well-shadow: inset 0 0.5px 1.5px rgba(0, 0, 0, 0.12), inset 0 -0.5px 0 rgba(255, 255, 255, 0.6);
+
+  --gl-header-fill: rgba(255, 255, 255, 0.6);
+  --gl-header-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.9), inset 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+
+  --gl-active-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.7));
+  --gl-active-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.06), 0 1px 4px rgba(0, 0, 0, 0.1);
+
+  --gl-primary-fill: linear-gradient(180deg, #2a2a2e, #121214);
+  --gl-primary-fg: #fff;
+  --gl-primary-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  --gl-secondary-fill: rgba(0, 0, 0, 0.06);
+  --gl-secondary-fill-hover: rgba(0, 0, 0, 0.1);
+  --gl-secondary-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+
+  --gl-accent-ic: color-mix(in oklab, var(--gl-t) 72%, #000);
+  --gl-now-ic: color-mix(in oklab, var(--gl-nt) 72%, #000);
+  --gl-switch-on: color-mix(in oklab, var(--gl-t) 80%, #000);
+  --gl-switch-off: rgba(0, 0, 0, 0.14);
+  --gl-danger: #d93025;
+
+  --gl-current-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.6), inset 0 0 0 0.5px color-mix(in oklab, var(--gl-nt) 45%, rgba(0, 0, 0, 0.08));
 }
 
 /* Density */
@@ -203,38 +385,84 @@ textarea,
 
 .desktop {
   width: 100%; height: 100%;
-  background: var(--bg-content);
+  background: var(--gl-bg);
 }
 
+/* Liquid Glass shell: every surface floats over one flat window backdrop. The
+   content scrolls full-height between the sidebar card and the right dock,
+   under the toolbar pill. App.tsx publishes the geometry as inline vars on
+   .window (--gl-sb-pref, --gl-content-l, --gl-content-r, --gl-lyrics-r) plus
+   state classes (gl-sidebar-open, gl-pane-open, gl-lyrics-open,
+   gl-island-open); the insets derived here are inherited by every floating
+   surface, position: fixed ones included. */
+@property --gl-sb-cap { syntax: '<length>'; inherits: false; initial-value: 0px; }
 .window {
+  --gl-content-l: 0px;      /* sidebar open: --sb-w + 4px */
+  --gl-content-r: 0px;      /* right dock width + 16px */
+  --gl-lyrics-r: 0px;       /* lyrics card offset inside the dock */
+  --gl-content-top: 72px;   /* content padding under the floating toolbar */
+  --gl-content-pb: 24px;    /* content bottom padding (island room when open) */
+  /* Sticky headers pin 66px below the window top, just under the toolbar.
+     Sticky offsets are measured inside the scroller's padding box, so the
+     value is relative to the content padding (66px − 72px = −6px). */
+  --gl-sticky-top: calc(66px - var(--gl-content-top));
+  --gl-tb-l: max(96px, calc(var(--gl-content-l) + 10px));   /* clears the traffic lights */
+  --gl-tb-r: calc(var(--gl-content-r) + 16px);
+  --gl-island-l: max(16px, calc(var(--gl-content-l) + 10px));
+  --gl-island-r: calc(var(--gl-content-r) + 16px);
+  /* Narrowest toolbar pill that still fits every control (its tightest
+     @container tier). On a narrow window the sidebar gives way so the pill
+     keeps it: the sidebar is the user's width (--gl-sb-pref) capped at what the
+     dock, the pill and the pill's insets (4px + 10px + 16px) leave, never below
+     the 180px minimum (SIDEBAR_WIDTH_MIN). The user's width comes back as the
+     window grows; App reads --gl-sb-cap to stop a sidebar drag at the cap. */
+  --gl-tb-min: 264px;
+  --gl-sb-cap: calc(100vw - var(--gl-content-r) - var(--gl-tb-min) - 30px);
+  --sb-w: clamp(180px, var(--gl-sb-pref, 248px), var(--gl-sb-cap));
   width: 100%; height: 100%;
-  background:
-    linear-gradient(180deg,
-      color-mix(in oklab, var(--bg-pal-2, var(--bg-tint)) 30%, transparent) 0%,
-      color-mix(in oklab, var(--bg-pal-2, var(--bg-tint)) 30%, transparent) 10%,
-      color-mix(in oklab, var(--bg-pal-1, var(--bg-tint)) 26%, transparent) 48%,
-      color-mix(in oklab, var(--bg-pal-0, var(--bg-tint)) 32%, transparent) 100%),
-    var(--bg-window);
-  display: flex; flex-direction: column;
-  overflow: hidden;
   position: relative;
-  transition: background 200ms ease;
+  overflow: hidden;
+  background: var(--gl-bg);
 }
+.window.gl-island-open { --gl-content-pb: 110px; }
 
-/* Traffic lights */
-.tl { display: flex; gap: 8px; align-items: center; padding-left: 14px; padding-right: 6px; flex-shrink: 0; }
-.tl > i {
-  width: 12px; height: 12px; border-radius: 50%;
-  display: block;
-  box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.15);
+/* Backdrop: one flat color tinted by the artwork (--gl-p0 cross-fades). */
+.window::before {
+  content: '';
+  position: absolute; inset: 0;
+  pointer-events: none;
+  background: var(--gl-p0);
+  opacity: calc(var(--gl-amb) * 0.18);
 }
-.tl > i:nth-child(1) { background: #ff5f57; }
-.tl > i:nth-child(2) { background: #febc2e; }
-.tl > i:nth-child(3) { background: #28c840; }
+.theme-light .window::before { opacity: calc(var(--gl-amb) * 0.12); }
 
-/* Top frame: sidebar + main */
-.frame { flex: 1; display: flex; min-height: 0; overflow: hidden; position: relative; }
+/* Traffic lights: native, positioned at (22, 27) by electron/main so they sit
+   inside the sidebar header / beside the toolbar pill. The toolbar pill and the
+   sidebar header are drag regions; this thin strip along the top edge keeps
+   the window draggable when the sidebar is hidden without covering controls
+   (the toolbar starts at 12px). */
+.gl-drag-strip {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 12px;
+  -webkit-app-region: drag;
+}
+/* With the sidebar hidden, the band beside the traffic lights (left of the
+   pill, down to its bottom edge) is the habitual grab spot; the sidebar header
+   covers it otherwise. It stops at the pill rather than spanning the window so
+   the dock cards' header controls stay clickable. */
+.gl-drag-corner {
+  position: absolute;
+  top: 0; left: 0;
+  width: var(--gl-tb-l);
+  height: 58px; /* toolbar top 12px + 46px */
+  -webkit-app-region: drag;
+}
+.window.gl-sidebar-open .gl-drag-corner { display: none; }
 
+/* Floating layout: resize handles. The sidebar handle rides the sidebar card's
+   right edge; the lyrics handle sits on the lyrics card's left edge inside the
+   right dock. */
 .layout-resize-handle {
   position: absolute;
   top: 0;
@@ -244,23 +472,27 @@ textarea,
   background: transparent;
   touch-action: none;
   user-select: none;
-  z-index: 5;
+  z-index: 31; /* above the sidebar card */
   transform: translateX(-50%);
 }
 
 .lyrics-side-resize-handle {
+  z-index: 2; /* inside the dock, above its cards */
   transform: translateX(50%);
+  transition: right 420ms var(--gl-ease);
 }
 
+/* Grabber pill, shown on hover and while dragging. */
 .layout-resize-handle::after {
   content: '';
   position: absolute;
   left: 50%;
-  top: 0;
-  height: 100%;
-  width: 1px;
-  transform: translateX(-50%);
-  background: color-mix(in srgb, var(--divider) 100%, transparent);
+  top: 50%;
+  width: 4px;
+  height: 44px;
+  border-radius: var(--r-pill);
+  transform: translate(-50%, -50%);
+  background: var(--gl-text-3);
   opacity: 0;
   transition: opacity 140ms ease, background 140ms ease;
 }
@@ -269,147 +501,155 @@ textarea,
 .layout-resize-handle:hover::after {
   opacity: 1;
 }
+.layout-resize-handle.active::after { background: var(--gl-text-2); }
 
-.frame.layout-resizing-sidebar .sidebar,
-.frame.layout-resizing-sidebar .sidebar-open,
-.frame.layout-resizing-sidebar .sidebar-collapsed,
-.frame.layout-resizing-sidebar .sb-header,
-.frame.layout-resizing-sidebar .sb-scroll {
+/* Live resizing: the geometry follows the pointer, so the 420ms layout
+   transitions of everything that tracks the resized edge are dropped. A window
+   resize can move edges too (the sidebar gives way to the toolbar pill, the
+   activity center stays on screen), so it gets the same treatment. */
+.window.layout-resizing-window .content,
+.window.layout-resizing-window .gl-scroll-edge,
+.window.layout-resizing-window .toolbar,
+.window.layout-resizing-window .activity-center,
+.window.layout-resizing-window .player-dock,
+.window.layout-resizing-sidebar .sidebar,
+.window.layout-resizing-sidebar .content,
+.window.layout-resizing-sidebar .gl-scroll-edge,
+.window.layout-resizing-sidebar .toolbar,
+.window.layout-resizing-sidebar .player-dock,
+.window.layout-resizing-lyrics-side .lyrics-side-pane,
+.window.layout-resizing-lyrics-side .lyrics-side-resize-handle,
+.window.layout-resizing-lyrics-side .content,
+.window.layout-resizing-lyrics-side .gl-scroll-edge,
+.window.layout-resizing-lyrics-side .toolbar,
+.window.layout-resizing-lyrics-side .activity-center,
+.window.layout-resizing-lyrics-side .player-dock {
   transition: none !important;
 }
 
-.frame.layout-resizing-player .player-pane,
-.frame.layout-resizing-player .player-pane-open,
-.frame.layout-resizing-player .player-pane-collapsed,
-.frame.layout-resizing-player .lyrics-side-pane {
-  transition: none !important;
-}
-
-.frame.layout-resizing-lyrics-side .lyrics-side-pane,
-.frame.layout-resizing-lyrics-side .player-pane,
-.frame.layout-resizing-lyrics-side .main-area {
-  transition: none !important;
-}
-
-.playerpane-resize-handle {
-  cursor: ew-resize;
-}
-
-/* Sidebar */
+/* Sidebar — floating glass card pinned to the left edge. It overlays the
+   window (the content is offset by --gl-content-l instead of being pushed by
+   a flex column), so hiding it is a slide + fade rather than a width collapse. */
 .sidebar {
-  width: var(--sb-w); flex-shrink: 0;
-  background: var(--bg-sidebar);
-  backdrop-filter: blur(40px) saturate(180%);
-  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  z-index: 30;
+  width: var(--sb-w);
   display: flex; flex-direction: column;
   min-height: 0;
-  min-width: var(--sb-w);
-  opacity: 1;
-  transform: translateX(0);
-  filter: saturate(110%);
-  visibility: visible;
   overflow: hidden;
+  border-radius: 0 var(--gl-r-panel) var(--gl-r-panel) 0;
+  color: var(--gl-text);
+  background: var(--gl-panel-fill);
+  /* Saturate only, no blur: nothing ever passes under the card (the content
+     starts 4px past it and both slide in lockstep), so the blur only ever saw
+     the flat window backdrop. It also broke during playback: the EQ bars and
+     the player pane repaint every frame, Chromium redraws just that damage
+     rect, and the blur read back the previous frame's sidebar along the
+     card's right edge, painting a lighter, oversaturated band there. */
+  backdrop-filter: saturate(160%);
+  -webkit-backdrop-filter: saturate(160%);
+  box-shadow: inset -0.5px 0 0 var(--gl-hairline);
   /* No permanent will-change: it kept a compositor layer alive 24/7 alongside
-     the backdrop blur. The toggle transition below is composited without it. */
+     the backdrop blur. The slide below is composited without it. */
   transition:
-    width 260ms cubic-bezier(0.22, 1, 0.36, 1),
-    min-width 260ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 180ms cubic-bezier(0.22, 1, 0.36, 1),
-    transform 240ms cubic-bezier(0.22, 1, 0.36, 1),
-    filter 240ms cubic-bezier(0.22, 1, 0.36, 1),
-    visibility 0ms linear,
-    pointer-events 0ms linear;
+    transform 420ms var(--gl-ease),
+    opacity 260ms ease,
+    visibility 0ms linear;
 }
-.sidebar.solid { background: var(--bg-sidebar-solid); backdrop-filter: none; }
+.sidebar.solid {
+  background: var(--gl-panel-solid);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
 .sidebar-open {
-  width: var(--sb-w);
-  min-width: var(--sb-w);
-  opacity: 1;
   transform: translateX(0);
-  filter: saturate(110%);
+  opacity: 1;
   visibility: visible;
   pointer-events: auto;
-  transition-delay: 0ms;
 }
+/* Hidden: slide fully past the left edge, then leave the tab order once the
+   slide has finished. */
 .sidebar-collapsed {
-  width: 0;
-  min-width: 0;
+  transform: translateX(calc(-1 * var(--sb-w) - 12px));
   opacity: 0;
-  transform: translateX(-8px);
-  filter: saturate(70%) blur(1px);
   visibility: hidden;
   pointer-events: none;
-  transition-delay: 0ms, 0ms, 40ms, 0ms, 0ms, 260ms, 260ms;
+  transition-delay: 0ms, 0ms, 420ms;
 }
 
+/* Drag spacer; the native traffic lights sit inside it (x 22, y 27). */
 .sb-header {
-  height: 44px;
-  display: flex; align-items: center; gap: 10px;
-  padding-right: 10px;
+  height: 50px;
   flex-shrink: 0;
   -webkit-app-region: drag;
 }
 .sb-scroll {
-  flex: 1; overflow-y: auto; padding: 4px 8px 12px;
-  scrollbar-width: thin;
+  flex: 1; min-height: 0;
+  overflow-y: auto;
+  padding: 4px 10px 14px;
+  scrollbar-width: none;
 }
-.sb-header,
-.sb-scroll {
-  opacity: 1;
-  transform: translateX(0) scale(1);
-  transition:
-    opacity 180ms cubic-bezier(0.22, 1, 0.36, 1),
-    transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+.sb-scroll::-webkit-scrollbar { display: none; }
+
+.sb-brand {
+  display: flex; align-items: center; gap: 9px;
+  height: 36px; padding: 0 8px;
+  font-size: 15px; font-weight: 700;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
 }
-.sidebar-collapsed .sb-header,
-.sidebar-collapsed .sb-scroll {
-  opacity: 0;
-  transform: translateX(-10px) scale(0.985);
+.sb-brand img {
+  width: 28px; height: 28px; flex-shrink: 0;
+  display: block;
+  border-radius: 7px;
+  object-fit: contain;
 }
+
 .sb-section-label {
-  font-size: 10.5px; font-weight: 600;
-  letter-spacing: 0.04em; text-transform: uppercase;
-  color: var(--text-tertiary);
-  padding: 14px 10px 4px;
+  font-size: 11.5px; font-weight: 600;
+  color: var(--gl-text-3);
+  padding: 16px 8px 5px;
   display: flex; align-items: center; justify-content: space-between;
 }
 .sb-section-label .add {
-  width: 18px; height: 18px;
+  width: 20px; height: 20px;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 4px;
-  color: var(--text-tertiary);
+  border-radius: var(--r-pill);
+  color: var(--gl-text-3);
   cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
 }
-.sb-section-label .add:hover { background: var(--bg-hover); color: var(--text-primary); }
+.sb-section-label .add:hover { background: var(--gl-btn-hover); color: var(--gl-text); }
 
 .sb-item {
   display: flex; align-items: center; gap: 10px;
-  height: 28px; padding: 0 10px;
-  border-radius: var(--r-input);
+  height: 30px; padding: 0 8px;
+  border-radius: 10px;
   font-size: 13px; font-weight: 500;
-  color: var(--text-primary);
+  color: var(--gl-text);
   cursor: pointer;
   white-space: nowrap;
   position: relative;
+  transition: background 140ms ease;
 }
-.sb-item:hover { background: var(--bg-hover); }
-.sb-item.active { background: var(--bg-selected); }
-.sb-item.active::before {
-  content: '';
-  position: absolute;
-  left: 0; top: 50%;
-  transform: translateY(-50%);
-  width: 3px; height: 16px;
-  border-radius: 2px;
-  background: var(--accent);
+.sb-item:hover { background: var(--gl-hover); }
+/* Selected: raised glass pill (replaces the old accent bar). Hover still
+   brightens it from underneath. */
+.sb-item.active {
+  background: var(--gl-active-fill);
+  box-shadow: var(--gl-active-shadow);
+}
+.sb-item.active:hover {
+  background: var(--gl-active-fill), linear-gradient(var(--gl-hover), var(--gl-hover));
 }
 .sb-item .ic {
-  width: 16px; height: 16px; flex-shrink: 0;
-  color: var(--text-secondary);
+  width: 18px; height: 18px; flex-shrink: 0;
+  color: var(--gl-text-2);
   display: inline-flex; align-items: center; justify-content: center;
 }
-.sb-item.active .ic { color: var(--text-primary); }
-.sb-item > span:not(.ic):not(.badge):not(.sb-device-toggle) {
+.sb-item.active .ic { color: var(--gl-accent-ic); }
+.sb-item > span:not(.ic):not(.badge) {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -419,194 +659,197 @@ textarea,
   min-width: 34px;
   max-width: 68px;
   flex-shrink: 0;
-  font-size: 11px; color: var(--text-tertiary);
+  font-size: 11px; color: var(--gl-text-3);
   font-variant-numeric: tabular-nums;
   text-align: right;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .sb-item .badge.online { color: #34c759; }
-.sb-device-group { margin: 2px 0 6px; }
-.sb-device-row {
-  gap: 8px;
-}
-.sb-device-toggle {
-  width: 16px;
-  height: 16px;
-  margin-left: -4px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  border-radius: 4px;
-  color: var(--text-tertiary);
-  cursor: pointer;
-}
-.sb-device-toggle:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-.sb-device-row.active .sb-device-toggle {
-  color: var(--text-primary);
-}
-.sb-sub-item {
-  height: 24px;
-  margin-left: 12px;
-  padding-left: 10px;
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-.sb-sub-item::after {
-  content: '';
-  position: absolute;
-  left: -4px;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  background: var(--divider);
-}
+/* Detected but not yet connected devices read dimmer than linked ones. */
 .sb-candidate {
-  color: var(--text-secondary);
+  color: var(--gl-text-2);
 }
-.sb-item .swatch {
-  width: 16px; height: 16px; flex-shrink: 0;
-  border-radius: 3px;
-  background: linear-gradient(135deg, #6b6b6b, #3a3a3a);
+.sb-empty {
+  color: var(--gl-text-3);
+  cursor: default;
 }
+.sb-empty:hover { background: none; }
+/* Favorite artist thumbnails fill the 18px icon slot. */
 .sb-artist-art {
+  display: block;
   width: 18px; height: 18px; flex-shrink: 0;
-  border-radius: 3px;
+  border-radius: 5px;
   overflow: hidden;
-  box-shadow: 0 0 0 0.5px rgba(255,255,255,0.12), 0 1px 3px rgba(0,0,0,0.22);
+  box-shadow: 0 0 0 0.5px var(--gl-hairline), 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
-/* Toolbar */
+/* Toolbar: a floating glass pill; the content scrolls underneath it. The shell
+   sets --gl-tb-l / --gl-tb-r on .window so the pill clears the traffic lights,
+   the sidebar and the right dock. The pill drags the window (the title slot is
+   the grab area); every interactive child opts out. */
 .toolbar {
-  height: var(--tb-h); flex-shrink: 0;
-  display: flex; align-items: center; gap: 8px;
-  padding: 0 14px;
-  background: transparent;
-  border-bottom: 0.5px solid var(--divider);
+  --tb-fg: color-mix(in srgb, var(--gl-text) 90%, transparent);
+  position: absolute;
+  top: 12px;
+  left: var(--gl-tb-l, 96px);
+  right: var(--gl-tb-r, 16px);
+  z-index: 20;
+  height: 46px;
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--gl-chrome-fill);
+  backdrop-filter: var(--gl-chrome-filter);
+  -webkit-backdrop-filter: var(--gl-chrome-filter);
+  box-shadow: var(--gl-chrome-shadow);
+  color: var(--gl-text);
+  container: tb / inline-size;
   -webkit-app-region: drag;
-  transition: padding-left 260ms cubic-bezier(0.22, 1, 0.36, 1), background 200ms ease;
+  transition: left 420ms var(--gl-ease), right 420ms var(--gl-ease);
 }
-.main-area.without-sidebar .toolbar {
-  padding-left: 84px;
-}
-.toolbar > * { -webkit-app-region: no-drag; }
+.tb-search,
+.toolbar button,
+.toolbar input { -webkit-app-region: no-drag; }
 
 .tb-nav-btn {
-  width: 28px; height: 28px;
+  width: 38px; height: 38px; flex-shrink: 0;
   display: inline-flex; align-items: center; justify-content: center;
+  padding: 0;
   border: none; background: transparent;
-  border-radius: var(--r-input);
-  color: var(--text-secondary);
+  border-radius: 999px;
+  color: var(--tb-fg);
   cursor: pointer;
+  transition: background 200ms ease, color 200ms ease;
 }
-.tb-nav-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-.tb-nav-btn:disabled { color: var(--text-quaternary); }
+.tb-nav-btn:hover { background: var(--gl-btn-hover); color: var(--gl-text); }
+.tb-nav-btn:disabled {
+  color: color-mix(in srgb, var(--gl-text) 32%, transparent);
+  cursor: default;
+}
+.tb-nav-btn:disabled:hover { background: transparent; }
+
+.tb-divider {
+  width: 0.5px; height: 20px; flex-shrink: 0;
+  margin: 0 4px;
+  background: color-mix(in srgb, var(--gl-text) 17%, transparent);
+}
 
 .tb-title-slot {
   flex: 1 1 auto;
   min-width: 0;
-  margin: 0 4px;
   container-type: inline-size;
 }
 .tb-title {
+  padding-left: 8px;
   font-size: 14px; font-weight: 600;
-  color: var(--text-primary);
+  color: var(--gl-text);
   letter-spacing: -0.01em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: opacity 200ms ease;
 }
+/* Views with their own big in-content title (Songs, favoritos, playlists)
+   keep this one hidden until that heading scrolls under the pill. */
+.tb-title.is-hidden { opacity: 0; }
 /* Toolbar view/album title: keep it to a single line with an ellipsis, and drop
    it entirely once the leftover space can't fit ~5 characters, so we never show
    a lone "B…". The slot uses inline-size containment, so its width is driven by
    the flex layout (not the text) — the container query stays stable. */
-@container (max-width: 48px) {
+@container (max-width: 56px) {
   .tb-title { display: none; }
 }
-.tb-tabs { display: flex; gap: 2px; margin-left: 12px; }
-.tb-tab {
-  height: 26px; padding: 0 12px;
-  display: inline-flex; align-items: center;
-  border-radius: var(--r-input);
-  font-size: 12.5px; font-weight: 500;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-.tb-tab:hover { background: var(--bg-hover); color: var(--text-primary); }
-.tb-tab.active { background: var(--bg-selected); color: var(--text-primary); }
-
+/* Search: a recessed glass well. As a plain launcher (views without an in-place
+   filter) it stays compact; it grows to full width while active (SearchView or
+   filtering this view) and whenever the Todos/Aquí scope switch is shown. */
 .tb-search {
-  display: flex; align-items: center; gap: 6px;
-  height: 28px; padding: 0 10px;
-  width: 240px;
-  background: var(--search-field-bg);
-  border: 0.5px solid var(--search-field-border);
-  border-radius: var(--r-input);
-  color: var(--text-secondary);
-  font-size: 12.5px;
-  margin-left: auto;
+  display: flex; align-items: center; gap: 8px;
+  flex: 0 1 auto;
+  width: 240px; min-width: 0;
+  height: 32px; padding: 0 12px;
+  background: var(--gl-well);
+  box-shadow: var(--gl-well-shadow);
+  border-radius: 999px;
+  color: var(--gl-text-2);
+  font-size: 13px;
+  overflow: hidden;
   cursor: pointer;
-  transition: width 0.16s ease, background 0.16s ease, border-color 0.16s ease;
+  transition: width 320ms var(--gl-ease), box-shadow 160ms ease;
 }
-.tb-search.is-active {
-  width: min(460px, 46vw);
-  background: var(--search-field-bg-active);
-  border-color: var(--search-field-border-active);
+.tb-search.is-active { width: 320px; }
+.tb-search:focus-within {
+  box-shadow: var(--gl-well-shadow), 0 0 0 1px var(--gl-hairline);
 }
+.tb-search-icon { color: var(--gl-text-2); }
 .tb-search input {
-  flex: 1; background: transparent; border: none; outline: none;
-  color: var(--text-primary); font: inherit;
-  min-width: 0;
+  flex: 1; min-width: 0;
+  padding: 0;
+  background: transparent; border: none; outline: none;
+  color: var(--gl-text); font: inherit;
 }
-.tb-search input::placeholder { color: var(--text-tertiary); }
+.tb-search input[readonly] { cursor: pointer; }
+.tb-search input::placeholder { color: var(--gl-text-3); }
+.tb-search-hint {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: color-mix(in srgb, var(--gl-text) 34%, transparent);
+}
 .tb-search-clear {
   width: 20px; height: 20px;
   display: inline-flex; align-items: center; justify-content: center;
+  padding: 0;
   border: none; background: transparent;
-  border-radius: 5px;
-  color: var(--text-tertiary);
+  border-radius: 999px;
+  color: var(--gl-text-3);
   cursor: pointer;
   flex-shrink: 0;
 }
-.tb-search-clear:hover { background: var(--bg-hover); color: var(--text-primary); }
+.tb-search-clear:hover { background: var(--gl-btn-hover); color: var(--gl-text); }
 
-/* Give the search bar a bit more room when the scope toggle is visible */
-.tb-search.has-scope { width: 280px; }
-.tb-search.has-scope.is-active { width: min(500px, 50vw); }
+/* With the scope switch the field is always full width, and the switch sits
+   flush against the right end of the well. */
+.tb-search.has-scope { width: 320px; padding-right: 3px; }
 
-/* Scope segmented control inside the search bar */
+/* Scope segmented control (Todos / Aquí): a raised thumb slides between the
+   two 50px labels. */
 .tb-search-scope {
+  position: relative;
   display: flex;
-  gap: 1px;
-  background: var(--search-field-border);
-  border-radius: 4px;
-  padding: 1px;
   flex-shrink: 0;
+  height: 26px;
+  padding: 2px;
+  border-radius: 999px;
 }
+.tb-search-scope-thumb {
+  position: absolute;
+  top: 2px; bottom: 2px; left: 2px;
+  width: 50px;
+  border-radius: 999px;
+  background: var(--gl-seg-thumb);
+  box-shadow: var(--gl-seg-thumb-shadow);
+  pointer-events: none;
+  transition: transform 320ms var(--gl-spring);
+}
+.tb-search-scope.is-view .tb-search-scope-thumb { transform: translateX(50px); }
 .tb-search-scope-btn {
-  font-size: 10.5px;
-  font-weight: 500;
-  padding: 2px 7px;
-  border-radius: 3px;
-  color: var(--text-tertiary);
-  background: transparent;
-  border: none;
-  cursor: pointer;
+  position: relative;
+  width: 50px;
+  padding: 0;
+  border: none; background: transparent;
+  border-radius: 999px;
+  color: var(--gl-seg-off);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
   line-height: 1;
-  transition: background 100ms ease, color 100ms ease;
+  cursor: pointer;
   user-select: none;
+  transition: color 200ms ease;
 }
-.tb-search-scope-btn.active {
-  background: var(--search-field-bg-active);
-  color: var(--text-primary);
-}
-.tb-search-scope-btn:not(.active):hover {
-  color: var(--text-secondary);
-}
+.tb-search-scope-btn.active { color: var(--gl-seg-on); }
+.tb-search-scope-btn:not(.active):hover { color: var(--gl-text-2); }
 
 .tb-icon-btn {
   width: 28px; height: 28px;
@@ -617,8 +860,7 @@ textarea,
   cursor: pointer;
 }
 .tb-icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-.tb-icon-btn.active,
-.tb-layout-toggle[aria-pressed="true"] {
+.tb-icon-btn.active {
   background: var(--bg-selected);
   color: var(--text-primary);
 }
@@ -629,12 +871,30 @@ textarea,
 .tb-icon-btn:disabled:hover {
   background: transparent;
 }
+/* .tb-icon-btn is shared app-wide; inside the pill it becomes a 38px round
+   glass button. Toggles that are on (player card, Preferences, Actividad)
+   keep a soft fill; the sidebar toggle only reports aria-pressed. */
+.toolbar .tb-icon-btn {
+  width: 38px; height: 38px; flex-shrink: 0;
+  padding: 0;
+  border-radius: 999px;
+  color: var(--tb-fg);
+  transition: background 200ms ease, color 200ms ease;
+}
+.toolbar .tb-icon-btn:hover { background: var(--gl-btn-hover); color: var(--gl-text); }
+.toolbar .tb-icon-btn.active {
+  background: var(--gl-secondary-fill-hover);
+  color: var(--gl-text);
+}
+.toolbar .tb-icon-btn:disabled { color: color-mix(in srgb, var(--gl-text) 32%, transparent); }
+.toolbar .tb-icon-btn:disabled:hover { background: transparent; }
 .tb-activity-btn {
   position: relative;
 }
-.tb-activity-btn.in-progress {
+.toolbar .tb-activity-btn.in-progress {
   color: #6ee7a5;
 }
+.theme-light .toolbar .tb-activity-btn.in-progress { color: #167a43; }
 .tb-activity-loader,
 .activity-center-loader {
   transform-origin: center;
@@ -642,15 +902,14 @@ textarea,
 }
 .tb-activity-badge {
   position: absolute;
-  top: 3px;
-  right: 2px;
+  top: 5px;
+  right: 5px;
   min-width: 14px;
   height: 14px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0 4px;
-  border: 1px solid var(--bg-window);
   border-radius: 999px;
   background: #d99a64;
   color: #17120d;
@@ -658,34 +917,133 @@ textarea,
   font-weight: 750;
   line-height: 1;
   font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 .tb-activity-badge.active {
   background: #6ee7a5;
   color: #0d1a12;
 }
 
-/* Content area */
+/* Narrow pills (small windows with side panels open): drop the ⌘F hint, then
+   fold the search into its icon and tighten the buttons. The tightest tier
+   needs 256px of content (8 × 28px + 8 × 4px gaps), i.e. a 264px pill: the
+   shell never lets the sidebar squeeze the pill below that (--gl-tb-min). */
+@container tb (max-width: 560px) {
+  .tb-search-hint { display: none; }
+}
+@container tb (max-width: 480px) {
+  .tb-search:not(:focus-within) {
+    position: relative;
+    flex: 0 0 auto;
+    width: 38px;
+    padding: 0;
+    gap: 0;
+    justify-content: center;
+  }
+  .tb-search:not(:focus-within) > :not(.tb-search-icon):not(input) { display: none; }
+  .tb-search:not(:focus-within) input { flex: 0 0 0; width: 0; }
+  /* Folded with a query applied: a dot on the icon says the list is filtered. */
+  .tb-search.has-query:not(:focus-within)::after {
+    content: '';
+    position: absolute;
+    top: 5px; right: 5px;
+    width: 6px; height: 6px;
+    border-radius: 999px;
+    background: var(--gl-accent-ic);
+    pointer-events: none;
+  }
+  /* Unfolded (focused): the search takes the whole pill so the query and the
+     Todos/Aquí switch have room. Escape or a click elsewhere folds it back. */
+  .toolbar:has(.tb-search:focus-within) > :not(.tb-search) { display: none; }
+  .tb-search:focus-within { flex: 1 1 auto; width: auto; }
+}
+@container tb (max-width: 400px) {
+  .tb-nav-btn,
+  .toolbar .tb-icon-btn,
+  .tb-search:not(:focus-within) { width: 32px; height: 32px; }
+  .tb-divider { display: none; }
+}
+@container tb (max-width: 320px) {
+  .tb-nav-btn,
+  .toolbar .tb-icon-btn,
+  .tb-search:not(:focus-within) { width: 28px; height: 28px; }
+  .tb-activity-badge { top: 2px; right: 2px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tb-title,
+  .tb-search,
+  .tb-search-scope-thumb { transition: none; }
+}
+
+/* Content area: the one scroll surface. Absolutely positioned between the
+   sidebar card and the right dock, full window height, so rows scroll under the
+   floating toolbar (padding-top) and the island (padding-bottom). */
 .content {
-  flex: 1; overflow-y: auto;
+  position: absolute;
+  top: 0; bottom: 0;
+  left: var(--gl-content-l);
+  right: var(--gl-content-r);
+  overflow-y: auto;
+  padding-top: var(--gl-content-top);
+  padding-bottom: var(--gl-content-pb);
+  /* Keyboard focus / scrollIntoView land below the toolbar, above the island. */
+  scroll-padding-top: var(--gl-content-top);
+  scroll-padding-bottom: var(--gl-content-pb);
   background: transparent;
   scrollbar-width: none;
-  transition: background 200ms ease;
+  transition:
+    left 420ms var(--gl-ease),
+    right 420ms var(--gl-ease);
 }
 .content::-webkit-scrollbar {
   display: none;
 }
 
-/* Main area */
-.main-area { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
+/* Scroll edge: a frosted band the content blurs into as it passes under the
+   toolbar. Purely visual (pointer-events: none). */
+.gl-scroll-edge {
+  position: absolute;
+  top: 0;
+  left: var(--gl-content-l);
+  right: var(--gl-content-r);
+  height: 84px;
+  z-index: 5;
+  pointer-events: none;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  -webkit-mask-image: linear-gradient(to bottom, #000 30%, transparent);
+  mask-image: linear-gradient(to bottom, #000 30%, transparent);
+  transition:
+    left 420ms var(--gl-ease),
+    right 420ms var(--gl-ease);
+}
 
+@media (prefers-reduced-motion: reduce) {
+  .gl-scroll-edge,
+  .lyrics-side-resize-handle { transition: none; }
+}
+
+/* Main area: a layout-less grouping of toolbar + content + scroll edge. Its
+   children position against .window directly. */
+.main-area { display: contents; }
+
+/* Activity center: drops below the floating toolbar pill (12px + 46px + 8px)
+   and lines up with its right edge, following it as the right dock opens. The
+   offset is clamped so the 430px panel never leaves the window when the dock
+   is wide. It glides through a typed var, so only dock changes animate:
+   leaving fullscreen (right: 0 → the offset) snaps into place. */
+@property --gl-ac-r { syntax: '<length>'; inherits: false; initial-value: 16px; }
 .activity-center {
+  --gl-ac-r: clamp(16px, var(--gl-tb-r, 16px), calc(100vw - 446px));
   position: fixed;
-  top: calc(var(--tb-h) + 8px);
-  right: 16px;
+  top: 66px;
+  right: var(--gl-ac-r);
   z-index: 120;
   width: 430px;
   max-width: calc(100vw - 32px);
   pointer-events: none;
+  transition: --gl-ac-r 420ms var(--gl-ease);
 }
 .activity-center.fullscreen {
   position: fixed;
@@ -696,6 +1054,9 @@ textarea,
   display: grid;
   place-items: center;
   padding: 32px;
+  transition: none;
+  /* The scrim covers the toolbar pill / sidebar header drag regions. */
+  -webkit-app-region: no-drag;
 }
 .activity-center-scrim {
   position: absolute;
@@ -711,19 +1072,16 @@ textarea,
   pointer-events: auto;
   position: relative;
   min-height: 220px;
-  max-height: min(620px, calc(100vh - var(--tb-h) - 28px));
+  max-height: min(620px, calc(100vh - 86px));
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   overflow: hidden;
-  border: 0.5px solid rgba(255,255,255,0.12);
-  border-radius: 8px;
-  background: var(--bg-panel);
-  background:
-    linear-gradient(180deg, color-mix(in oklab, var(--bg-tint) 18%, transparent), transparent 72%),
-    color-mix(in oklab, var(--bg-panel) 96%, transparent);
-  box-shadow: 0 20px 70px rgba(0,0,0,0.38), 0 0 0 0.5px rgba(255,255,255,0.05);
-  backdrop-filter: blur(24px) saturate(160%);
-  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border: none;
+  border-radius: var(--gl-r-pop);
+  background: var(--gl-pop-fill);
+  box-shadow: var(--gl-pop-shadow);
+  backdrop-filter: var(--gl-pop-filter);
+  -webkit-backdrop-filter: var(--gl-pop-filter);
   transform: translateZ(0);
 }
 .theme-light .activity-center-panel {
@@ -977,93 +1335,113 @@ textarea,
   }
 }
 
-/* Player pane (right column — player + queue) */
+/* Player pane (right column — player + queue): a floating glass card that
+   fills the right dock (.np-dock-lateral positions it). Collapsing slides it
+   out to the right; App keeps it mounted until the slide finishes. The card
+   keeps a fixed width in both states, so the dock layout never reflows. */
 .player-pane {
-  position: relative;
-  width: 340px;
-  min-width: 340px;
-  background: transparent;
-  display: flex; flex-direction: column;
-  min-height: 0;
-  opacity: 1;
-  transform: translateX(0);
-  visibility: visible;
-  overflow: hidden;
-  /* No permanent will-change: avoids a 24/7 compositor layer; the toggle
-     transition is composited without it. */
-  transition:
-    width 280ms cubic-bezier(0.22, 1, 0.36, 1),
-    min-width 280ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 190ms cubic-bezier(0.22, 1, 0.36, 1),
-    transform 260ms cubic-bezier(0.22, 1, 0.36, 1),
-    background 400ms ease,
-    border-left-color 190ms cubic-bezier(0.22, 1, 0.36, 1),
-    visibility 0ms linear 280ms;
   --pp-inline: 18px;
+  --pp-viz-h: 96px;
+  --pp-lyrics-h: 128px;
+  --pp-lyrics-status-h: 50px;
+  /* Pane-local glass details; the card surface itself uses the panel tokens. */
+  --pp-band: rgba(255, 255, 255, 0.05);
+  --pp-rail: rgba(255, 255, 255, 0.18);
+  --pp-rail-shadow: inset 0 0.5px 1px rgba(0, 0, 0, 0.25);
+  --pp-fill: rgba(255, 255, 255, 0.95);
+  --pp-vol-fill: rgba(255, 255, 255, 0.72);
+  --pp-row-now: rgba(255, 255, 255, 0.08);
+  --pp-row-now-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.16);
+  --pp-art-shadow: 0 18px 40px rgba(0, 0, 0, 0.45), 0 0 0 0.5px rgba(255, 255, 255, 0.12);
+  position: relative;
+  flex: 0 0 var(--pp-w);
+  width: var(--pp-w);
+  min-width: var(--pp-w);
+  min-height: 0;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  border-radius: var(--gl-r-panel);
+  color: var(--gl-text);
+  background: var(--gl-panel-fill);
+  backdrop-filter: var(--gl-panel-filter);
+  -webkit-backdrop-filter: var(--gl-panel-filter);
+  box-shadow: var(--gl-panel-shadow);
+  /* No permanent will-change: avoids a 24/7 compositor layer; the slide is
+     composited without it. */
+  transition:
+    transform 460ms var(--gl-ease),
+    opacity 260ms ease,
+    visibility 0ms linear 460ms;
+}
+.theme-light .player-pane {
+  --pp-band: rgba(255, 255, 255, 0.42);
+  --pp-rail: rgba(0, 0, 0, 0.12);
+  --pp-rail-shadow: inset 0 0.5px 1px rgba(0, 0, 0, 0.12);
+  --pp-fill: rgba(0, 0, 0, 0.8);
+  --pp-vol-fill: rgba(0, 0, 0, 0.5);
+  --pp-row-now: rgba(255, 255, 255, 0.62);
+  --pp-row-now-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.9), inset 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  --pp-art-shadow: 0 18px 40px rgba(0, 0, 0, 0.2), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
 }
 .player-pane-open {
-  width: 340px;
-  min-width: 340px;
   opacity: 1;
-  transform: translateX(0);
+  transform: none;
   visibility: visible;
   pointer-events: auto;
-  border-left-color: var(--divider);
-  transition-delay: 0ms, 0ms, 0ms, 0ms, 0ms, 0ms, 0ms;
-  /* El ancho lo anima sólo la `transition` de `.player-pane` (desde el estado
-     `collapsed`); sin keyframe duplicado para no reflowear la grilla dos veces. */
+  transition-delay: 0ms;
 }
 .player-pane-collapsed {
-  width: 0;
-  min-width: 0;
   opacity: 0;
-  transform: translateX(10px);
+  transform: translateX(calc(100% + 32px));
   visibility: hidden;
   pointer-events: none;
-  border-left-color: transparent;
-  transition-delay: 0ms, 0ms, 45ms, 0ms, 0ms, 70ms, 280ms;
-}
-.pp-header,
-.pp-tab-content {
-  opacity: 1;
-  transform: translateX(0) scale(1);
-  transition:
-    opacity 180ms cubic-bezier(0.22, 1, 0.36, 1),
-    transform 230ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-.player-pane-collapsed .pp-header,
-.player-pane-collapsed .pp-tab-content {
-  opacity: 0;
-  transform: translateX(12px) scale(0.985);
 }
 
+/* Scoped under .player-pane so these outrank the base rules, which come
+   later in the file. */
+@media (prefers-reduced-motion: reduce) {
+  .player-pane,
+  .player-pane .pp-seg-thumb,
+  .player-pane .pp-header-tab,
+  .player-pane .pp-tab-slider,
+  .player-pane .pp-player.art-easing .pp-player-top .art,
+  .player-pane .pp-acc-chev,
+  .player-pane .pp-acc-body,
+  .player-pane .pp-controls button {
+    transition: none;
+  }
+}
+
+/* Lyrics side card: plain glass like the player card, sitting left of it in
+   the right dock (or alone at the dock edge). Absolutely positioned at
+   --gl-lyrics-r so it glides right when the player card leaves instead of
+   jumping when the card unmounts. Text follows the theme tokens, so it stays
+   readable on the dark and the frosted-light glass alike. */
 .lyrics-side-pane {
   --lyrics-side-w: 380px;
   --lyrics-side-duration: 340ms;
   --lyrics-side-ease: cubic-bezier(0.18, 0.92, 0.22, 1);
   --lyrics-side-content-duration: 260ms;
   --lyrics-side-content-ease: cubic-bezier(0.22, 1, 0.36, 1);
-  flex: 0 0 var(--lyrics-side-w);
+  --lyrics-side-band: rgba(255, 255, 255, 0.05);
+  position: absolute;
+  top: 0; bottom: 0;
+  right: var(--gl-lyrics-r);
   width: var(--lyrics-side-w);
-  min-width: var(--lyrics-side-w);
   display: flex;
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-  background: transparent;
-  opacity: 1;
-  transform: translateX(0);
-  clip-path: inset(0 0 0 0 round 0);
-  will-change: flex-basis, width, min-width, opacity, transform, clip-path;
+  border-radius: var(--gl-r-panel);
+  color: var(--gl-text);
+  background: var(--gl-panel-fill);
+  backdrop-filter: var(--gl-panel-filter);
+  -webkit-backdrop-filter: var(--gl-panel-filter);
+  box-shadow: var(--gl-panel-shadow);
   animation: lyrics-side-enter var(--lyrics-side-duration) var(--lyrics-side-ease) both;
-  transition:
-    flex-basis 300ms cubic-bezier(0.22, 1, 0.36, 1),
-    width 300ms cubic-bezier(0.22, 1, 0.36, 1),
-    min-width 300ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 210ms cubic-bezier(0.22, 1, 0.36, 1),
-    transform 300ms cubic-bezier(0.22, 1, 0.36, 1),
-    clip-path 300ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: right 420ms var(--gl-ease);
 }
+.theme-light .lyrics-side-pane { --lyrics-side-band: rgba(255, 255, 255, 0.42); }
 
 .lyrics-side-pane.closing {
   animation: lyrics-side-exit var(--lyrics-side-duration) var(--lyrics-side-ease) both;
@@ -1072,55 +1450,51 @@ textarea,
 
 @keyframes lyrics-side-enter {
   from {
-    flex-basis: 0;
-    width: 0;
-    min-width: 0;
     opacity: 0;
-    transform: translateX(18px);
-    clip-path: inset(0 0 0 22px round 0);
+    transform: translateX(24px) scale(0.98);
   }
   to {
-    flex-basis: var(--lyrics-side-w);
-    width: var(--lyrics-side-w);
-    min-width: var(--lyrics-side-w);
     opacity: 1;
-    transform: translateX(0);
-    clip-path: inset(0 0 0 0 round 0);
+    transform: none;
   }
 }
 
 @keyframes lyrics-side-exit {
   from {
-    flex-basis: var(--lyrics-side-w);
-    width: var(--lyrics-side-w);
-    min-width: var(--lyrics-side-w);
     opacity: 1;
-    transform: translateX(0);
-    clip-path: inset(0 0 0 0 round 0);
+    transform: none;
   }
   to {
-    flex-basis: 0;
-    width: 0;
-    min-width: 0;
     opacity: 0;
-    transform: translateX(18px);
-    clip-path: inset(0 0 0 22px round 0);
+    transform: translateX(24px) scale(0.98);
   }
 }
 
 .lyrics-side-head {
-  height: var(--tb-h);
+  height: 56px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 10px 0 18px;
-  border-bottom: 0.5px solid var(--divider);
-  color: var(--text-primary);
+  background: var(--lyrics-side-band);
+  box-shadow: inset 0 -0.5px 0 var(--gl-hairline);
+  color: var(--gl-text);
   font-size: 10.5px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+/* Close button: the same 30px round glass button as the player card header. */
+.lyrics-side-head .tb-icon-btn {
+  width: 30px; height: 30px;
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--gl-text) 90%, transparent);
+  transition: background 140ms ease, color 140ms ease;
+}
+.lyrics-side-head .tb-icon-btn:hover {
+  background: var(--gl-btn-hover);
+  color: var(--gl-text);
 }
 
 .lyrics-side-pane .lyrics-side-head,
@@ -1166,24 +1540,15 @@ textarea,
 
 @media (prefers-reduced-motion: reduce) {
   .sidebar,
-  .sb-header,
-  .sb-scroll,
   .toolbar,
   .content,
   .player-pane,
   .lyrics-side-pane,
   .lyrics-side-pane .lyrics-side-head,
   .lyrics-side-pane .lyr-panel,
-  .player-bottom-shell,
   .player-dock,
-  .player-dock-inner,
   .up-next-toast,
   .up-next-inline,
-  .pp-player-viz,
-  .pp-player-viz-body,
-  .pp-player-viz-clip,
-  .pp-player-lyrics,
-  .pp-player-lyrics-head,
   .pp-lyrics-preview,
   .pp-header,
   .pp-tab-content,
@@ -1196,34 +1561,48 @@ textarea,
     animation: none;
   }
 
-  .pp-lyrics-side-toggle {
-    transform: none;
-    transition: none;
-  }
-
-  .pp-player-viz-body,
-  .pp-player-viz-clip {
-    clip-path: none;
-    transform: none;
-  }
-
   .up-next-toast-bottom {
     opacity: 1;
     transform: translate(-50%, 0);
   }
 }
+/* Card header: lighter band with the Now Playing | Up Next segmented control
+   on the left and collapse/expand on the right. */
 .pp-header {
-  height: var(--tb-h); flex-shrink: 0;
+  height: 56px; flex-shrink: 0;
+  margin: 0 0 6px;
   display: flex; align-items: center; justify-content: space-between;
-  padding: 0 10px 0 14px;
-  border-bottom: 0.5px solid var(--divider);
+  gap: 4px;
+  padding: 0 10px 0 12px;
+  border-radius: var(--gl-r-panel) var(--gl-r-panel) 0 0;
+  background: var(--pp-band);
+  box-shadow: inset 0 -0.5px 0 var(--gl-hairline);
   -webkit-app-region: drag;
 }
 .pp-header > * { -webkit-app-region: no-drag; }
 .pp-header .actions { display: flex; gap: 2px; }
 
-.pp-collapse-arrow {
-  color: var(--text-primary);
+/* Round icon button used across the card (header, heart, output, lyrics). */
+.pp-icon-btn {
+  width: 30px; height: 30px;
+  flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: color-mix(in srgb, var(--gl-text) 90%, transparent);
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+.pp-icon-btn:hover,
+.pp-icon-btn.active {
+  background: var(--gl-btn-hover);
+  color: var(--gl-text);
+}
+.pp-icon-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--gl-text) 55%, transparent);
+  outline-offset: 1px;
 }
 
 .output-device-control {
@@ -1346,46 +1725,137 @@ textarea,
   pointer-events: none;
 }
 
+/* Player card: the audio-output popover is glass like the other popovers, and
+   scrolls when a short window leaves little room above the volume row. A
+   backdrop-filter nested in the card's own glass doesn't blur the card's
+   content, so popovers inside the card sit on a mostly opaque panel layer.
+   The island sheet's identical popover (nested in the island glass) shares it. */
+.player-pane .output-device-menu,
+.pb-sheet .output-device-menu {
+  width: 260px;
+  max-height: calc(var(--pp-art, 304px) + 200px);
+  overflow-y: auto;
+  padding: 6px;
+  border: none;
+  border-radius: var(--gl-r-pop);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.02) 100%),
+    color-mix(in srgb, var(--gl-panel-solid) 95%, transparent);
+  backdrop-filter: var(--gl-pop-filter);
+  -webkit-backdrop-filter: var(--gl-pop-filter);
+  box-shadow: var(--gl-pop-shadow);
+}
+/* The island clips its content, so the sheet's popover stays inside it (also
+   in width: on a narrow sheet it would run past the left edge). */
+.pb-sheet .output-device-menu {
+  max-width: calc(var(--pb-sheet-w, 820px) - 32px);
+  max-height: calc(var(--pb-sheet-h, 540px) - 96px);
+}
+.player-pane .output-device-title,
+.pb-sheet .output-device-title { color: var(--gl-text-3); }
+.player-pane .output-device-item,
+.player-pane .exclusive-toggle,
+.player-pane .leveler-menu-clip,
+.pb-sheet .output-device-item,
+.pb-sheet .exclusive-toggle,
+.pb-sheet .leveler-menu-clip {
+  border-radius: 10px;
+}
+.player-pane .output-device-item,
+.pb-sheet .output-device-item { color: var(--gl-text-2); }
+.player-pane .output-device-item:hover,
+.player-pane .exclusive-toggle:hover:not(:disabled),
+.player-pane .leveler-menu-clip:hover,
+.pb-sheet .output-device-item:hover,
+.pb-sheet .exclusive-toggle:hover:not(:disabled),
+.pb-sheet .leveler-menu-clip:hover {
+  background: var(--gl-hover);
+  color: var(--gl-text);
+}
+.player-pane .output-device-item.current,
+.pb-sheet .output-device-item.current {
+  background: var(--gl-btn-hover);
+  color: var(--gl-text);
+}
+.player-pane .output-device-item.current > svg,
+.pb-sheet .output-device-item.current > svg { color: var(--gl-accent-ic); }
+.player-pane .leveler-menu-section,
+.pb-sheet .leveler-menu-section { border-top-color: var(--gl-hairline); }
+
+/* List filter popover ("Filtro"). The wrap stays out of the stacking order so
+   the button scrolls under the floating toolbar; only the open popover is
+   lifted (filter popover layer of the glass z-index map). */
 .list-prefs-wrap {
   position: relative;
-  z-index: 30;
+  z-index: auto;
+}
+
+/* Tinted glass pill that opens the popover. */
+.list-prefs-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 34px;
+  padding: 0 15px 0 13px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 999px;
+  color: var(--gl-text);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  background: var(--gl-tinted-fill);
+  -webkit-backdrop-filter: var(--gl-tinted-filter);
+  backdrop-filter: var(--gl-tinted-filter);
+  box-shadow: var(--gl-tinted-shadow);
+  transition: filter 160ms ease;
+  -webkit-app-region: no-drag;
+}
+.list-prefs-btn:hover,
+.list-prefs-btn[aria-expanded="true"] { filter: brightness(1.15); }
+.list-prefs-btn:focus-visible {
+  outline: 2px solid var(--gl-accent-ic);
+  outline-offset: 2px;
 }
 
 .list-prefs-menu {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
-  width: 300px;
+  width: 268px;
   max-width: calc(100vw - 44px);
   overflow: hidden;
-  padding: 10px;
-  border: 0.5px solid var(--border-strong);
-  border-radius: 8px;
-  background: var(--bg-elev);
-  box-shadow: var(--shadow-pop);
-  z-index: 120;
+  padding: 8px;
+  border-radius: 20px;
+  color: var(--gl-text);
+  background: var(--gl-pop-fill);
+  -webkit-backdrop-filter: var(--gl-pop-filter);
+  backdrop-filter: var(--gl-pop-filter);
+  box-shadow: var(--gl-pop-shadow);
+  z-index: 46;
+  transform-origin: top right;
+  animation: list-prefs-in 180ms var(--gl-ease);
   -webkit-app-region: no-drag;
 }
 
-.list-prefs-title {
-  padding: 2px 4px 8px;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
+@keyframes list-prefs-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.97); }
+  to   { opacity: 1; transform: none; }
 }
 
 .list-prefs-content {
   min-width: 0;
   display: grid;
-  gap: 8px;
+}
+
+.list-prefs-group {
+  min-width: 0;
+  display: grid;
 }
 
 .list-prefs-row {
   min-width: 0;
   display: grid;
-  gap: 6px;
   align-items: center;
 }
 
@@ -1398,20 +1868,95 @@ textarea,
   align-items: center;
 }
 
+/* Legacy inline rows (a <select> + direction pill, year inputs) line up with
+   the option rows' inner padding. */
+.list-prefs-menu .list-prefs-row-inline {
+  padding: 2px 6px 6px;
+}
+.list-prefs-menu .list-prefs-row-inline:has(> .list-toggle) {
+  padding: 0;
+}
+
 .list-prefs-label {
-  color: var(--text-secondary);
-  font-size: 12px;
+  padding: 6px 10px;
+  color: var(--gl-text-3);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+/* Option row with a check for the active choice. */
+.list-prefs-option {
+  width: 100%;
+  height: 32px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--gl-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.list-prefs-option:hover { background: var(--gl-btn-hover); }
+.list-prefs-option:focus-visible {
+  outline: 2px solid var(--gl-accent-ic);
+  outline-offset: -2px;
+}
+.list-prefs-check {
+  width: 14px;
+  flex-shrink: 0;
+  display: inline-flex;
+  color: var(--gl-accent-ic);
+}
+.list-prefs-option-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .list-prefs-actions {
-  margin-top: 6px;
   display: flex;
   justify-content: flex-end;
+  padding: 6px 4px 2px;
 }
+
+/* "Restablecer": secondary glass pill. */
+.list-prefs-reset {
+  height: 28px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 999px;
+  color: var(--gl-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  background: var(--gl-secondary-fill);
+  box-shadow: var(--gl-secondary-shadow);
+  transition: background 140ms ease;
+}
+.list-prefs-reset:hover { background: var(--gl-secondary-fill-hover); }
 
 .list-prefs-menu .list-input,
 .list-prefs-menu .list-select {
   width: 100%;
+  height: 30px;
+  border: 0;
+  border-radius: 10px;
+  background-color: var(--gl-well);
+  box-shadow: var(--gl-well-shadow);
+  color: var(--gl-text);
+  font-size: 12.5px;
+}
+
+.list-prefs-menu .list-input:focus-visible,
+.list-prefs-menu .list-select:focus-visible {
+  outline: 2px solid var(--gl-accent-ic);
+  outline-offset: 1px;
 }
 
 .list-prefs-menu .list-input--small {
@@ -1434,16 +1979,47 @@ textarea,
   flex: 0 0 auto;
 }
 
+/* "Orden" row: direction on the right, the chevron flips for ascending. */
 .list-sort-dir-btn {
+  width: 100%;
   min-width: 112px;
-  justify-content: center;
-  gap: 6px;
-  font-weight: 600;
+  height: 32px;
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--gl-text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 120ms ease;
 }
+.list-sort-dir-btn:hover { background: var(--gl-btn-hover); }
+.list-sort-dir-value {
+  display: inline-flex; align-items: center; gap: 5px;
+  color: var(--gl-text-2);
+  font-size: 12px;
+}
+.list-sort-dir-chev { transition: transform 240ms var(--gl-ease); }
+.list-sort-dir-btn.asc .list-sort-dir-chev { transform: rotate(180deg); }
 
+/* Next to a <select> (views still using the inline layout) it is a compact
+   secondary pill without the "Orden" caption. */
 .list-prefs-menu .list-prefs-row-inline > .list-sort-dir-btn {
   flex-basis: 112px;
+  width: auto;
+  height: 30px;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--gl-secondary-fill);
+  box-shadow: var(--gl-secondary-shadow);
 }
+.list-prefs-menu .list-prefs-row-inline > .list-sort-dir-btn:hover {
+  background: var(--gl-secondary-fill-hover);
+}
+.list-prefs-row-inline > .list-sort-dir-btn .list-sort-dir-caption { display: none; }
+.list-prefs-row-inline > .list-sort-dir-btn .list-sort-dir-value { color: inherit; }
 
 .list-prefs-menu .list-prefs-row-inline > .list-toggle {
   max-width: 100%;
@@ -1451,13 +2027,13 @@ textarea,
 }
 
 .list-prefs-menu .list-input::placeholder {
-  color: var(--text-quaternary);
+  color: var(--gl-text-3);
 }
 
 .list-prefs-divider {
-  height: 1px;
-  margin: 2px 0;
-  background: var(--divider);
+  height: 0.5px;
+  margin: 6px 8px;
+  background: var(--gl-hairline);
 }
 
 /* Exclusive mode toggle that lives directly under the selected device row. */
@@ -1647,39 +2223,72 @@ textarea,
   pointer-events: none;
 }
 
+.pp-icon-btn.exclusive-on {
+  position: relative;
+}
+
+.pp-icon-btn.exclusive-on::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  border: 1px solid #ffd97a;
+  pointer-events: none;
+}
+
+/* Segmented Now Playing | Up Next control with a sliding glass thumb. */
 .pp-header-nav {
+  position: relative;
   display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
+  height: 38px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--gl-seg-track);
+  box-shadow: var(--gl-seg-track-shadow);
+}
+
+.pp-seg-thumb {
+  position: absolute;
+  top: 2px; bottom: 2px; left: 2px;
+  width: 96px;
+  border-radius: 999px;
+  background: var(--gl-seg-thumb);
+  box-shadow: var(--gl-seg-thumb-shadow);
+  pointer-events: none;
+  transition: transform 340ms var(--gl-spring);
+}
+
+.pp-header-nav.show-up-next .pp-seg-thumb {
+  transform: translateX(96px);
 }
 
 .pp-header-tab {
+  position: relative;
+  width: 96px;
   padding: 0;
   border: none;
+  border-radius: 999px;
   background: transparent;
-  color: var(--text-tertiary);
+  color: var(--gl-seg-off);
   font: inherit;
-  letter-spacing: inherit;
-  text-transform: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
+  transition: color 200ms ease;
 }
 
 .pp-header-tab:hover,
 .pp-header-tab.active {
-  color: var(--text-primary);
+  color: var(--gl-seg-on);
 }
 
-.pp-header-separator {
-  color: var(--text-quaternary);
+.pp-header-tab:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--gl-text) 55%, transparent);
+  outline-offset: -2px;
 }
 
+/* Both tabs sit side by side in a 2×-wide track that slides between them. */
 .pp-tab-content {
   flex: 1;
   min-height: 0;
@@ -1701,8 +2310,7 @@ textarea,
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   transform: translate3d(0, 0, 0);
-  transition: transform 360ms cubic-bezier(0.18, 0.92, 0.22, 1);
-  will-change: transform;
+  transition: transform 420ms cubic-bezier(0.18, 0.92, 0.22, 1);
 }
 
 .pp-tab-slider.show-up-next {
@@ -1716,37 +2324,63 @@ textarea,
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  opacity: 1;
-  transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .pp-tab-panel.inactive {
   pointer-events: none;
-  opacity: 0.92;
 }
 
+/* Now Playing tab. The art gives up size (down to a floor) when the window is
+   short or an accordion opens, so the transport stays on screen; below the
+   floor the tab scrolls. 440px ≈ the card's non-art content + dock insets. */
 .pp-player {
+  --pp-viz-open-h: 0px;
+  --pp-lyr-open-h: 0px;
+  --pp-art: clamp(148px, calc(100vh - 440px - var(--pp-viz-open-h) - var(--pp-lyr-open-h)), 304px);
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  height: 100%;
-  min-height: 0;
+  gap: 14px;
+  padding: 4px var(--pp-inline) var(--pp-inline);
+  overflow-x: hidden;
+  overflow-y: auto;
 }
+.pp-player.viz-open { --pp-viz-open-h: var(--pp-viz-h); }
+.pp-player.lyrics-open { --pp-lyr-open-h: var(--pp-lyrics-h); }
+.pp-player.lyrics-open.lyrics-side { --pp-lyr-open-h: var(--pp-lyrics-status-h); }
 
 .pp-player-top {
-  display: flex; flex-direction: column; align-items: center;
-  padding: 16px var(--pp-inline) 10px;
-  gap: 12px;
+  display: flex; flex-direction: column;
+  flex-shrink: 0;
+  gap: 14px;
 }
 
 .pp-player-top .art {
   position: relative;
-  width: 100%; aspect-ratio: 1;
-  border-radius: 8px; overflow: hidden;
+  width: var(--pp-art);
+  height: var(--pp-art);
+  flex-shrink: 0;
+  align-self: center;
+  border-radius: 16px;
+  overflow: hidden;
+  cursor: pointer;
+  box-shadow: var(--pp-art-shadow);
+}
+/* Eases only while an accordion opens/closes (PlayerPane sets .art-easing);
+   window-height changes resize the artwork immediately. */
+.pp-player.art-easing .pp-player-top .art {
+  transition: width 320ms var(--gl-ease), height 320ms var(--gl-ease);
+}
+
+.pp-player-top .art:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--gl-text) 60%, transparent);
+  outline-offset: 3px;
 }
 
 .pp-player-top .info {
   width: 100%;
-  display: flex; flex-direction: column; gap: 4px;
+  display: flex; flex-direction: column; gap: 3px;
   text-align: left;
   min-width: 0;
   /* Re-keyed by track id, so the title/artist reveal replays on each change —
@@ -1764,22 +2398,36 @@ textarea,
 }
 
 .pp-player-top .info .t {
-  font-size: 18px; font-weight: 700; letter-spacing: -0.01em;
-  color: var(--text-primary);
+  font-size: 19px; font-weight: 700; letter-spacing: -0.015em;
+  line-height: 1.25;
+  color: var(--gl-text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   flex: 1; min-width: 0;
 }
 
 .pp-player-top .info .a {
-  font-size: 14px; color: var(--text-secondary);
+  font-size: 14px; color: var(--gl-text-2);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.pp-player-top .info .pp-link-meta:hover,
+.pp-player-top .info .pp-link-meta:focus-visible,
+.pp-player-top .info .pp-link-title:hover,
+.pp-player-top .info .pp-link-title:focus-visible {
+  color: var(--gl-text);
+}
+
+.pp-love-btn {
+  width: 28px; height: 28px;
+  margin-top: -2px;
+  color: color-mix(in srgb, var(--gl-text) 84%, transparent);
 }
 
 /* Featured/guest artist line shown below the primary artist in the sidebar
    player (now-playing display and the "Playing from" queue item). */
 .pp-feat {
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--gl-text-2);
   opacity: 0.78;
   white-space: nowrap;
   overflow: hidden;
@@ -1829,15 +2477,32 @@ textarea,
   border-radius: 4px;
 }
 
-.pp-player-middle {
-  display: none;
+/* Player card: the codec readout is a tier-colored glass pill. */
+.player-pane .pp-quality-chip {
+  margin-top: 7px;
+}
+
+.player-pane .pp-quality-chip .codec-strip {
+  height: 20px;
+  min-height: 20px;
+  padding: 0 8px;
+  gap: 4px;
+  border: none;
+  border-radius: 999px;
+  font-size: 9.5px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  background: color-mix(in srgb, currentColor 15%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, currentColor 50%, transparent);
+}
+
+.player-pane .pp-quality-chip .codec-strip .sep {
+  opacity: 0.6;
 }
 
 .pp-player-bottom {
-  display: flex; flex-direction: column; gap: 10px;
-  padding: 4px var(--pp-inline) 0;
-  flex: 1;
-  min-height: 0;
+  display: flex; flex-direction: column; gap: 14px;
+  flex: 1 0 auto;
 }
 
 .stream-source-badge {
@@ -1876,282 +2541,176 @@ textarea,
   background: color-mix(in srgb, var(--bg-elev) 72%, transparent);
 }
 
-.pp-player-viz {
-  margin-top: 6px;
-  border-top: 0.5px solid var(--divider);
-  padding-top: 6px;
+/* Footer pinned to the bottom of the Now Playing tab: Visualizer and Lyrics
+   accordions on a lighter band that bleeds to the card edges. */
+.pp-footer {
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  transition:
-    gap 260ms cubic-bezier(0.22, 1, 0.36, 1),
-    padding-bottom 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  margin: auto calc(-1 * var(--pp-inline)) calc(-1 * var(--pp-inline));
+  border-radius: 0 0 var(--gl-r-panel) var(--gl-r-panel);
+  overflow: hidden;
+  background: var(--pp-band);
+  box-shadow: inset 0 0.5px 0 var(--gl-hairline);
 }
 
-.pp-player-viz-head {
+.pp-acc {
+  position: relative;
+}
+
+.pp-acc + .pp-acc {
+  border-top: 0.5px solid var(--gl-hairline);
+}
+
+.pp-acc-head {
+  width: 100%;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 20px;
-  padding: 0 2px;
+  padding: 0 20px;
   border: 0;
   background: transparent;
-  color: var(--text-tertiary);
+  color: color-mix(in srgb, var(--gl-text) 76%, transparent);
   font: inherit;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
-  transition: color 120ms;
+  transition: color 140ms ease;
 }
 
-.pp-player-viz-head:hover {
-  color: var(--text-secondary);
+.pp-acc-head:hover {
+  color: var(--gl-text);
 }
 
-.pp-player-viz.collapsed {
-  gap: 0;
-  padding-bottom: 0;
+.pp-acc-head:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--gl-text) 55%, transparent);
+  outline-offset: -2px;
 }
 
-.pp-player-viz-body {
-  max-height: 184px;
-  opacity: 1;
-  transform: translateY(0);
-  clip-path: inset(0 0 0 0);
+.pp-acc-chev {
+  display: inline-flex;
+  transition: transform 260ms ease;
+}
+
+.pp-acc.open .pp-acc-chev {
+  transform: rotate(90deg);
+}
+
+/* Open heights come from .pp-player (--pp-viz-open-h / --pp-lyr-open-h), the
+   same values the artwork gives up, so both move together. */
+.pp-acc-body {
+  height: 0;
   overflow: hidden;
-  transform-origin: top center;
-  will-change: max-height, clip-path, opacity, transform;
-  transition:
-    max-height 260ms cubic-bezier(0.22, 1, 0.36, 1),
-    clip-path 260ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 180ms ease,
-    transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: height 320ms var(--gl-ease);
 }
 
-.pp-player-viz.collapsed .pp-player-viz-body {
-  max-height: 0;
-  opacity: 0;
-  transform: translateY(-8px);
-  clip-path: inset(0 0 100% 0);
-  pointer-events: none;
+.pp-acc-viz .pp-acc-body { height: var(--pp-viz-open-h); }
+.pp-acc-lyrics .pp-acc-body { height: var(--pp-lyr-open-h); }
+
+.pp-acc-inner {
+  height: 100%;
+  padding: 0 20px 12px;
 }
 
-.pp-player-viz.closing .pp-player-viz-body {
-  transition-timing-function:
-    cubic-bezier(0.42, 0, 0.58, 1),
-    cubic-bezier(0.42, 0, 0.58, 1),
-    ease,
-    cubic-bezier(0.42, 0, 0.58, 1);
-}
-
-.pp-player-viz-clip {
-  overflow: hidden;
-  transform: translateY(0);
-  transform-origin: top center;
-  transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.pp-player-viz.collapsed .pp-player-viz-clip {
-  transform: translateY(-8px);
-}
-
-.pp-player-viz .spectrum-viz.mini {
+/* Visualizer: the mini spectrum squeezed into the accordion body, lit with
+   the now-playing tint. */
+.pp-viz-inner .spectrum-viz.mini {
+  height: 100%;
   background: transparent;
   border-radius: 0;
   overflow: visible;
 }
 
-.pp-player-lyrics {
-  position: relative;
-  flex: 1;
+.pp-viz-inner .spectrum-viz.mini .spectrum-body {
+  height: 100%;
   min-height: 0;
-  max-height: 250px;
-  margin-top: 4px;
-  border-top: 0.5px solid var(--divider);
-  padding-top: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  opacity: 1;
-  transform: translateX(0);
-  overflow: hidden;
-  transition:
-    flex-basis 280ms cubic-bezier(0.22, 1, 0.36, 1),
-    max-height 280ms cubic-bezier(0.22, 1, 0.36, 1),
-    margin-top 260ms cubic-bezier(0.22, 1, 0.36, 1),
-    padding-top 260ms cubic-bezier(0.22, 1, 0.36, 1),
-    border-top-color 220ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 180ms ease,
-    transform 260ms cubic-bezier(0.22, 1, 0.36, 1),
-    gap 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  padding: 0;
 }
 
-.pp-player-lyrics.collapsed {
-  flex: 0 0 auto;
-  max-height: 28px;
-  gap: 0;
+.pp-viz-inner .spectrum-band-track {
+  background: color-mix(in srgb, var(--gl-text) 5%, transparent);
+  box-shadow: inset 0 0 0 0.5px var(--gl-hairline);
 }
 
-.pp-player-lyrics.side-open {
-  flex: 0 0 0;
-  max-height: 0;
-  margin-top: 0;
-  padding-top: 0;
-  border-top-color: transparent;
-  gap: 0;
-  opacity: 0;
-  transform: translateX(18px);
-  pointer-events: none;
+.pp-viz-inner .spectrum-segment {
+  --led-color: color-mix(in oklab, var(--gl-now-ic) 78%, var(--gl-text));
 }
 
-.pp-player-lyrics-head {
-  position: relative;
-  height: 20px;
-  min-height: 20px;
-  opacity: 1;
-  transform: translateX(0);
-  transition:
-    opacity 180ms ease,
-    transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.pp-player-lyrics-toggle {
-  min-width: 0;
-  width: 100%;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 0 2px;
-  border: 0;
-  background: transparent;
-  color: var(--text-tertiary);
-  font: inherit;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  cursor: pointer;
-  transition: color 120ms;
-}
-
-.pp-player-lyrics-toggle:hover {
-  color: var(--text-secondary);
-}
-
+/* Lyrics accordion: the header also carries the lyrics side-pane toggle
+   (sits over the header row, left of the chevron). While the side pane is
+   open the body shrinks to a status line instead of duplicating the lyrics. */
 .pp-lyrics-side-toggle {
   position: absolute;
-  top: 34px;
-  right: 0;
-  z-index: 2;
-  width: 22px;
-  height: 22px;
-  opacity: 0.72;
-  transform: translateX(2px);
-  transition: opacity 140ms ease, transform 140ms ease, background 120ms ease, color 120ms ease;
-}
-
-.pp-player-lyrics:hover .pp-lyrics-side-toggle,
-.pp-player-lyrics:focus-within .pp-lyrics-side-toggle,
-.pp-lyrics-side-toggle.active {
-  opacity: 1;
-  transform: translateX(0);
-}
-
-.pp-lyrics-side-toggle.active {
-  color: var(--text-primary);
-  background: var(--bg-selected);
+  top: 7px;
+  right: 42px;
+  z-index: 1;
+  color: var(--gl-text-3);
 }
 
 .pp-lyrics-preview {
-  flex: 1;
-  min-height: 0;
   display: flex;
-  box-sizing: border-box;
-  padding-right: 28px;
+  min-height: 0;
+  padding: 0 16px 12px;
   overflow: hidden;
-  opacity: 1;
-  transform: translateX(0);
-  transition:
-    opacity 180ms ease,
-    transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.pp-player-lyrics.side-open .pp-player-lyrics-head,
-.pp-player-lyrics.side-open .pp-lyrics-preview,
-.pp-player-lyrics.side-open .pp-lyrics-side-toggle {
-  opacity: 0;
-  transform: translateX(12px);
+.pp-lyrics-status {
+  padding: 0 4px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--gl-text-2);
 }
 
-.pp-lyrics-preview .lyr-inline .lyr-body,
-.pp-lyrics-preview .lyr-current .lyr-body {
+.pp-lyrics-preview .lyr-inline .lyr-body {
   flex: 1;
   min-height: 0;
   max-height: none;
 }
 
-.pp-lyrics-preview .lyr-inline .lyr-list,
-.pp-lyrics-preview .lyr-current .lyr-list {
-  padding-bottom: 6px;
+.pp-lyrics-preview .lyr-inline .lyr-list {
+  padding-bottom: 4px;
   overflow: auto;
 }
 
 .pp-lyrics-preview .lyr-inline .lyr-line {
-  padding: 5px 4px;
-  font-size: 16px;
-  line-height: 1.48;
-  overflow-wrap: anywhere;
-}
-
-.pp-lyrics-preview .lyr-current .lyr-line {
-  padding: 5px 4px 7px;
-  font-size: 18px;
+  padding: 3px 4px;
+  font-size: 13px;
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
 
-.pp-lyrics-preview .lyr-inline .lyr-line-active {
-  font-size: 18px;
-}
-
-.pp-lyrics-preview .lyr-current .lyr-line-active {
-  font-size: 20px;
-}
-
+.pp-lyrics-preview .lyr-inline .lyr-line-active,
 .pp-lyrics-preview .lyr-inline .lyr-list-window .lyr-line-layout-active {
-  font-size: 18px;
-}
-
-.pp-lyrics-preview .lyr-current .lyr-list-window .lyr-line-layout-active {
-  font-size: 20px;
+  font-size: 14.5px;
 }
 
 .pp-lyrics-preview .lyr-inline .lyr-plain,
-.pp-lyrics-preview .lyr-current .lyr-plain {
-  font-size: 15px;
+.pp-lyrics-preview .lyr-inline .lyr-plain-line {
+  font-size: 12.5px;
   line-height: 1.5;
 }
 
-.pp-lyrics-preview .lyr-inline .lyr-plain-line,
-.pp-lyrics-preview .lyr-current .lyr-plain-line {
-  font-size: 15px;
-  line-height: 1.5;
+.pp-lyrics-preview .lyr-inline .lyr-empty {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 8px;
+  gap: 4px;
+}
+
+.pp-lyrics-preview .lyr-inline .lyr-empty > svg {
+  width: 18px;
+  height: 18px;
 }
 
 .pp-volume .ic { color: var(--text-secondary); }
 
+/* Up Next tab. */
 .pp-queue {
   flex: 1; min-height: 0;
   display: flex; flex-direction: column;
+  padding: 4px 12px 0;
   overflow: hidden;
-}
-
-.pp-queue .queue-head {
-  padding-top: 14px;
 }
 
 /* Codec / quality strip — minimal monospace line, audiophile style.
@@ -2199,7 +2758,7 @@ textarea,
 /* Progress + controls inside player pane */
 .pp-progress {
   width: 100%;
-  display: flex; flex-direction: column; gap: 4px;
+  display: flex; flex-direction: column; gap: 6px;
 }
 .slider-wrap {
   position: relative;
@@ -2217,49 +2776,82 @@ textarea,
   transition: opacity 150ms ease;
 }
 .slider-wrap:hover .dot { opacity: 1; }
-.pp-progress .slider-wrap .dot { background: var(--text-primary); }
+.pp-progress .slider-wrap .dot { background: var(--gl-text); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); }
 .pp-volume   .slider-wrap .dot { background: var(--text-secondary); }
+/* Player card sliders: a 14px hit area around a 5px rail (::before). */
 .pp-progress .track {
-  width: 100%; height: 4px;
-  background: var(--bg-active);
-  border-radius: var(--r-pill);
+  width: 100%; height: 14px;
   position: relative;
-  overflow: hidden;
-  cursor: ew-resize;
+  cursor: pointer;
+  outline: none;
+}
+.pp-progress .track::before,
+.player-pane .pp-volume .track::before {
+  content: '';
+  position: absolute; left: 0; right: 0; top: 50%;
+  height: 5px; margin-top: -2.5px;
+  border-radius: var(--r-pill);
+  background: var(--pp-rail);
+  box-shadow: var(--pp-rail-shadow);
+}
+.pp-progress .track:focus-visible::before,
+.player-pane .pp-volume .track:focus-visible::before {
+  box-shadow: var(--pp-rail-shadow), 0 0 0 2px color-mix(in srgb, var(--gl-text) 45%, transparent);
 }
 .pp-progress .fill {
-  position: absolute; left: 0; top: 0; bottom: 0;
-  background: var(--text-primary);
+  position: absolute; left: 0; top: 50%;
+  height: 5px; margin-top: -2.5px;
+  background: var(--pp-fill);
   border-radius: var(--r-pill);
 }
 .pp-progress .times {
   display: flex; justify-content: space-between;
   font-family: var(--font-mono);
-  font-size: 10.5px; color: var(--text-tertiary);
+  font-size: 10.5px; color: var(--gl-text-3);
   font-variant-numeric: tabular-nums;
 }
+/* Transport: shuffle 34 · prev 40 · play 56 · next 40 · repeat 34. */
 .pp-controls {
   width: 100%;
-  display: flex; align-items: center; justify-content: center; gap: 18px;
+  display: flex; align-items: center; justify-content: center; gap: 16px;
 }
 .pp-controls button {
-  width: 32px; height: 32px;
-  background: none; border: none;
-  color: var(--text-primary);
+  position: relative;
+  width: 40px; height: 40px;
+  flex-shrink: 0;
+  padding: 0;
+  background: transparent; border: none;
+  color: var(--gl-text);
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 6px;
+  border-radius: 999px;
   cursor: pointer;
+  transition: background 140ms ease, color 200ms ease, transform 160ms var(--gl-spring);
 }
-.pp-controls button:hover { background: var(--bg-hover); }
-.pp-controls button.sub { color: var(--text-secondary); }
-.pp-controls button.sub.active { color: var(--text-primary); }
+.pp-controls button:hover { background: var(--gl-btn-hover); }
+.pp-controls button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--gl-text) 55%, transparent);
+  outline-offset: 1px;
+}
+.pp-controls button.sub { width: 34px; height: 34px; color: var(--gl-text-2); }
+.pp-controls button.sub.active { color: var(--gl-now-ic); }
+/* Repeat One: tiny "1" tucked into the repeat glyph. */
+.pp-controls button.repeat-one::after {
+  content: '1';
+  position: absolute;
+  top: 6px; right: 6px;
+  font-size: 7.5px;
+  font-weight: 800;
+  line-height: 1;
+  color: currentColor;
+}
 .pp-controls button.play {
-  width: 42px; height: 42px;
-  background: var(--text-primary);
-  color: var(--bg-window);
-  border-radius: 50%;
+  width: 56px; height: 56px;
+  background: var(--gl-primary-fill);
+  color: var(--gl-primary-fg);
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.08), var(--gl-primary-shadow);
 }
-.pp-controls button.play:hover { background: var(--text-primary); opacity: 0.9; }
+.pp-controls button.play:hover { background: var(--gl-primary-fill); transform: scale(1.05); }
+.pp-controls button.play:active { transform: scale(0.94); }
 .pp-volume {
   width: 100%;
   display: flex; align-items: center; gap: 8px;
@@ -2277,40 +2869,27 @@ textarea,
   border-radius: var(--r-pill);
 }
 .pp-volume .ic { color: var(--text-secondary); }
+/* Player card volume row (the base .pp-volume rules also style fullscreen). */
+.player-pane .pp-volume { gap: 10px; }
+.player-pane .pp-volume .ic { display: inline-flex; color: var(--gl-text-2); }
+.player-pane .pp-volume .track {
+  height: 14px;
+  background: transparent;
+  border-radius: 0;
+  cursor: pointer;
+  outline: none;
+}
+.player-pane .pp-volume .fill {
+  top: 50%; bottom: auto;
+  height: 5px; margin-top: -2.5px;
+  background: var(--pp-vol-fill);
+}
+.player-pane .pp-volume .slider-wrap .dot {
+  background: var(--gl-text);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
 
-/* Now playing bar */
-.np-bar {
-  height: var(--np-h); flex-shrink: 0;
-  background: var(--bg-panel);
-  border-top: 0.5px solid var(--divider);
-  display: grid; grid-template-columns: 1fr 1.4fr 1fr; gap: 16px;
-  align-items: center; padding: 0 16px;
-}
-.np-now {
-  display: flex; align-items: center; gap: 12px;
-  min-width: 0;
-}
-.np-art {
-  width: 56px; height: 56px;
-  border-radius: 5px;
-  flex-shrink: 0;
-  overflow: hidden;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-}
-.np-meta { min-width: 0; }
-.np-meta .t {
-  font-size: 13.5px; font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.np-meta .a {
-  font-size: 12px; color: var(--text-secondary);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  margin-top: 2px;
-}
-.np-controls {
-  display: flex; flex-direction: column; align-items: center; gap: 6px;
-}
+/* Now playing transport + progress (fullscreen PlayerStage) */
 .np-buttons { display: flex; align-items: center; gap: 18px; }
 .np-buttons button {
   width: 28px; height: 28px;
@@ -2352,130 +2931,984 @@ textarea,
   border-radius: var(--r-pill);
 }
 
-.np-right { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
-.np-volume { display: flex; align-items: center; gap: 8px; width: 120px; }
-.np-volume-track {
-  flex: 1; height: 4px;
-  background: var(--bg-active);
-  border-radius: var(--r-pill);
-  position: relative;
-}
-.np-volume-fill {
-  position: absolute; left: 0; top: 0; bottom: 0;
-  background: var(--text-secondary);
-  border-radius: var(--r-pill);
-}
-
-/* Collapsed player bottom bar */
-.player-bottom-shell {
-  flex-shrink: 0;
-  position: relative;
-  z-index: 30;
-  background: var(--np-player-surface-background);
-  border-top: 0.5px solid color-mix(in srgb, var(--divider) 92%, transparent);
-  border-radius: 0;
-  overflow: visible;
-  box-shadow: none;
-  transition: background 400ms ease;
-  --pb-content-inset: 14px;
-  --pb-art-size: 64px;
-  --pb-inline: var(--pb-content-inset);
-}
-
-/* Docked bottom player: anchored full-bleed below .frame, inside .window.
-   Collapses its height when switching to the side player (PlayerPane) so the
-   horizontal strip is released with motion. */
+/* Now Playing island: a floating glass capsule centered over the content,
+   between --gl-island-l / --gl-island-r (set on .window), that morphs into the
+   Now Playing sheet. App keeps .player-dock mounted through the exit and drives
+   the motion with its state classes: priming (first frame of the enter) and
+   collapsed (exit) hold the island below the edge; open shows it. */
 .player-dock {
-  flex-shrink: 0;
-  position: relative;
-  display: grid;
-  grid-template-rows: 1fr;
-  transition: grid-template-rows 280ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-/* 0fr = altura cero: estado de salida (collapsed) y de arranque del crecimiento (priming). */
-.player-dock.collapsed,
-.player-dock.priming {
-  grid-template-rows: 0fr;
+  position: absolute;
+  left: var(--gl-island-l, 16px);
+  right: var(--gl-island-r, 16px);
+  bottom: 18px;
+  z-index: 35;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  transition:
+    left 420ms var(--gl-ease),
+    right 420ms var(--gl-ease);
 }
 .player-dock-inner {
-  min-height: 0;
-  /* El grid-template-rows (layout) corre siempre en el main thread y puede
-     perder frames cuando el panel lateral monta/reflowea al mismo tiempo; el
-     fade+slide compuesto en GPU es lo que el ojo sigue y enmascara el tirón. */
-  transition:
-    transform 280ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 200ms cubic-bezier(0.22, 1, 0.36, 1);
+  width: 100%;
+  min-width: 0;
 }
-/* Barra desvanecida + desplazada en los extremos de la animación. */
-.player-dock.collapsed .player-dock-inner,
-.player-dock.priming .player-dock-inner {
-  transform: translateY(22px);
+
+/* Full-window scrim behind the open sheet. It sits in the dock (so it stays
+   under the island) but outside .pb-island-frame: size containment would
+   make the frame the containing block of this fixed layer. */
+.pb-island-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.32);
   opacity: 0;
+  pointer-events: none;
+  transition: opacity 360ms ease;
 }
-/* Clip + promoción a capa SOLO mientras anima; en reposo abierto queda overflow
-   visible para no cortar los tiempos del hover de progreso que asoman arriba. */
-.player-dock.collapsed .player-dock-inner,
-.player-dock.priming .player-dock-inner,
-.player-dock.entering .player-dock-inner {
+.theme-light .pb-island-scrim {
+  background: var(--gl-scrim);
+}
+/* no-drag only while shown: it covers the toolbar's drag region. */
+.pb-island-scrim.show {
+  opacity: 1;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+
+/* Query container for the island's own geometry: 100cqw is the dock width, so
+   the compact and sheet layers can be laid out at their final size and simply
+   revealed by the morphing island instead of reflowing mid-animation.
+   The 200px floor keeps the island usable when a wide sidebar and lyrics card
+   leave almost no dock on a small window: it then starts at the dock's left
+   edge (safe center) and overlaps the lyrics card rather than the sidebar. */
+.pb-island-frame {
+  position: relative;
+  display: flex;
+  justify-content: safe center;
+  align-items: flex-end;
+  container: pb-island / inline-size;
+  pointer-events: none;
+  --pb-compact-w: min(600px, max(100cqw, 200px));
+  --pb-sheet-w: min(820px, max(100cqw, 200px));
+  --pb-sheet-h: min(540px, calc(100vh - 90px));
+}
+
+.pb-island {
+  --pb-line-track: rgba(255, 255, 255, 0.14);
+  --pb-line-fill: color-mix(in oklab, var(--gl-nt) 40%, #fff);
+  --pb-bar-track: rgba(255, 255, 255, 0.18);
+  --pb-vol-fill: rgba(255, 255, 255, 0.72);
+  --pb-icon: color-mix(in srgb, var(--gl-text) 90%, transparent);
+  --pb-viz-lo: color-mix(in oklab, var(--gl-nt) 85%, #fff);
+  --pb-viz-hi: rgba(255, 255, 255, 0.85);
+  position: relative;
+  flex: 0 0 auto;
+  width: var(--pb-compact-w);
+  height: 64px;
+  border-radius: 32px;
   overflow: hidden;
-  will-change: transform, opacity;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  color: var(--gl-text);
+  background: var(--gl-island-fill);
+  backdrop-filter: var(--gl-island-filter);
+  -webkit-backdrop-filter: var(--gl-island-filter);
+  box-shadow: var(--gl-island-shadow);
+  transition:
+    opacity 260ms ease,
+    transform 460ms cubic-bezier(0.25, 1.15, 0.4, 1);
 }
-.player-dock.collapsed .player-bottom-shell {
+/* Size only springs while the island morphs into / out of the sheet
+   (PlayerBottomBar sets .morphing for the duration). Otherwise the island
+   follows dock and window resizes immediately, like its compact and sheet
+   layers, instead of lagging behind them with an overshoot. */
+.pb-island.morphing {
+  transition:
+    width 560ms var(--gl-spring-soft),
+    height 560ms var(--gl-spring-soft),
+    border-radius 560ms var(--gl-spring-soft),
+    opacity 260ms ease,
+    transform 460ms cubic-bezier(0.25, 1.15, 0.4, 1);
+}
+.theme-light .pb-island {
+  --pb-line-track: rgba(0, 0, 0, 0.1);
+  --pb-line-fill: color-mix(in oklab, var(--gl-nt) 70%, #000);
+  --pb-bar-track: rgba(0, 0, 0, 0.12);
+  --pb-vol-fill: rgba(0, 0, 0, 0.5);
+  --pb-viz-lo: color-mix(in oklab, var(--gl-nt) 80%, #000);
+  --pb-viz-hi: rgba(0, 0, 0, 0.5);
+}
+.pb-island.sheet-open {
+  width: var(--pb-sheet-w);
+  height: var(--pb-sheet-h);
+  border-radius: 36px;
+}
+.player-dock.priming .pb-island,
+.player-dock.collapsed .pb-island {
+  opacity: 0;
+  transform: translateY(110px) scale(0.96);
+}
+.player-dock.collapsed .pb-island,
+.pb-island.closing {
   pointer-events: none;
 }
 
-.pb-top-progress {
+/* Compact layer: anchored bottom-center at its final width, fades out while
+   the island grows into the sheet. */
+.pb-island-compact {
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 14px;
-  z-index: 36;
+  left: 50%;
+  bottom: 0;
+  width: var(--pb-compact-w);
+  height: 64px;
+  margin-left: calc(var(--pb-compact-w) / -2);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 10px 0 9px;
+  transition: opacity 220ms ease;
 }
-
-.pb-top-progress .track {
-  position: absolute;
-  inset: 0 0 auto;
-  height: 4px;
-  background: color-mix(in srgb, var(--bg-active) 86%, transparent);
-  cursor: ew-resize;
+.pb-island.sheet-open .pb-island-compact {
+  opacity: 0;
+  pointer-events: none;
+}
+.pb-island-now {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  outline: none;
+}
+.pb-island-now:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--gl-text) 40%, transparent);
+}
+.pb-island-art {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  flex-shrink: 0;
+  border-radius: 999px;
   overflow: hidden;
+  background: var(--gl-well);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4), 0 0 0 0.5px rgba(255, 255, 255, 0.2);
+}
+/* Light glass: soft drop shadow and a dark hairline (a white ring vanishes on
+   the frosted white island), like the other covers in light mode. */
+.theme-light .pb-island-art {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+}
+.pb-island-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.pb-island-title-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pb-island-title {
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pb-island-title-row .stream-source-badge {
+  flex-shrink: 0;
+  margin-top: 0;
+  min-height: 16px;
+  font-size: 9.5px;
+}
+.pb-island-sub {
+  min-width: 0;
+  font-size: 12px;
+  color: var(--gl-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pb-island-controls {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.pb-island-btn {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--gl-text);
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+.pb-island-btn.dim {
+  color: var(--pb-icon);
+}
+.pb-island-btn:hover {
+  background: var(--gl-btn-hover);
+  color: var(--gl-text);
+}
+.pb-island-play {
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--gl-primary-fill);
+  color: var(--gl-primary-fg);
+  box-shadow: var(--gl-primary-shadow);
+  cursor: pointer;
+  transition: transform 180ms var(--gl-spring), filter 140ms ease;
+}
+.pb-island-play:hover {
+  filter: brightness(1.05);
+}
+.pb-island-play:active {
+  transform: scale(0.94);
+}
+.pb-island-divider {
+  width: 0.5px;
+  height: 22px;
+  margin: 0 4px;
+  flex-shrink: 0;
+  background: var(--gl-hairline);
+}
+.pb-island button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.pb-island button:focus-visible,
+.pb-island [role="slider"]:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--gl-text) 45%, transparent);
+  outline-offset: 1px;
 }
 
-.pb-top-progress .fill {
+/* Narrow docks (sidebar + lyrics card on a small window): drop the secondary
+   island buttons before the title collapses to nothing. The player panel stays
+   reachable from the toolbar. */
+@container pb-island (max-width: 440px) {
+  .pb-island-divider,
+  .pb-island-panel-btn {
+    display: none;
+  }
+}
+/* Narrower still (e.g. the default sidebar + lyrics card on a 900px window
+   leaves ~226px): the sheet keeps the full transport, so the capsule sheds
+   Previous, then Next (and the fallback badge), then its artwork, so the
+   title, Play and the sheet toggle always fit. */
+@container pb-island (max-width: 360px) {
+  .pb-island-prev {
+    display: none;
+  }
+}
+@container pb-island (max-width: 300px) {
+  .pb-island-next,
+  .pb-island-title-row .stream-source-badge {
+    display: none;
+  }
+}
+@container pb-island (max-width: 240px) {
+  .pb-island-art {
+    display: none;
+  }
+  .pb-island-compact {
+    padding-left: 18px;
+  }
+  /* Scoped to outrank the base rules further down. */
+  .pb-island .pb-island-progress {
+    left: 22px;
+  }
+  .pb-island-frame .pb-island-times {
+    padding-left: 14px;
+  }
+}
+
+/* Thin progress line along the island's bottom edge, with a taller hit area so
+   it stays a seek slider (drag + arrow keys) like the old docked bar. */
+.pb-island-progress {
+  position: absolute;
+  left: 66px;
+  right: 22px;
+  bottom: 2px;
+  height: 11px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+.pb-island-progress .line {
+  position: relative;
+  width: 100%;
+  height: 2.5px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--pb-line-track);
+  transition: height 160ms ease;
+}
+.pb-island-progress .fill {
   position: absolute;
   left: 0;
   top: 0;
   bottom: 0;
-  background: var(--text-primary);
+  border-radius: 999px;
+  background: var(--pb-line-fill);
+}
+.pb-island-progress:hover .line,
+.pb-island.seeking .pb-island-progress .line {
+  height: 4px;
+}
+.pb-island [role="slider"].pb-island-progress:focus-visible {
+  outline: none;
+}
+.pb-island-progress:focus-visible .line {
+  height: 4px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--gl-text) 35%, transparent);
 }
 
-.pb-progress-times {
+/* Elapsed / remaining pills that float above the compact island on hover and
+   while seeking (outside the island, which clips its contents). */
+.pb-island-times {
   position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: calc(100% + 10px);
+  /* The island's center: the frame's, or half the island when the floor makes
+     it overflow the frame from the left edge. */
+  left: max(50%, calc(var(--pb-compact-w) / 2));
+  bottom: calc(100% + 8px);
+  width: var(--pb-compact-w);
+  margin-left: calc(var(--pb-compact-w) / -2);
+  padding: 0 14px 0 58px;
   display: flex;
   justify-content: space-between;
-  opacity: 0;
-  transform: translateY(3px);
   pointer-events: none;
-  transition: opacity 140ms ease, transform 140ms ease;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(3px);
+  transition: opacity 140ms ease, transform 140ms ease, visibility 0s linear 140ms;
 }
-
-.pb-progress-times span {
-  color: var(--text-secondary);
+.pb-island-times span {
+  padding: 2px 8px;
+  border-radius: 999px;
   font-family: var(--font-mono);
   font-size: 10.5px;
   font-variant-numeric: tabular-nums;
-  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.72), 0 0 1px rgba(0, 0, 0, 0.8);
+  color: var(--gl-text-2);
+  background: var(--gl-chrome-fill);
+  backdrop-filter: var(--gl-chrome-filter);
+  -webkit-backdrop-filter: var(--gl-chrome-filter);
+  box-shadow: var(--gl-chrome-shadow);
+}
+.pb-island:not(.sheet-open):not(.closing):hover + .pb-island-times,
+.pb-island.seeking:not(.sheet-open) + .pb-island-times,
+.pb-island:not(.sheet-open):has(.pb-island-progress:focus-visible) + .pb-island-times {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition-delay: 0s;
+}
+/* The "A continuación" toast takes the same slot above the island. */
+.player-dock:has(.up-next-toast-bottom) .pb-island-times {
+  display: none;
 }
 
-.pb-top-progress:hover .pb-progress-times,
-.pb-top-progress:focus-within .pb-progress-times,
-.player-bottom-shell:hover .pb-progress-times {
+/* Sheet layer: laid out at the final sheet size, anchored bottom-center, and
+   faded in once the island has mostly grown. */
+.pb-sheet {
+  /* Artwork side: 340px, shrunk so the visualizer well keeps some height and
+     the right column keeps ~330px for the tabs + header buttons. */
+  --pb-art: min(340px, calc(var(--pb-sheet-h) - 130px), calc(var(--pb-sheet-w) - 410px));
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: var(--pb-sheet-w);
+  height: var(--pb-sheet-h);
+  margin-left: calc(var(--pb-sheet-w) / -2);
+  display: grid;
+  grid-template-columns: var(--pb-art) minmax(0, 1fr);
+  gap: 28px;
+  padding: 26px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 280ms ease;
+}
+.pb-island.sheet-open .pb-sheet {
   opacity: 1;
-  transform: translateY(0);
+  pointer-events: auto;
+  transition-delay: 160ms;
+}
+.pb-sheet-left {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.pb-sheet-art {
+  position: relative;
+  width: var(--pb-art);
+  height: var(--pb-art);
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 22px;
+  overflow: hidden;
+  background: var(--gl-well);
+  cursor: pointer;
+  box-shadow: 0 24px 50px rgba(0, 0, 0, 0.5), 0 0 0 0.5px rgba(255, 255, 255, 0.14);
+  transition: transform 260ms var(--gl-spring), filter 160ms ease;
+}
+.theme-light .pb-sheet-art {
+  box-shadow: 0 24px 50px rgba(0, 0, 0, 0.18), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+}
+.pb-sheet-art:hover {
+  filter: brightness(1.05);
+}
+.pb-sheet-art:active {
+  transform: scale(0.985);
+}
+/* Recessed visualizer well under the artwork. */
+.pb-sheet-viz {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: 12px 14px;
+  border-radius: 18px;
+  overflow: hidden;
+  background: var(--gl-well);
+  box-shadow: var(--gl-well-shadow);
+}
+.pb-sheet-viz .spectrum-viz {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border-radius: 0;
+}
+.pb-sheet-viz .spectrum-viz.compact .spectrum-body {
+  padding: 0;
+}
+.pb-sheet-viz .spectrum-viz.compact .spectrum-bands {
+  gap: 3px;
+}
+.pb-sheet-viz .spectrum-db-axis,
+.pb-sheet-viz .spectrum-freq-row {
+  display: none;
+}
+.pb-sheet-viz .spectrum-band-track {
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+/* Tint → white up the column, like the design's gradient bars. */
+.pb-sheet-viz .spectrum-segment {
+  --led-color: color-mix(in oklab, var(--pb-viz-lo), var(--pb-viz-hi) calc(var(--idx, 0) * 100% / var(--seg, 12)));
+}
+
+.pb-sheet-main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.pb-sheet-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-bottom: 18px;
+}
+/* 2 × 96px segments; on a very narrow sheet the header wraps first and the
+   segments then share whatever width is left (thumb sized in %). */
+.pb-sheet-tabs {
+  position: relative;
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  height: 32px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--gl-seg-track);
+  box-shadow: var(--gl-seg-track-shadow);
+}
+.pb-sheet-tabs-thumb {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 2px;
+  width: calc(50% - 2px);
+  border-radius: 999px;
+  background: var(--gl-seg-thumb);
+  box-shadow: var(--gl-seg-thumb-shadow);
+  transition: transform 340ms var(--gl-spring);
+}
+.pb-sheet-tabs.on-next .pb-sheet-tabs-thumb {
+  transform: translateX(100%);
+}
+.pb-sheet-tab {
+  position: relative;
+  flex: 0 1 auto;
+  width: 96px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--gl-seg-off);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: color 200ms ease;
+}
+.pb-sheet-tab.active {
+  color: var(--gl-seg-on);
+}
+.pb-sheet-actions {
+  display: flex;
+  gap: 4px;
+}
+.pb-sheet-btn {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--gl-secondary-fill);
+  box-shadow: var(--gl-secondary-shadow);
+  color: var(--pb-icon);
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+.pb-sheet-btn:hover {
+  background: var(--gl-secondary-fill-hover);
+  color: var(--gl-text);
+}
+.pb-sheet-btn.active {
+  background: var(--gl-secondary-fill-hover);
+  color: var(--gl-now-ic);
+}
+
+/* Now Playing tab */
+.pb-sheet-now {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.pb-sheet-title-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* Album / artist links (kept before .pb-sheet-title so its type wins). */
+.pb-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline transparent;
+  text-underline-offset: 3px;
+  transition: text-decoration-color 140ms ease;
+}
+.pb-link:hover,
+.pb-link:focus-visible {
+  text-decoration-color: currentColor;
+}
+.pb-sheet-title {
+  min-width: 0;
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pb-sheet-title-actions {
+  flex-shrink: 0;
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+.pb-sheet-icon-btn {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--gl-text-2);
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+.pb-sheet-icon-btn:hover,
+.pb-sheet-icon-btn.active {
+  background: var(--gl-btn-hover);
+  color: var(--gl-text);
+}
+.pb-sheet-icon-btn.loved {
+  color: var(--gl-now-ic);
+}
+/* Same yellow ring the other speaker buttons wear in exclusive mode. */
+.pb-sheet-icon-btn.exclusive-on {
+  position: relative;
+}
+.pb-sheet-icon-btn.exclusive-on::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  border: 1px solid #ffd97a;
+  pointer-events: none;
+}
+.pb-sheet-sub {
+  min-width: 0;
+  margin-top: 5px;
+  font-size: 15px;
+  color: var(--gl-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pb-sheet-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+.pb-sheet-chips .stream-source-badge {
+  margin-top: 0;
+}
+.pb-sheet-codec .codec-strip {
+  height: 22px;
+  margin: 0;
+  padding: 0 9px;
+  gap: 4px;
+  border-radius: 999px;
+  font-size: 10px;
+  background: color-mix(in srgb, currentColor 15%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, currentColor 50%, transparent);
+}
+.pb-sheet-codec .codec-strip .sep {
+  opacity: 0.6;
+}
+.pb-sheet-progress {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pb-sheet-seek,
+.pb-sheet-vol {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  border-radius: 999px;
+}
+.pb-sheet-seek {
+  height: 16px;
+}
+.pb-sheet-seek .track,
+.pb-sheet-vol .track {
+  position: relative;
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--pb-bar-track);
+}
+.pb-sheet-seek .fill,
+.pb-sheet-vol .fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 999px;
+  background: var(--gl-text);
+}
+.pb-sheet-times {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--gl-text-2);
+}
+.pb-sheet-transport {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  margin: 16px 0 18px;
+}
+.pb-sheet-transport button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--gl-text);
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, transform 180ms var(--gl-spring);
+}
+.pb-sheet-transport button:not(.play):hover {
+  background: var(--gl-btn-hover);
+}
+.pb-sheet-transport .sub {
+  width: 38px;
+  height: 38px;
+  color: var(--gl-text-2);
+}
+.pb-sheet-transport .sub.active {
+  color: var(--gl-now-ic);
+}
+.pb-sheet-transport .skip {
+  width: 46px;
+  height: 46px;
+}
+.pb-sheet-transport .play {
+  width: 64px;
+  height: 64px;
+  background: var(--gl-primary-fill);
+  color: var(--gl-primary-fg);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+}
+.theme-light .pb-sheet-transport .play {
+  box-shadow: var(--gl-primary-shadow);
+}
+.pb-sheet-transport .play:active {
+  transform: scale(0.94);
+}
+.pb-repeat-one {
+  position: absolute;
+  top: 6px;
+  right: 5px;
+  font-size: 8.5px;
+  font-weight: 800;
+  line-height: 1;
+}
+.pb-sheet-volume {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.pb-sheet-volume .ic {
+  display: inline-flex;
+  color: var(--gl-text-2);
+}
+.pb-sheet-vol {
+  flex: 1;
+  height: 14px;
+}
+.pb-sheet-vol .track {
+  height: 5px;
+}
+.pb-sheet-vol .fill {
+  background: var(--pb-vol-fill);
+}
+.pb-sheet-volume .output-device-control {
+  flex-shrink: 0;
+}
+
+/* Up Next tab */
+.pb-sheet-queue {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.pb-sheet-queue-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 6px 8px;
+}
+.pb-sheet-queue-from {
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gl-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pb-sheet-queue-remaining {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  color: var(--gl-text-3);
+}
+.pb-sheet-queue-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.pb-sheet-queue-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 6px;
+  border-radius: 14px;
+  cursor: default;
+  outline: none;
+  transition: background 120ms ease;
+}
+.pb-sheet-queue-row:hover,
+.pb-sheet-queue-row:focus-visible {
+  background: var(--gl-hover);
+}
+.pb-sheet-queue-row .art {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--gl-well);
+}
+.pb-sheet-queue-row .meta {
+  flex: 1;
+  min-width: 0;
+}
+.pb-sheet-queue-row .t,
+.pb-sheet-queue-row .a {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pb-sheet-queue-row .t {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.pb-sheet-queue-row .a {
+  font-size: 12px;
+  color: var(--gl-text-2);
+}
+.pb-sheet-queue-row .dur {
+  padding-right: 6px;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--gl-text-3);
+}
+.pb-sheet-queue-note {
+  padding: 10px 6px;
+  font-size: 12px;
+  color: var(--gl-text-3);
+}
+
+/* Narrow docks: tighter sheet, then a single column without the artwork
+   (Expand stays in the header). */
+@container pb-island (max-width: 700px) {
+  .pb-sheet {
+    gap: 20px;
+    padding: 20px;
+  }
+  .pb-sheet-transport {
+    gap: 8px;
+  }
+}
+@container pb-island (max-width: 560px) {
+  .pb-sheet {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .pb-sheet-left {
+    display: none;
+  }
+  .pb-sheet-title {
+    font-size: 22px;
+  }
+}
+/* Very narrow docks (e.g. ~226px with the default sidebar + lyrics card at the
+   minimum window size): the transport buttons don't shrink, so they step down
+   in size until shuffle / repeat finally drop out (the player panel keeps
+   them). Totals: 214px, then 188px, then 124px. */
+@container pb-island (max-width: 400px) {
+  .pb-sheet {
+    padding: 16px;
+  }
+  .pb-sheet-transport {
+    gap: 4px;
+  }
+  .pb-sheet-transport .sub {
+    width: 32px;
+    height: 32px;
+  }
+  .pb-sheet-transport .skip {
+    width: 40px;
+    height: 40px;
+  }
+  .pb-sheet-transport .play {
+    width: 54px;
+    height: 54px;
+  }
+}
+@container pb-island (max-width: 260px) {
+  .pb-sheet-transport {
+    gap: 2px;
+  }
+  .pb-sheet-transport .sub {
+    width: 30px;
+    height: 30px;
+  }
+  .pb-sheet-transport .skip {
+    width: 36px;
+    height: 36px;
+  }
+  .pb-sheet-transport .play {
+    width: 48px;
+    height: 48px;
+  }
+}
+@container pb-island (max-width: 220px) {
+  .pb-sheet-transport .sub {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .player-dock,
+  .pb-island,
+  .pb-island.morphing,
+  .pb-island-compact,
+  .pb-sheet,
+  .pb-island-scrim,
+  .pb-sheet-tabs-thumb {
+    transition-duration: 1ms;
+    transition-delay: 0s;
+  }
 }
 
 .track-loading-overlay {
@@ -2525,7 +3958,6 @@ textarea,
 }
 
 .pp-controls button:disabled,
-.pb-controls button:disabled,
 .np-stage-controls .np-buttons button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -2536,21 +3968,21 @@ textarea,
   to { opacity: 1; }
 }
 
+/* "A continuación" toast over the Now Playing island: a small glass pill of
+   the same tinted island glass, floating just above it. */
 .up-next-toast {
   position: absolute;
   display: flex;
   align-items: center;
-  gap: 12px;
-  max-width: min(420px, 72vw);
-  padding: 9px 18px 9px 9px;
-  background: var(--up-next-toast-bg);
-  border: 0.5px solid var(--up-next-toast-border);
-  border-radius: 12px;
-  box-shadow:
-    0 16px 44px rgba(0, 0, 0, 0.28),
-    0 1px 0 rgba(255, 255, 255, 0.08) inset;
-  backdrop-filter: var(--up-next-toast-backdrop);
-  -webkit-backdrop-filter: var(--up-next-toast-backdrop);
+  gap: 11px;
+  max-width: min(420px, 100%);
+  padding: 7px 20px 7px 7px;
+  color: var(--gl-text);
+  background: var(--gl-island-fill);
+  border-radius: 999px;
+  box-shadow: var(--gl-island-shadow);
+  backdrop-filter: var(--gl-island-filter);
+  -webkit-backdrop-filter: var(--gl-island-filter);
   pointer-events: none;
   z-index: 72;
   opacity: 0;
@@ -2558,15 +3990,21 @@ textarea,
 
 .up-next-toast-bottom {
   left: 50%;
-  bottom: calc(100% + 8px);
-  transform: translate(-50%, 12px);
-  animation: up-next-toast-bottom-in 260ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  bottom: calc(100% + 10px);
+  transform: translate(-50%, 12px) scale(0.96);
+  animation: up-next-toast-bottom-in 420ms var(--gl-spring-soft) forwards;
+}
+
+/* The sheet replaces the island; the toast would float over its header. */
+.player-dock:has(.pb-island.sheet-open) .up-next-toast-bottom {
+  visibility: hidden;
 }
 
 /* Cartel "A continuación" del panel lateral: flotante, sin empujar el layout. */
 .up-next-inline {
   position: absolute;
-  top: calc(var(--tb-h) + 12px);
+  /* Just below the 56px card header (+6px gap), over the artwork. */
+  top: 72px;
   left: var(--pp-inline);
   right: var(--pp-inline);
   display: flex;
@@ -2594,7 +4032,7 @@ textarea,
   padding: 9px 13px 9px 9px;
   overflow: hidden;
   border: 0.5px solid var(--up-next-toast-border);
-  border-radius: 10px;
+  border-radius: 14px;
   background: var(--up-next-toast-bg);
   box-shadow:
     0 14px 34px rgba(0, 0, 0, 0.26),
@@ -2644,11 +4082,15 @@ textarea,
 }
 
 .up-next-toast .art {
-  width: 46px;
-  height: 46px;
-  border-radius: 6px;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
   overflow: hidden;
   flex-shrink: 0;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(255, 255, 255, 0.2);
+}
+.theme-light .up-next-toast .art {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
 }
 
 .up-next-toast .info {
@@ -2663,13 +4105,13 @@ textarea,
   font-weight: 700;
   letter-spacing: 0.07em;
   text-transform: uppercase;
-  color: var(--text-tertiary);
+  color: var(--gl-text-3);
 }
 
 .up-next-toast .t {
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--gl-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2677,7 +4119,7 @@ textarea,
 
 .up-next-toast .a {
   font-size: 11.5px;
-  color: var(--text-secondary);
+  color: var(--gl-text-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2686,401 +4128,132 @@ textarea,
 @keyframes up-next-toast-bottom-in {
   to {
     opacity: 1;
-    transform: translate(-50%, 0);
+    transform: translate(-50%, 0) scale(1);
   }
 }
 
-.player-bottom-bar {
-  min-height: calc(var(--pb-art-size) + var(--pb-content-inset) + var(--pb-content-inset));
-  display: block;
-  padding: var(--pb-content-inset);
-  position: relative;
-  z-index: 1;
-}
-
-.pb-now {
-  position: absolute;
-  left: var(--pb-content-inset);
-  top: var(--pb-content-inset);
-  width: min(520px, calc(50% - 250px));
-  transform: none;
-  height: var(--pb-art-size);
-  min-width: 260px;
-  display: grid;
-  grid-template-columns: var(--pb-art-size) minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-}
-
-.pb-art {
-  position: relative;
-  width: var(--pb-art-size);
-  height: var(--pb-art-size);
-  padding: 0;
-  border: 0;
-  border-radius: 7px;
-  background: var(--bg-elev);
-  color: inherit;
-  overflow: hidden;
-  flex-shrink: 0;
-  cursor: pointer;
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.24);
-  align-self: center;
-  justify-self: center;
-}
-
-.pb-art:hover {
-  filter: brightness(1.07);
-}
-
-.pb-meta {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 0;
-  line-height: 1.05;
-  align-self: center;
-}
-
-.pb-meta .t {
-  min-width: 0;
-  font-size: 16px;
-  font-weight: 500;
-  line-height: 1.02;
-  letter-spacing: -0.01em;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.pb-meta .a {
-  min-width: 0;
-  font-size: 12px;
-  line-height: 1;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.pb-meta-line {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-top: 0;
-}
-
-.pb-meta-line > .a {
-  flex: 0 1 auto;
-}
-
-.pb-like-btn {
-  width: 28px;
-  height: 28px;
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 9px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.pb-like-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.pb-meta .pp-quality-chip {
-  margin-top: 3px;
-}
-
-.pb-meta .pp-quality-chip .codec-strip {
-  font-size: 10.5px;
-  line-height: 1.1;
-}
-
-.pb-center {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: max-content;
-  transform: translate(-50%, -50%);
-  z-index: 2;
-}
-
-.pb-controls {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-}
-
-.pb-controls button {
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-primary);
-  cursor: pointer;
-}
-
-.pb-controls button:hover {
-  background: var(--bg-hover);
-}
-
-.pb-controls button.sub {
-  color: var(--text-secondary);
-}
-
-.pb-controls button.sub.active {
-  color: var(--text-primary);
-}
-
-.pb-controls button.play {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: var(--text-primary);
-  color: var(--bg-window);
-}
-
-.pb-controls button.play:hover {
-  background: var(--text-primary);
-  opacity: 0.9;
-}
-
-.pb-volume .track {
-  width: 100%;
-  height: 4px;
-  background: var(--bg-active);
-  border-radius: var(--r-pill);
-  position: relative;
-  overflow: hidden;
-  cursor: ew-resize;
-}
-
-.pb-volume .fill {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  border-radius: var(--r-pill);
-}
-
-.pb-volume .fill {
-  background: var(--text-secondary);
-}
-
-.pb-lift-btn {
-  color: var(--text-primary);
-}
-
-.pb-lyrics-side-btn.active {
-  color: var(--text-primary);
-  background: var(--bg-selected);
-}
-
-.pb-right {
-  position: absolute;
-  right: var(--pb-inline);
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  min-width: 292px;
-}
-
-.pb-volume {
-  width: min(150px, 16vw);
-  min-width: 92px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.pb-volume .ic {
-  color: var(--text-secondary);
-  flex-shrink: 0;
-}
-
-.pb-volume .slider-wrap {
-  flex: 1;
-}
-
-@media (max-width: 1040px) {
-  .pb-now {
-    width: min(420px, calc(50% - 220px));
-  }
-
-  .pb-volume {
-    width: 108px;
-  }
-}
-
-@media (max-width: 860px) {
-  .player-bottom-bar {
-    display: grid;
-    grid-template-columns: minmax(220px, 1fr) minmax(280px, 1.2fr) auto;
-    align-items: center;
-    gap: 10px;
-    padding: var(--pb-content-inset);
-  }
-
-  .pb-now,
-  .pb-right {
-    position: static;
-    width: auto;
-    min-width: 0;
-    transform: none;
-  }
-
-  .pb-center {
-    position: static;
-    width: auto;
-    transform: none;
-  }
-}
-
-@media (max-width: 700px) {
-  .player-bottom-shell {
-    --pb-content-inset: 12px;
-    --pb-art-size: 52px;
-  }
-
-  .pb-volume {
-    display: none;
-  }
-
-  .player-bottom-bar {
-    grid-template-columns: minmax(180px, 1fr) minmax(240px, 1fr) auto;
-    gap: 10px;
-  }
-}
-
-/* Library table */
+/* Library table — Liquid Glass rows. The <table> keeps its markup, but the
+   header row and every body row are laid out as CSS grids sharing
+   --tbl-cols (built by TrackTable from the visible columns), so rows can be
+   rounded pills on the glass instead of ruled table rows. */
 .tbl {
-  width: 100%; border-collapse: collapse;
-  table-layout: fixed;
+  --tbl-art: 46px;
+  display: block;
+  width: 100%;
+  padding: 0 8px;
   font-size: 12.5px;
 }
+.density-compact .tbl { --tbl-art: 28px; }
+.density-comfy .tbl { --tbl-art: 60px; }
+.tbl thead,
+.tbl tbody { display: block; }
+.tbl tr {
+  display: grid;
+  grid-template-columns: var(--tbl-cols);
+  align-items: center;
+}
+.tbl th,
+.tbl td {
+  display: block;
+  min-width: 0;
+  padding: 0 10px;
+}
+.tbl thead {
+  position: sticky;
+  top: var(--gl-sticky-top, 0px);
+  z-index: 3;
+  margin-bottom: 4px;
+}
+.tbl thead tr {
+  height: 30px;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--gl-header-fill);
+  -webkit-backdrop-filter: var(--gl-header-filter);
+  backdrop-filter: var(--gl-header-filter);
+  box-shadow: var(--gl-header-shadow);
+}
 .tbl thead th {
-  position: sticky; top: 0; z-index: 2;
-  background:
-    linear-gradient(color-mix(in oklab, var(--bg-pal-1, var(--bg-tint)) 22%, transparent),
-                    color-mix(in oklab, var(--bg-pal-1, var(--bg-tint)) 22%, transparent)),
-    color-mix(in oklab, var(--bg-content), black 14%);
   text-align: left;
-  font-size: 11px; font-weight: 600;
-  color: var(--text-tertiary);
-  letter-spacing: 0.02em;
+  font-size: 10.5px; font-weight: 600;
+  color: var(--gl-text-3);
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  padding: 8px 10px;
-  border-bottom: 0.5px solid var(--divider);
   user-select: none;
   white-space: nowrap;
 }
-.tbl thead th.num { width: 32px; text-align: right; padding-right: 12px; }
-.tbl thead th.art { width: 72px; }
-.tbl thead th.title { text-align: left; }
-.tbl thead th.dur { width: 64px; text-align: right; }
-.tbl thead th.plays { width: 60px; text-align: right; }
-.tbl thead th.fmt { width: 180px; }
-.tbl thead th.size { width: 72px; text-align: right; }
-.tbl thead th.path { max-width: 380px; width: 40%; }
-.tbl thead th.source { width: 190px; }
-.tbl thead th.actions { width: 44px; text-align: right; }
+.tbl thead th.num { padding: 0 8px 0 0; text-align: right; }
+.tbl thead th.plays,
+.tbl thead th.size,
+.tbl thead th.dur,
+.tbl thead th.actions { text-align: right; }
 
 .tbl tbody tr {
+  position: relative;
   height: var(--row-h);
-  color: var(--text-primary);
-  background:
-    linear-gradient(color-mix(in oklab, var(--bg-pal-1, var(--bg-tint)) 8%, transparent),
-                    color-mix(in oklab, var(--bg-pal-1, var(--bg-tint)) 8%, transparent)),
-    var(--bg-content);
+  border-radius: var(--gl-r-row);
+  color: var(--gl-text);
+  transition: background-color 140ms ease;
 }
-.tbl tbody tr:hover {
-  background:
-    linear-gradient(color-mix(in oklab, var(--bg-tint) 18%, transparent),
-                    color-mix(in oklab, var(--bg-tint) 18%, transparent)),
-    var(--bg-hover);
-}
+.tbl tbody tr:hover { background-color: var(--gl-hover); }
+/* Now playing: tinted glass overlay from the playing artwork. The tint var
+   stays exported for views that still paint their own playing rows. */
 .tbl tbody tr.playing {
-  --track-playing-tint: var(--color-playing);
-  color: var(--text-primary);
-  background:
-    linear-gradient(
-      90deg,
-      color-mix(in oklab, var(--track-playing-tint) 26%, transparent),
-      color-mix(in oklab, var(--track-playing-tint) 14%, transparent) 38%,
-      color-mix(in oklab, var(--track-playing-tint) 9%, transparent)
-    ),
-    var(--bg-content);
+  --track-playing-tint: var(--gl-nt);
+  background-image: var(--gl-current-fill);
+  box-shadow: var(--gl-current-shadow);
 }
-.tbl tbody tr.playing:hover {
-  background:
-    linear-gradient(
-      90deg,
-      color-mix(in oklab, var(--track-playing-tint) 32%, transparent),
-      color-mix(in oklab, var(--track-playing-tint) 18%, transparent) 38%,
-      color-mix(in oklab, var(--track-playing-tint) 11%, transparent)
-    ),
-    var(--bg-hover);
-}
-.tbl tbody tr.playing .title { font-weight: 600; }
-.tbl tbody tr.playing td {
-  border-bottom-color: color-mix(in oklab, var(--track-playing-tint) 24%, var(--border-subtle));
-}
-.tbl tbody td {
-  padding: 0 10px;
-  border-bottom: 0.5px solid var(--border-subtle);
-  height: var(--row-h);
-  vertical-align: middle;
-}
+.tbl tbody tr.playing td.title .title-main { font-weight: 600; }
 /* Compact rows for art-less track listings (album / artist views) so they stay
    tight instead of reading like the full-height library/playlist rows. Fixed
    height independent of the global density setting. */
-.tbl.compact tbody tr,
-.tbl.compact tbody td { height: 40px; }
+.tbl.compact tbody tr { height: 40px; }
+
+/* Leading cell: track number (art-less listings), favorite heart on hover,
+   or the now-playing control (live EQ bars, pause on hover / play while
+   paused). */
 .tbl td.num {
-  width: 32px; text-align: right; padding-right: 12px;
   position: relative;
+  align-self: stretch;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0;
   font-variant-numeric: tabular-nums;
-  color: var(--text-tertiary);
+  color: var(--gl-text-3);
   font-size: 11.5px;
 }
 .tbl td.num .track-index {
-  display: block;
+  flex: 1;
+  min-width: 0;
+  padding-right: 8px;
+  text-align: right;
   transition: opacity 0.12s ease;
+}
+.tbl-icon-btn {
+  width: 26px; height: 26px;
+  flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--gl-text-2);
+  cursor: pointer;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.tbl-icon-btn:hover { background: var(--gl-btn-hover); color: var(--gl-text); }
+.tbl-icon-btn:disabled,
+.tbl-icon-btn:disabled:hover {
+  background: transparent;
+  color: var(--gl-text-3);
+  opacity: 0.5;
+  cursor: default;
 }
 .tbl td.num .track-like {
   position: absolute;
-  top: 50%;
-  right: 5px;
-  transform: translateY(-50%);
-  width: 22px;
-  height: 22px;
-  border-radius: 5px;
-  color: var(--text-tertiary);
+  inset: 0;
+  margin: auto;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
 }
 .tbl tbody tr:hover td.num.has-like .track-index,
 .tbl td.num.has-like:focus-within .track-index {
@@ -3091,19 +4264,25 @@ textarea,
   opacity: 1;
   pointer-events: auto;
 }
-.tbl td.art { width: 72px; padding-right: 0; }
+.tbl td.num .track-now { color: var(--gl-now-ic); }
+.tbl td.num .track-now .track-now-pause { display: none; }
+.tbl tbody tr:hover td.num .track-now .eq-bars,
+.tbl td.num .track-now:focus-visible .eq-bars { display: none; }
+.tbl tbody tr:hover td.num .track-now .track-now-pause,
+.tbl td.num .track-now:focus-visible .track-now-pause { display: block; }
+
+.tbl td.art { padding: 0 0 0 6px; }
 .tbl td.art .mini-art {
-  width: min(64px, calc(var(--row-h) - 4px));
-  height: min(64px, calc(var(--row-h) - 4px));
-  border-radius: 3px;
+  width: var(--tbl-art);
+  height: var(--tbl-art);
+  border-radius: 9px;
   overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(255, 255, 255, 0.1);
 }
-.tbl td.title {
-  color: var(--text-primary);
-  font-weight: 500;
-  text-align: left;
-  overflow: hidden;
+.theme-light .tbl td.art .mini-art {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
 }
+.tbl td.title { overflow: hidden; }
 .tbl td.title .title-main,
 .tbl td.title .title-sub {
   display: block;
@@ -3111,57 +4290,63 @@ textarea,
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.tbl td.title .title-main { line-height: 1.15; }
+.tbl td.title .title-main {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.25;
+  color: var(--gl-text);
+}
 .tbl td.title .title-sub {
+  margin-top: 1px;
   font-size: 11.5px;
-  color: var(--text-secondary);
   font-weight: 400;
-  line-height: 1.1;
+  line-height: 1.3;
+  color: var(--gl-text-2);
 }
 .tbl td.sec {
-  color: var(--text-secondary);
-  text-align: left;
+  color: var(--gl-text-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.tbl td.dur { font-variant-numeric: tabular-nums; color: var(--text-secondary); text-align: right; font-size: 11.5px; }
-.tbl td.plays { font-variant-numeric: tabular-nums; color: var(--text-tertiary); text-align: right; font-size: 11.5px; }
+.tbl td.dur,
+.tbl thead th.dur { padding: 0 14px 0 8px; }
+.tbl td.dur { font-variant-numeric: tabular-nums; color: var(--gl-text-2); text-align: right; font-size: 11.5px; }
+.tbl td.plays,
+.tbl thead th.plays { padding-left: 4px; }
+.tbl td.plays { font-variant-numeric: tabular-nums; color: var(--gl-text-3); text-align: right; font-size: 11.5px; }
 .tbl td.size {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  color: var(--text-tertiary);
+  color: var(--gl-text-3);
   text-align: right;
   white-space: nowrap;
   font-size: 10.5px;
 }
-.tbl td.fmt {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--text-tertiary);
-  text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+.tbl td.fmt { overflow: hidden; }
+/* Format: mono "res · codec · bitrate" in the tier color. */
+.tbl td.fmt .codec-strip { gap: 5px; font-size: 10.5px; }
+.tbl td.fmt .codec-strip .sep { opacity: 0.6; }
 .tbl td.path {
-  max-width: 380px;
-  color: var(--text-secondary);
+  color: var(--gl-text-2);
   font-size: 11px;
   font-family: var(--font-mono);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.tbl td.source { width: 190px; overflow: hidden; }
-.tbl td.source .source-badge { max-width: 174px; }
+/* Source: the compact glass .source-badge pill. When it shows location and
+   provider, the provider part gives way first (full text stays in the title). */
+.tbl td.source { overflow: hidden; container-type: inline-size; }
+.tbl td.source .source-badge-part:first-child { flex-shrink: 0; max-width: 100%; }
+/* Too narrow for both labels: the provider keeps only its icon instead of a
+   clipped sliver of text. */
+@container (max-width: 140px) {
+  .tbl td.source .source-badge-part:not(:first-child) > span { display: none; }
+}
 .album-credit-separator { margin: 0 3px; color: var(--text-tertiary); }
 .album-source-inline { vertical-align: -2px; }
-.tbl td.actions { width: 44px; text-align: right; }
-.tbl tbody tr.playing td.num,
-.tbl tbody tr.playing td.num .eq-bars {
-  color: color-mix(in oklab, var(--track-playing-tint) 82%, var(--text-tertiary));
-}
+.tbl td.actions { padding: 0 10px 0 0; text-align: right; }
 
 .disc-track-groups {
   display: flex;
@@ -3169,8 +4354,8 @@ textarea,
   gap: 18px;
 }
 .disc-track-heading {
-  padding: 0 10px 7px;
-  color: var(--text-secondary);
+  padding: 0 18px 7px;
+  color: var(--gl-text-2);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -3197,20 +4382,36 @@ textarea,
 
 /* Library page header */
 .lib-head {
-  padding: 18px 20px 8px;
+  padding: 14px 24px;
   display: flex; align-items: flex-end; justify-content: space-between;
   gap: 16px;
 }
+.lib-head > div:first-child { min-width: 0; }
 .lib-head h1 {
-  font-size: 26px; font-weight: 700;
-  margin: 0; letter-spacing: -0.02em;
-  color: var(--text-primary);
+  font-size: 34px; font-weight: 700;
+  margin: 0; letter-spacing: -0.025em;
+  color: var(--gl-text);
 }
 .lib-head .sub {
-  font-size: 12.5px; color: var(--text-secondary);
-  margin-top: 4px;
+  font-size: 12.5px; color: var(--gl-text-2);
+  margin-top: 5px;
 }
-.lib-head .actions { display: flex; gap: 6px; }
+/* One line with an ellipsis only where the view puts the full text in a
+   title tooltip (Songs/Albums/Artists); other subtitles keep wrapping. */
+.lib-head .sub[title] {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lib-head .actions { display: flex; gap: 6px; flex-shrink: 0; }
+/* Round Play / Shuffle buttons (playlists) at the Filtro pill's height. */
+.lib-head .actions > .btn.icon { width: 34px; height: 34px; }
+/* "No results" placeholder under a list header (filters still reachable). */
+.list-empty {
+  padding: 40px 24px;
+  color: var(--gl-text-2);
+  font-size: 13px;
+}
 .list-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -3255,229 +4456,377 @@ textarea,
 }
 .list-select:focus,
 .list-input:focus { border-color: var(--border-strong); }
+/* Filter switch row ("Solo favoritas"): label on the left, the native
+   checkbox drawn as a glass switch on the right. */
 .list-toggle {
-  display: inline-flex;
+  width: 100%;
+  height: 36px;
+  display: flex;
+  flex-direction: row-reverse;
   align-items: center;
-  gap: 7px;
-  height: 28px;
+  justify-content: space-between;
+  gap: 10px;
   padding: 0 10px;
-  border: 0.5px solid var(--border-default);
-  border-radius: var(--r-input);
-  color: var(--text-secondary);
-  font-size: 12px;
+  border-radius: 10px;
+  color: var(--gl-text);
+  font-size: 13px;
   cursor: pointer;
   user-select: none;
+  transition: background 120ms ease;
 }
 .list-toggle input[type="checkbox"] {
   -webkit-appearance: none;
   appearance: none;
-  width: 14px;
-  height: 14px;
-  min-width: 14px;
-  flex-shrink: 0;
-  border-radius: 3px;
-  border: 0.5px solid var(--border-strong);
-  background: transparent;
-  cursor: pointer;
   position: relative;
-  transition: background 120ms ease, border-color 120ms ease;
+  width: 38px;
+  height: 22px;
+  min-width: 38px;
+  flex-shrink: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--gl-switch-off);
+  box-shadow: inset 0 0.5px 1px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  transition: background 220ms ease;
 }
-.list-toggle input[type="checkbox"]:checked {
-  background: var(--text-primary);
-  border-color: transparent;
-}
-.list-toggle input[type="checkbox"]:checked::after {
+.list-toggle input[type="checkbox"]::after {
   content: '';
   position: absolute;
-  left: 4px;
-  top: 1px;
-  width: 4px;
-  height: 7px;
-  border: 1.5px solid var(--bg-window);
-  border-left: none;
-  border-top: none;
-  transform: rotate(45deg);
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transition: transform 280ms var(--gl-spring);
 }
-.list-toggle:hover {
-  border-color: var(--border-default);
-  color: var(--text-primary);
+.list-toggle input[type="checkbox"]:checked { background: var(--gl-switch-on); }
+.list-toggle input[type="checkbox"]:checked::after { transform: translateX(16px); }
+.list-toggle input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--gl-accent-ic);
+  outline-offset: 2px;
 }
+.list-toggle:hover { background: var(--gl-btn-hover); }
 
-/* Buttons */
+/* Buttons — glass pills. Secondary (default) is a translucent pill with a top
+   highlight, primary the solid white CTA, ghost text-only until hovered. The
+   border stays (transparent) so contextual border-color overrides still show. */
 .btn {
   display: inline-flex; align-items: center; gap: 6px;
-  height: 28px; padding: 0 12px;
-  border: 0.5px solid var(--border-default);
-  background: var(--control-bg);
-  color: var(--text-primary);
-  font-size: 12.5px; font-weight: 500;
-  border-radius: var(--r-input);
+  height: 30px; padding: 0 14px;
+  border: 0.5px solid transparent;
+  background: var(--gl-secondary-fill);
+  box-shadow: var(--gl-secondary-shadow);
+  color: var(--gl-text);
+  font-family: inherit; font-size: 12.5px; font-weight: 500;
+  border-radius: var(--r-pill);
   cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease, opacity 160ms ease, transform 220ms var(--gl-spring);
 }
 button:disabled { cursor: not-allowed; }
-.btn:hover { background: var(--control-bg-hover); }
-.btn.primary { background: var(--control-primary-bg); color: var(--control-primary-fg); border-color: transparent; }
+.btn:hover { background: var(--gl-secondary-fill-hover); }
+.btn:active:not(:disabled) { transform: scale(0.96); }
+.btn.primary {
+  background: var(--gl-primary-fill);
+  color: var(--gl-primary-fg);
+  box-shadow: var(--gl-primary-shadow);
+  font-weight: 700;
+}
 .btn.primary:hover { opacity: 0.92; }
 .btn:disabled,
 .btn:disabled:hover {
   opacity: 0.45;
-  background: var(--control-bg-disabled);
-  color: var(--text-tertiary);
-  border-color: var(--border-subtle);
+  background: var(--gl-secondary-fill);
+  color: var(--gl-text-2);
 }
 .btn.primary:disabled,
 .btn.primary:disabled:hover {
-  opacity: 0.45;
-  background: var(--control-primary-bg);
-  color: var(--control-primary-fg);
+  opacity: 0.4;
+  background: var(--gl-primary-fill);
+  color: var(--gl-primary-fg);
+  box-shadow: none;
 }
-.btn.danger { background: #d64a3a; color: #fff; border-color: transparent; }
-.btn.danger:hover { background: #e05a4a; }
-.btn.ghost { background: transparent; border-color: transparent; color: var(--text-secondary); }
-.btn.ghost:hover { color: var(--text-primary); background: var(--control-bg-hover); }
-.btn.sm { height: 24px; padding: 0 10px; font-size: 11.5px; }
-.btn.icon { width: 28px; padding: 0; justify-content: center; }
+.btn.danger,
+.btn.danger:disabled,
+.btn.danger:disabled:hover {
+  background: linear-gradient(180deg, #ee5d4d, #d64a3a);
+  color: #fff;
+  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.28), 0 6px 18px rgba(214, 74, 58, 0.26);
+}
+.btn.danger:hover:not(:disabled) { background: linear-gradient(180deg, #f26a5b, #e05a4a); }
+.btn.ghost,
+.btn.ghost:disabled:hover {
+  background: transparent;
+  box-shadow: none;
+  color: color-mix(in srgb, var(--gl-text) 90%, transparent);
+}
+.btn.ghost:hover:not(:disabled) {
+  color: var(--gl-text);
+  background: color-mix(in srgb, var(--gl-btn-hover) 72%, transparent);
+}
+.btn.sm { height: 26px; padding: 0 11px; font-size: 11.5px; }
+.btn.icon { width: 30px; padding: 0; justify-content: center; }
+.btn.icon.sm { width: 26px; }
+/* The first-run wizard is a light frosted desk in both themes with its own
+   palette: point the button glass tokens at it so pills stay legible there. */
+.library-setup-overlay {
+  --gl-text: var(--text-primary);
+  --gl-text-2: var(--text-secondary);
+  --gl-btn-hover: rgba(15, 29, 45, 0.07);
+  --gl-secondary-fill: var(--control-bg);
+  --gl-secondary-fill-hover: var(--control-bg-hover);
+  --gl-secondary-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.7), inset 0 0 0 0.5px var(--border-default);
+  --gl-primary-fill: var(--control-primary-bg);
+  --gl-primary-fg: var(--control-primary-fg);
+  --gl-primary-shadow: 0 6px 18px rgba(18, 38, 59, 0.18);
+}
 
-/* Context menus + modals */
+/* Context menus + modals. Both are portaled to <body>; they stack above the
+   activity center (120, fullscreen 130, portaled into .window, which is not a
+   stacking context) because an open modal makes all of #root inert, the
+   activity panel included. Only the first-run wizard (220) sits higher. */
 .context-menu {
   position: fixed;
-  z-index: 120;
-  min-width: 230px;
+  z-index: 140;
+  width: max-content;
+  min-width: 250px;
+  max-width: min(300px, calc(100vw - 16px));
   padding: 6px;
-  border: 0.5px solid var(--border-strong);
+  border-radius: var(--gl-r-pop);
+  background: var(--gl-pop-fill);
+  -webkit-backdrop-filter: var(--gl-pop-filter);
+  backdrop-filter: var(--gl-pop-filter);
+  box-shadow: var(--gl-pop-shadow);
+  color: var(--gl-text);
+  animation: context-menu-in 160ms var(--gl-spring) backwards;
+  -webkit-app-region: no-drag;
+}
+@keyframes context-menu-in {
+  from { opacity: 0; transform: scale(0.97); }
+}
+/* Identity row: cover + title + "artist · album". */
+.context-menu-header {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px 8px;
+}
+.context-menu-art {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  overflow: hidden;
   border-radius: 8px;
-  background: var(--bg-elev);
-  box-shadow: var(--shadow-pop);
+}
+.context-menu-heading {
+  min-width: 0;
+  display: grid;
+}
+.context-menu-heading strong,
+.context-menu-heading span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.context-menu-heading strong {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.context-menu-heading span {
+  color: color-mix(in srgb, var(--gl-text) 61%, transparent);
+  font-size: 11px;
 }
 .context-menu-item {
   width: 100%;
   height: 30px;
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
+  display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  padding: 0 10px;
   border: none;
-  border-radius: 6px;
+  border-radius: 10px;
   background: transparent;
-  color: var(--text-primary);
+  color: var(--gl-text);
   font: inherit;
-  font-size: 12.5px;
+  font-size: 13px;
   text-align: left;
   cursor: pointer;
+  outline: none;
 }
-.context-menu-item:hover { background: var(--bg-hover); }
+.context-menu-item:hover,
+.context-menu-item:focus-visible { background: var(--gl-btn-hover); }
 .context-menu-item:disabled {
-  opacity: 0.45;
+  opacity: 0.4;
   cursor: default;
 }
 .context-menu-item:disabled:hover { background: transparent; }
-.context-menu-item.danger { color: #ff8a80; }
+.context-menu-item.danger { color: var(--gl-danger); }
 .context-menu-icon {
-  display: flex;
+  width: 16px;
+  flex-shrink: 0;
+  display: inline-flex;
   justify-content: center;
-  color: var(--text-secondary);
+  opacity: 0.85;
 }
-.context-menu-item.danger .context-menu-icon { color: #ff8a80; }
+.context-menu-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .context-menu-divider {
-  height: 1px;
-  margin: 5px 4px;
-  background: var(--divider);
+  height: 0.5px;
+  margin: 4px 6px;
+  background: var(--gl-hairline);
 }
+.context-menu-header + .context-menu-divider { margin-top: 0; }
 
+/* Modal glass: the scrim fades in (background only, so the panel's
+   backdrop-filter sees the app from the first frame) while the panel springs
+   up from 0.92. Both animations use backwards fill so nothing (transform) is
+   left on the panel at rest. */
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 110;
+  z-index: 150;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 28px;
-  background: rgba(0,0,0,0.42);
+  background: var(--gl-scrim);
+  animation: modal-scrim-in 280ms ease backwards;
+  /* Covers the toolbar pill / sidebar / card headers, which are window drag
+     regions: without this a click there drags the window instead of reaching
+     the scrim's close handler. */
+  -webkit-app-region: no-drag;
 }
 .modal-panel {
   width: min(560px, calc(100vw - 56px));
   max-height: min(720px, calc(100vh - 56px));
   display: flex;
   flex-direction: column;
-  border: 0.5px solid var(--border-strong);
-  border-radius: 8px;
-  background: var(--bg-panel);
-  box-shadow: var(--shadow-pop);
+  border-radius: var(--gl-r-modal);
+  background: var(--gl-modal-fill);
+  -webkit-backdrop-filter: var(--gl-modal-filter);
+  backdrop-filter: var(--gl-modal-filter);
+  box-shadow: var(--gl-modal-shadow);
+  color: var(--gl-text);
   overflow: hidden;
+  animation:
+    modal-panel-fade 200ms ease backwards,
+    modal-panel-in 460ms cubic-bezier(0.3, 1.25, 0.4, 1) backwards;
+  -webkit-app-region: no-drag;
+}
+@keyframes modal-scrim-in {
+  from { background-color: transparent; }
+}
+@keyframes modal-panel-fade {
+  from { opacity: 0; }
+}
+@keyframes modal-panel-in {
+  from { transform: scale(0.92); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .context-menu,
+  .modal-backdrop,
+  .modal-panel { animation: none; }
 }
 .modal-panel:has(.library-log-modal) {
   width: min(980px, calc(100vw - 56px));
 }
-/* Glass treatment for the move-to-album modal — same translucent surface as the
-   lyrics library modal so it matches the app's UI language. Widen the panel so
-   the two-column preview and three-column facts grids aren't clipped. */
-.modal-backdrop:has(.album-move-modal) {
-  background: rgba(0, 0, 0, 0.18);
-}
+/* The move-to-album and lyrics library modals share the standard modal glass;
+   they only need a wider panel (two-column preview / three-column facts grids
+   and the long lyrics list). */
 .modal-panel:has(.album-move-modal) {
   width: min(960px, calc(100vw - 56px));
-  background: var(--up-next-toast-bg);
-  border-color: var(--up-next-toast-border);
-  backdrop-filter: blur(20px) saturate(1.15);
-  -webkit-backdrop-filter: blur(20px) saturate(1.15);
-}
-/* Glass treatment for the lyrics library modal — translucent like the player's
-   up-next ("a continuación") toast, reusing the same tokens, instead of the
-   opaque panel fill. Lighten the backdrop so the blur shows the app behind. */
-.modal-backdrop:has(.lyrics-library-panel) {
-  background: rgba(0, 0, 0, 0.18);
 }
 .modal-panel:has(.lyrics-library-panel) {
   width: min(860px, calc(100vw - 56px));
-  background: var(--up-next-toast-bg);
-  border-color: var(--up-next-toast-border);
-  /* Stronger blur than the toast token so the long list stays legible over the
-     translucent surface. */
-  backdrop-filter: blur(20px) saturate(1.15);
-  -webkit-backdrop-filter: blur(20px) saturate(1.15);
 }
 .modal-head {
-  height: 46px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px 0 16px;
-  border-bottom: 0.5px solid var(--divider);
+  gap: 12px;
+  padding: 18px 18px 10px 22px;
 }
 .modal-head h2 {
+  min-width: 0;
   margin: 0;
-  color: var(--text-primary);
-  font-size: 15px;
-  font-weight: 700;
+  color: var(--gl-text);
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+.modal-close {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--gl-secondary-fill) 80%, transparent);
+  box-shadow: var(--gl-secondary-shadow);
+  color: color-mix(in srgb, var(--gl-text) 90%, transparent);
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+.modal-close:hover {
+  background: var(--gl-secondary-fill-hover);
+  color: var(--gl-text);
 }
 .modal-body {
   min-height: 0;
   overflow: auto;
-  padding: 16px;
+  padding: 6px 22px 20px;
 }
 .modal-foot {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding: 12px 16px;
-  border-top: 0.5px solid var(--divider);
+  padding: 14px 18px 18px;
+  border-top: 0.5px solid var(--gl-hairline);
+}
+/* Footer actions use the design's 36px pills. */
+.modal-foot .btn {
+  height: 36px;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.modal-foot .btn.primary {
+  gap: 7px;
+  padding: 0 18px;
+  font-weight: 700;
+}
+.modal-foot .btn.primary:has(> svg:first-child) { padding-left: 15px; }
+.modal-foot .btn.icon {
+  width: 36px;
+  padding: 0;
 }
 .modal-copy {
   margin: 0 0 12px;
-  color: var(--text-secondary);
+  color: var(--gl-text-2);
   font-size: 13px;
   line-height: 1.45;
 }
 .modal-muted {
-  color: var(--text-secondary);
+  color: var(--gl-text-2);
   font-size: 12.5px;
 }
 .modal-error {
   margin-top: 10px;
-  padding: 9px 10px;
-  border-radius: 6px;
-  background: rgba(214,74,58,0.12);
-  color: #ff8a80;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--gl-danger) 14%, transparent);
+  color: var(--gl-danger);
   font: inherit;
   font-size: 12px;
   line-height: 1.4;
@@ -3681,12 +5030,14 @@ button:disabled { cursor: not-allowed; }
   color: var(--text-secondary);
   font-size: 13px;
 }
+/* Modal content (MediaActions dialogs): recessed glass wells instead of opaque
+   slabs so they read on the translucent modal panel. */
 .detail-grid {
   display: grid;
-  gap: 1px;
   overflow: hidden;
-  border: 0.5px solid var(--border-subtle);
-  border-radius: 7px;
+  border-radius: 14px;
+  background: var(--gl-well);
+  box-shadow: var(--gl-well-shadow);
 }
 .detail-row {
   min-height: 34px;
@@ -3694,9 +5045,9 @@ button:disabled { cursor: not-allowed; }
   grid-template-columns: 140px minmax(0, 1fr);
   align-items: center;
   gap: 12px;
-  padding: 7px 10px;
-  background: var(--bg-elev);
+  padding: 7px 12px;
 }
+.detail-row + .detail-row { border-top: 0.5px solid var(--gl-hairline); }
 .detail-row span {
   color: var(--text-tertiary);
   font-size: 11px;
@@ -3727,30 +5078,29 @@ button:disabled { cursor: not-allowed; }
   gap: 6px;
 }
 .form-field span {
-  color: var(--text-tertiary);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  color: color-mix(in srgb, var(--gl-text) 76%, transparent);
+  font-size: 12px;
+  font-weight: 600;
 }
 .form-field input,
 .playlist-picker input,
 .playlist-picker select {
-  height: 32px;
+  height: 34px;
   min-width: 0;
-  border: 0.5px solid var(--border-default);
-  border-radius: var(--r-input);
-  background: var(--bg-elev);
-  color: var(--text-primary);
+  border: 0.5px solid transparent;
+  border-radius: 12px;
+  background: var(--gl-well);
+  box-shadow: var(--gl-well-shadow);
+  color: var(--gl-text);
   font: inherit;
   font-size: 12.5px;
-  padding: 0 10px;
+  padding: 0 12px;
   outline: none;
 }
 .form-field input:focus,
 .playlist-picker input:focus,
 .playlist-picker select:focus {
-  border-color: var(--border-strong);
+  border-color: color-mix(in oklab, var(--gl-accent-ic) 55%, transparent);
 }
 .playlist-picker {
   display: grid;
@@ -3765,17 +5115,18 @@ button:disabled { cursor: not-allowed; }
 .trash-list,
 .modal-list {
   display: grid;
-  gap: 1px;
   overflow: hidden;
-  border: 0.5px solid var(--border-subtle);
-  border-radius: 7px;
+  border-radius: 14px;
+  background: var(--gl-well);
+  box-shadow: var(--gl-well-shadow);
 }
 .trash-list > div {
-  padding: 8px 10px;
-  background: var(--bg-elev);
-  color: var(--text-primary);
+  padding: 8px 12px;
+  color: var(--gl-text);
   font-size: 12.5px;
 }
+.trash-list > div + div,
+.modal-list-row + .modal-list-row { border-top: 0.5px solid var(--gl-hairline); }
 .modal-list {
   margin-top: 12px;
 }
@@ -3785,8 +5136,7 @@ button:disabled { cursor: not-allowed; }
   grid-template-columns: 34px minmax(0, 1fr) minmax(0, 1.7fr);
   align-items: center;
   gap: 10px;
-  padding: 7px 10px;
-  background: var(--bg-elev);
+  padding: 7px 12px;
   font-size: 12px;
 }
 .modal-list-row span { color: var(--text-tertiary); text-align: right; }
@@ -4291,27 +5641,39 @@ button:disabled { cursor: not-allowed; }
 .dense .album-hero .art { width: 140px; height: 140px; }
 .dense .album-hero h1 { font-size: 22px; }
 .dense .tbl { font-size: 11.5px; }
-.dense .tbl thead th { padding: 6px 8px; font-size: 10px; }
-.dense .tbl tbody td { padding: 0 8px; }
+.dense .tbl thead th { font-size: 10px; }
+.dense .tbl th:not(.num):not(.art),
+.dense .tbl td:not(.num):not(.art) { padding-left: 8px; padding-right: 8px; }
 
-/* Grids */
+/* Grids — album / artist covers floating on the glass. */
 .grid {
-  display: grid; gap: 22px 18px;
-  padding: 8px 20px 24px;
-  grid-template-columns: repeat(auto-fill, minmax(165px, 1fr));
+  display: grid; gap: 26px 22px;
+  padding: 8px 24px 24px;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
 }
 .editorial .grid { gap: 32px 24px; padding: 8px 36px 32px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
 .card {
-  display: flex; flex-direction: column; gap: 8px;
+  display: flex; flex-direction: column;
+  min-width: 0;
   cursor: pointer;
+  outline: none;
 }
 .card .art {
   width: 100%; aspect-ratio: 1;
-  border-radius: 6px; overflow: hidden;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.18);
+  border-radius: 16px; overflow: hidden;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.4), 0 0 0 0.5px rgba(255, 255, 255, 0.14);
   position: relative;
+  transition: transform 220ms var(--gl-spring), box-shadow 160ms ease;
 }
-.card:hover .art .play-overlay { opacity: 1; }
+.theme-light .card .art {
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.16), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+}
+.card:hover .art { transform: scale(1.04); }
+.card:focus-visible .art {
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.4), 0 0 0 2px var(--gl-accent-ic);
+}
+.card:hover .art .play-overlay,
+.card:focus-within .art .play-overlay { opacity: 1; }
 .card .play-overlay {
   position: absolute; inset: 0;
   background: linear-gradient(to top, rgba(0,0,0,0.45), transparent 50%);
@@ -4322,25 +5684,76 @@ button:disabled { cursor: not-allowed; }
 }
 .card .play-overlay .pb {
   width: 36px; height: 36px;
-  color: #111;
+  color: var(--gl-primary-fg);
   border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  box-shadow: var(--gl-primary-shadow);
   border: 0;
   padding: 0;
-  background: inherit;
-  background-color: rgba(255,255,255,0.95);
+  background: var(--gl-primary-fill);
   cursor: pointer;
 }
 .card .ti {
-  font-size: 13px; font-weight: 600;
-  color: var(--text-primary);
+  margin-top: 10px;
+  font-size: 13.5px; font-weight: 600;
+  color: var(--gl-text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .card .su {
-  font-size: 12px; color: var(--text-secondary);
+  margin-top: 1px;
+  font-size: 12px; color: var(--gl-text-2);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* Subtitle with the folder / cloud source icon at its end. */
+.card .su.with-source {
+  display: flex; align-items: center; gap: 6px;
+}
+.card .su.with-source > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card .su.with-source .source-badge.icon-only {
+  flex-shrink: 0;
+  color: var(--gl-text-3);
+}
+
+/* Artists grid: round covers, centered captions, favorite heart badge. */
+.artist-card .art { border-radius: 50%; }
+.artist-card .ti,
+.artist-card .su { text-align: center; }
+.artist-card .su.with-source { justify-content: center; }
+.artist-card-cover { position: relative; }
+.artist-card-fav {
+  position: absolute;
+  right: 4%;
+  bottom: 4%;
+  width: 30px; height: 30px;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  color: var(--gl-text);
+  background: var(--gl-chrome-fill);
+  box-shadow: var(--gl-chrome-shadow);
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.9);
+  /* The blur is only attached while the badge shows: the grid isn't
+     virtualized and a backdrop-filter composites even at opacity 0. It is
+     dropped after the fade-out (delayed), not at its start. */
+  transition: opacity 160ms ease, transform 220ms var(--gl-spring), backdrop-filter 0s linear 160ms;
+}
+.artist-card:hover .artist-card-fav,
+.artist-card:focus-within .artist-card-fav,
+.artist-card-fav.on {
+  opacity: 1;
+  transform: none;
+  -webkit-backdrop-filter: var(--gl-chrome-filter);
+  backdrop-filter: var(--gl-chrome-filter);
+  transition: opacity 160ms ease, transform 220ms var(--gl-spring);
+}
+.artist-card-fav:hover { filter: brightness(1.15); }
 
 /* Artist view */
 .artist-page {
@@ -4812,8 +6225,7 @@ button:disabled { cursor: not-allowed; }
 .np-bg-canvas {
   position: absolute; inset: 0; z-index: 1; overflow: hidden;
 }
-.np-bg-canvas::before,
-.pane-bg-canvas::before {
+.np-bg-canvas::before {
   content: '';
   position: absolute; inset: 0; z-index: 10;
   background-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.68' numOctaves='4' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='220' height='220' filter='url(%23g)'/></svg>");
@@ -4873,77 +6285,35 @@ button:disabled { cursor: not-allowed; }
   60% { transform: translate(14%, -10%) scale(0.85); }
 }
 
-/* Immersive player surfaces — the vertical player pane and the lyrics side
-   pane reuse the fullscreen player's animated color background (dark base +
-   floating blobs + grain + scrim). Light-on-dark chrome is forced here
-   (independent of the active theme) so text stays legible over the backdrop. */
-.player-pane,
-.lyrics-side-pane,
-.player-bottom-shell {
-  color: #fff;
-  --text-primary: rgba(255, 255, 255, 0.95);
-  --text-secondary: rgba(255, 255, 255, 0.64);
-  --text-tertiary: rgba(255, 255, 255, 0.46);
-  --text-quaternary: rgba(255, 255, 255, 0.3);
-  --bg-panel: #242427;
-  --bg-elev: #2c2c2f;
-  --bg-hover: rgba(255, 255, 255, 0.08);
-  --bg-active: rgba(255, 255, 255, 0.13);
-  --bg-selected: rgba(255, 255, 255, 0.16);
-  --bg-row-alt: rgba(255, 255, 255, 0.03);
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-default: rgba(255, 255, 255, 0.12);
-  --border-strong: rgba(255, 255, 255, 0.2);
-  --divider: rgba(255, 255, 255, 0.12);
-  --accent: rgba(255, 255, 255, 0.95);
-  --accent-soft: rgba(255, 255, 255, 0.14);
-  --up-next-toast-bg: rgba(18, 18, 22, 0.32);
-  --up-next-toast-border: rgba(255, 255, 255, 0.18);
-}
+/* Immersive player surfaces: the player card, lyrics card and bottom island
+   are theme-aware glass now (the --gl-* text tokens), so only the fullscreen
+   player keeps the forced light-on-dark chrome over its animated backdrop. */
 
-/* Animated background canvas + scrim shared by the immersive player surfaces.
-   The blob elements reuse the fullscreen .np-bg-blob-* classes, driven by the
-   --np-pal-* palette propagated to :root from the playing artwork. */
-.pane-bg-canvas {
-  position: absolute; inset: 0; z-index: 0; overflow: hidden;
-  pointer-events: none;
-  border-radius: inherit;
-}
-.pane-bg-scrim {
-  position: absolute; inset: 0; z-index: 0; pointer-events: none;
-  border-radius: inherit;
-  background:
-    linear-gradient(to bottom,
-      rgba(0, 0, 0, 0.10) 0%,
-      rgba(0, 0, 0, 0.04) 38%,
-      rgba(0, 0, 0, 0.34) 100%);
-}
 /* Lift the real content above the background layers. */
 .player-pane > .pp-header,
-.player-pane > .pp-tab-content,
-.lyrics-side-pane > .lyrics-side-head,
-.lyrics-side-pane > .lyr-panel {
+.player-pane > .pp-tab-content {
   position: relative;
   z-index: 1;
 }
 
-/* Shared immersive dock: the vertical player pane and the lyrics side pane live
-   inside one container that paints a SINGLE continuous backdrop (base + animated
-   blobs + scrim) spanning both, so there is no seam between them. The panes
-   themselves are transparent and just sit on top. */
+/* Right dock: floats over the content's right edge (8px from the window edges)
+   and holds the glass cards right-to-left — the player card flush right, the
+   lyrics card 8px to its left (positioned at --gl-lyrics-r). The dock itself
+   is transparent and click-through; only its cards take pointer events. */
 .np-dock-lateral {
-  position: relative;
+  position: absolute;
+  top: 8px; right: 8px; bottom: 8px;
+  z-index: 30;
   display: flex;
-  flex: 0 0 auto;
+  flex-direction: row-reverse;
+  gap: 8px;
   min-height: 0;
-  overflow: hidden;
-  background: var(--np-player-surface-background);
-  transition: background 400ms ease;
+  pointer-events: none;
 }
-.np-dock-lateral > .player-pane,
-.np-dock-lateral > .lyrics-side-pane {
-  position: relative;
-  z-index: 1;
+/* Zero specificity so a card's own state (e.g. a collapsing player card)
+   can still opt out. */
+:where(.np-dock-lateral) > * {
+  pointer-events: auto;
 }
 
 .np-full-head {
@@ -5680,15 +7050,14 @@ button:disabled { cursor: not-allowed; }
   flex: 1;
   min-height: 0;
   border-radius: 1.5px;
-  background: color-mix(in oklab, var(--text-tertiary), var(--accent) 28%);
-  /* clamp(0, lit - idx, 1): topmost lit segment is fractional; the rest snap
-     on/off. Off segments keep a faint glow so idle columns read as present. */
-  opacity: calc(0.07 + 0.93 * clamp(0, calc(var(--lit, 0) - var(--idx, 0)), 1));
-  transition: opacity 60ms linear;
-  /* No will-change here: a full spectrum is bandCount × FULL_VIZ_SEGMENTS
-     segments (up to ~1440), and promoting every one to its own compositor layer
-     caused a large composite spike on mount. Opacity-only repaints are cheap, so
-     the transition stays smooth without the layer explosion. */
+  /* Paint LED intensity into its color instead of changing element opacity.
+     Live opacity effects on these segments disturb native macOS composition of
+     sibling backdrop filters (the library sidebar develops a vertical strip).
+     The FFT loop already smooths --lit with an EMA; a second CSS transition
+     creates extra compositor layers without adding needed interpolation. */
+  --led-color: color-mix(in oklab, var(--text-tertiary), var(--accent) 28%);
+  --led-alpha: calc(0.07 + 0.93 * clamp(0, calc(var(--lit, 0) - var(--idx, 0)), 1));
+  background: color-mix(in srgb, var(--led-color) calc(var(--led-alpha) * 100%), transparent);
   pointer-events: none;
 }
 /* Separate clip LED that sits ABOVE the column (a sibling of the bar track, so
@@ -5699,8 +7068,8 @@ button:disabled { cursor: not-allowed; }
   flex: 0 0 auto;
   height: 4px;
   border-radius: 1.5px;
-  background: #ff453a;
-  opacity: calc(0.08 + 0.92 * clamp(0, calc(var(--lit, 0) - (var(--seg, 12) - 1)), 1));
+  --led-alpha: calc(0.08 + 0.92 * clamp(0, calc(var(--lit, 0) - (var(--seg, 12) - 1)), 1));
+  background: color-mix(in srgb, #ff453a calc(var(--led-alpha) * 100%), transparent);
   pointer-events: none;
 }
 .spectrum-viz.full .spectrum-clip { height: 6px; }
@@ -5723,23 +7092,26 @@ button:disabled { cursor: not-allowed; }
 
 [role="button"] { cursor: pointer; }
 
-/* Queue / Up Next */
+/* Queue / Up Next (player card's Up Next tab) */
 .queue-head {
-  padding: 10px 14px 6px;
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 10px;
+  padding: 6px 2px 10px 6px;
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 8px;
   flex-shrink: 0;
 }
-.queue-head h3 { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: -0.01em; }
-.queue-head-main { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.queue-head-main h3,
-.queue-remaining {
+.queue-head h3 {
+  flex: 1;
   min-width: 0;
+  margin: 0;
+  font-size: 17px; font-weight: 700; letter-spacing: -0.01em;
+  color: var(--gl-text);
 }
 .queue-remaining {
-  font-size: 10.8px;
-  font-family: var(--font-mono);
-  color: var(--text-tertiary);
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--gl-text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .queue-options {
   position: relative;
@@ -5748,71 +7120,77 @@ button:disabled { cursor: not-allowed; }
   flex-shrink: 0;
 }
 .queue-options-trigger {
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0;
-  border: 0.5px solid transparent;
-  border-radius: 6px;
+  border: none;
+  border-radius: 999px;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--gl-text-2);
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+  transition: background 140ms ease, color 140ms ease;
 }
 .queue-options-trigger:hover,
 .queue-options-trigger.active,
 .queue-options-trigger.busy {
-  border-color: color-mix(in oklab, var(--text-primary) 16%, transparent);
-  background: color-mix(in oklab, var(--text-primary) 12%, transparent);
-  color: var(--text-primary);
+  background: var(--gl-btn-hover);
+  color: var(--gl-text);
 }
 .queue-options-menu {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
   z-index: 40;
-  min-width: 188px;
-  padding: 5px;
-  border: 0.5px solid color-mix(in oklab, var(--text-primary) 18%, transparent);
-  border-radius: 7px;
-  background: color-mix(in oklab, var(--bg-elev) 48%, transparent);
-  box-shadow: var(--shadow-pop);
-  backdrop-filter: blur(12px) saturate(1.12);
-  -webkit-backdrop-filter: blur(12px) saturate(1.12);
-  animation: queue-options-in 140ms cubic-bezier(0.22, 1, 0.36, 1);
+  min-width: 196px;
+  padding: 6px;
+  border-radius: 14px;
+  /* Nested in the card's glass: see .player-pane .output-device-menu. */
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.02) 100%),
+    color-mix(in srgb, var(--gl-panel-solid) 95%, transparent);
+  box-shadow: var(--gl-pop-shadow);
+  backdrop-filter: var(--gl-pop-filter);
+  -webkit-backdrop-filter: var(--gl-pop-filter);
+  transform-origin: top right;
+  animation: queue-options-in 160ms var(--gl-ease);
 }
 .queue-options-item {
   width: 100%;
-  min-height: 31px;
+  min-height: 32px;
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) 14px;
   align-items: center;
-  gap: 7px;
-  padding: 6px 7px;
+  gap: 8px;
+  padding: 6px 8px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 9px;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--gl-text-2);
   font: inherit;
-  font-size: 11.5px;
-  font-weight: 650;
+  font-size: 12px;
+  font-weight: 500;
   text-align: left;
   cursor: pointer;
 }
 .queue-options-item.compact {
   grid-template-columns: 16px minmax(0, 1fr);
-  color: var(--text-tertiary);
+  color: var(--gl-text-3);
 }
-.queue-options-item:hover,
+.queue-options-item:hover {
+  background: var(--gl-hover);
+  color: var(--gl-text);
+}
 .queue-options-item.active,
 .queue-options-item.busy {
-  background: color-mix(in oklab, var(--text-primary) 12%, transparent);
-  color: var(--text-primary);
+  background: var(--gl-btn-hover);
+  color: var(--gl-text);
 }
+.queue-options-item.active > svg { color: var(--gl-accent-ic); }
 .queue-options-item:disabled {
-  color: var(--text-quaternary);
+  color: var(--gl-text-3);
   cursor: default;
   background: transparent;
 }
@@ -5822,37 +7200,43 @@ button:disabled { cursor: not-allowed; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.queue-options-divider {
-  height: 1px;
-  margin: 4px 2px;
-  background: color-mix(in oklab, var(--text-primary) 12%, transparent);
-}
 @keyframes queue-options-in {
   from { opacity: 0; transform: translateY(-4px) scale(0.98); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
+/* Scrolls edge to edge of the card (negative margin) so the scrollbar hugs
+   the card's right side instead of the 12px tab padding. */
 .queue-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 0 8px 16px;
+  margin: 0 -12px;
+  padding: 0 12px 12px;
   scrollbar-width: thin;
 }
 .queue-item {
-  display: grid; grid-template-columns: 40px 1fr auto;
+  display: grid; grid-template-columns: 40px minmax(0, 1fr) auto;
   gap: 10px; align-items: center;
-  padding: 6px 8px;
-  border-radius: var(--r-input);
+  padding: 6px;
+  border-radius: var(--gl-r-row);
   transition: transform 140ms ease;
 }
-.queue-item:hover { background: var(--bg-hover); }
-.queue-item.now { background: var(--bg-selected); }
-.queue-item.reorder-mode { grid-template-columns: 24px 40px 1fr auto; }
+.queue-item:hover { background: var(--gl-hover); }
+.queue-item.now {
+  margin-bottom: 6px;
+  background: var(--pp-row-now);
+  box-shadow: var(--pp-row-now-shadow);
+}
+.queue-item.reorder-mode { grid-template-columns: 24px 40px minmax(0, 1fr) auto; }
 .queue-item-push-down { transform: translateY(6px); }
 .queue-item-dragging { opacity: 0.58; }
-.queue-item .art { width: 40px; height: 40px; border-radius: 4px; overflow: hidden; }
-.queue-item .t { font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.queue-item .a { font-size: 11.5px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.queue-item .dur { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-tertiary); }
+.queue-item .art { width: 40px; height: 40px; border-radius: 8px; overflow: hidden; }
+.queue-item-meta { min-width: 0; }
+.queue-item .t { font-size: 13px; font-weight: 500; color: var(--gl-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.queue-item.now .t { font-weight: 600; }
+.queue-item .a { font-size: 11.5px; color: var(--gl-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.queue-item .dur { padding-right: 6px; font-size: 11px; color: var(--gl-text-3); font-variant-numeric: tabular-nums; }
+.queue-now-eq { display: inline-flex; padding-right: 6px; color: var(--gl-now-ic); }
 
 .queue-drag-handle {
   border: none;
@@ -5863,19 +7247,21 @@ button:disabled { cursor: not-allowed; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-secondary);
+  color: var(--gl-text-3);
   background: transparent;
   cursor: grab;
 }
-.queue-drag-handle:hover { color: var(--text-primary); background: color-mix(in oklab, var(--text-primary) 11%, transparent); }
+.queue-drag-handle:hover { color: var(--gl-text); background: var(--gl-btn-hover); }
 .queue-drag-handle:active { cursor: grabbing; }
 
 
 .queue-section-label {
-  font-size: 10.5px; font-weight: 600; text-transform: uppercase;
-  letter-spacing: 0.04em; color: var(--text-tertiary);
-  padding: 14px 12px 4px;
+  font-size: 11px; font-weight: 600;
+  color: var(--gl-text-3);
+  padding: 14px 6px 6px;
 }
+.queue-section-label:first-child { padding-top: 4px; }
+.queue-empty-label { padding-top: 8px; }
 
 /* Settings */
 .settings { padding: 32px 40px; max-width: none; }
@@ -6072,36 +7458,43 @@ button:disabled { cursor: not-allowed; }
   background: #6ee7a5;
   box-shadow: 0 0 0 3px color-mix(in oklab, #6ee7a5 22%, transparent);
 }
+/* "Conectar MP3/DAP" modal: recessed device card, pill path field, segmented
+   state choice and glass library rows. Native radios stay in the DOM (visually
+   hidden) so keyboard and screen-reader behavior is unchanged. */
+.modal-panel:has(.device-connect-modal) {
+  width: min(480px, calc(100vw - 56px));
+}
 .device-connect-modal {
-  display: grid;
-  gap: 14px;
-  min-width: min(520px, calc(100vw - 56px));
-}
-.device-state-mode {
-  min-width: 0;
-  display: grid;
-  gap: 6px;
-}
-.device-state-mode span {
-  color: var(--text-tertiary);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 .device-connect-target {
   min-width: 0;
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
-  gap: 10px;
+  display: flex;
   align-items: center;
-  padding-bottom: 12px;
-  border-bottom: 0.5px solid var(--divider);
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: var(--gl-well);
+  box-shadow: var(--gl-well-shadow);
 }
-.device-connect-target span {
+.device-connect-target-icon {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+  background: var(--gl-active-fill);
+  box-shadow: var(--gl-active-shadow);
+  color: var(--gl-text);
+}
+.device-connect-target > span:last-child {
   min-width: 0;
-  display: grid;
-  gap: 2px;
+  display: flex;
+  flex-direction: column;
 }
 .device-connect-target strong,
 .device-connect-target em {
@@ -6111,32 +7504,116 @@ button:disabled { cursor: not-allowed; }
   white-space: nowrap;
 }
 .device-connect-target strong {
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 650;
+  color: var(--gl-text);
+  font-size: 14px;
+  font-weight: 700;
 }
 .device-connect-target em {
-  color: var(--text-tertiary);
+  margin-top: 2px;
+  color: color-mix(in srgb, var(--gl-text) 59%, transparent);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 11.5px;
   font-style: normal;
+}
+.device-connect-field {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+label.device-connect-field { gap: 7px; }
+.device-connect-label {
+  color: color-mix(in srgb, var(--gl-text) 76%, transparent);
+  font-size: 12px;
+  font-weight: 600;
+}
+.device-connect-path {
+  min-width: 0;
+  display: flex;
+  gap: 8px;
+}
+.device-connect-path input {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 14px;
+  border: none;
+  border-radius: var(--r-pill);
+  background: var(--gl-well);
+  box-shadow: var(--gl-well-shadow);
+  color: var(--gl-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+}
+.device-connect-path input:focus {
+  box-shadow: var(--gl-well-shadow), inset 0 0 0 1px color-mix(in oklab, var(--gl-accent-ic) 55%, transparent);
+}
+.device-connect-path input[aria-invalid="true"] {
+  box-shadow: var(--gl-well-shadow), inset 0 0 0 1px color-mix(in srgb, var(--gl-danger) 65%, transparent);
+}
+.device-connect-path .btn.icon {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+}
+.device-connect-seg {
+  align-self: flex-start;
+  max-width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--r-pill);
+  background: var(--gl-seg-track);
+  box-shadow: var(--gl-seg-track-shadow);
+}
+.device-connect-seg label {
+  position: relative;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 14px;
+  border-radius: var(--r-pill);
+  color: var(--gl-seg-off);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 220ms ease, color 220ms ease, box-shadow 220ms ease;
+}
+.device-connect-seg label:hover { color: var(--gl-text); }
+.device-connect-seg label.on {
+  background: var(--gl-seg-thumb);
+  box-shadow: var(--gl-seg-thumb-shadow);
+  color: var(--gl-seg-on);
+}
+.device-connect-seg input,
+.device-connect-library-row input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.device-connect-seg label:has(input:focus-visible),
+.device-connect-library-row:has(input:focus-visible) {
+  outline: 2px solid color-mix(in oklab, var(--gl-accent-ic) 70%, transparent);
+  outline-offset: 1px;
 }
 .device-connect-library-head {
   min-width: 0;
-  display: grid;
-  gap: 4px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
 }
-.device-connect-library-head span {
-  color: var(--text-tertiary);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
+.device-connect-library-head .device-connect-label { flex-shrink: 0; }
 .device-connect-library-head strong {
   min-width: 0;
   overflow: hidden;
-  color: var(--text-secondary);
+  color: color-mix(in srgb, var(--gl-text) 59%, transparent);
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 500;
@@ -6144,7 +7621,92 @@ button:disabled { cursor: not-allowed; }
   white-space: nowrap;
 }
 .device-connect-library-list {
-  margin-top: -4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.device-connect-library-row {
+  position: relative;
+  min-width: 0;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: background-color 180ms ease, box-shadow 180ms ease;
+}
+.device-connect-library-row:hover { background: var(--gl-hover); }
+.device-connect-library-row.on {
+  background: color-mix(in srgb, var(--gl-btn-hover) 72%, transparent);
+  box-shadow:
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.18),
+    inset 0 0 0 0.5px color-mix(in oklab, var(--gl-t) 50%, var(--gl-hairline));
+}
+.device-connect-library-row:has(input:disabled) {
+  opacity: 0.6;
+  cursor: default;
+}
+.device-connect-radio {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--gl-text) 32%, transparent);
+  transition: background-color 180ms ease, box-shadow 180ms ease;
+}
+.device-connect-radio::after {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--gl-bg);
+  transform: scale(0);
+  transition: transform 300ms var(--gl-spring);
+}
+.device-connect-library-row.on .device-connect-radio {
+  background: var(--gl-seg-on);
+  box-shadow: none;
+}
+.device-connect-library-row.on .device-connect-radio::after { transform: scale(1); }
+.device-connect-library-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--gl-text);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.device-connect-library-name em {
+  color: color-mix(in srgb, var(--gl-text) 52%, transparent);
+  font-style: normal;
+  font-weight: 500;
+}
+.device-connect-library-count {
+  flex-shrink: 0;
+  color: color-mix(in srgb, var(--gl-text) 59%, transparent);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.device-connect-modal .device-error {
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--gl-danger) 14%, transparent);
+  color: var(--gl-danger);
+}
+.device-connect-modal .device-empty.compact {
+  padding: 12px 14px;
+  border: none;
+  border-radius: 14px;
+  background: var(--gl-well);
+  box-shadow: var(--gl-well-shadow);
+  color: var(--gl-text-2);
+  font-size: 12.5px;
 }
 .settings-select {
   height: 30px;
@@ -6178,6 +7740,10 @@ button:disabled { cursor: not-allowed; }
 .library-log-modal .library-log-panel {
   gap: 16px;
 }
+/* ModalShell portals the log to <body>, outside .settings, so it repeats the
+   Preferences flat-row treatment instead of the opaque bordered .set-card. */
+.library-log-modal .set-card { background: transparent; border: none; border-radius: 0; }
+.library-log-modal .set-row { padding-left: 0; padding-right: 0; }
 .library-log-folders,
 .library-log-events {
   border-top: 0.5px solid var(--divider);
@@ -6260,23 +7826,44 @@ button:disabled { cursor: not-allowed; }
   padding: 12px 0;
 }
 
-/* Toggle */
+/* Toggle — glass switch: recessed track tinted by the viewed artwork when on,
+   white knob springing across. */
 .toggle {
   position: relative;
-  width: 36px; height: 22px; border-radius: 11px;
-  background: var(--bg-active);
+  width: 44px; height: 26px; border-radius: var(--r-pill);
+  background: var(--gl-switch-off);
+  box-shadow: inset 0 0.5px 1px rgba(0, 0, 0, 0.3);
   flex-shrink: 0;
   cursor: default;
+  transition: background-color 220ms ease;
 }
 .toggle::after {
   content: ''; position: absolute; top: 2px; left: 2px;
-  width: 18px; height: 18px; border-radius: 50%;
+  width: 22px; height: 22px; border-radius: 50%;
   background: #fff;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.4);
-  transition: transform 0.15s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  transition: transform 300ms var(--gl-spring);
 }
-.toggle.on { background: #34c759; }
-.toggle.on::after { transform: translateX(14px); }
+.toggle.on { background: var(--gl-switch-on); }
+.toggle.on::after { transform: translateX(18px); }
+
+/* Reduced motion for the glass controls and popovers that have no block of
+   their own. Kept after every rule it overrides (activity center, filter
+   popover, island time pills, buttons, switches, grid cards, queue options)
+   so equal-specificity selectors win by order. States still change; only the
+   slides, springs, zooms and pop-ins go. */
+@media (prefers-reduced-motion: reduce) {
+  .activity-center,
+  .list-sort-dir-chev,
+  .list-toggle input[type="checkbox"]::after,
+  .toggle::after { transition: none; }
+  .list-prefs-menu,
+  .queue-options-menu { animation: none; }
+  .card:hover .art,
+  .btn:active:not(:disabled),
+  .artist-card-fav,
+  .pb-island-times { transform: none; }
+}
 
 /* Color personalization */
 .set-color-extra {
@@ -6959,10 +8546,12 @@ button:disabled { cursor: not-allowed; }
   gap: 10px;
   align-items: center;
   padding: 10px 12px;
-  border: 0.5px solid var(--border-strong);
-  border-radius: 9px;
-  background: var(--bg-panel);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+  border-radius: 16px;
+  color: var(--gl-text);
+  background: var(--gl-panel-fill);
+  backdrop-filter: var(--gl-panel-filter);
+  -webkit-backdrop-filter: var(--gl-panel-filter);
+  box-shadow: var(--gl-panel-shadow);
 }
 .metadata-import-icon {
   width: 28px;
@@ -6970,9 +8559,10 @@ button:disabled { cursor: not-allowed; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 7px;
-  background: var(--bg-elev);
-  color: var(--text-primary);
+  border-radius: 9px;
+  background: var(--gl-secondary-fill);
+  box-shadow: var(--gl-secondary-shadow);
+  color: var(--gl-text);
 }
 .metadata-import-main {
   min-width: 0;
@@ -6987,11 +8577,11 @@ button:disabled { cursor: not-allowed; }
   white-space: nowrap;
 }
 .metadata-import-main strong {
-  color: var(--text-primary);
+  color: var(--gl-text);
   font-size: 12.5px;
 }
 .metadata-import-main span {
-  color: var(--text-secondary);
+  color: var(--gl-text-2);
   font-size: 11.5px;
 }
 .import-drop {
@@ -7425,13 +9015,6 @@ button:disabled { cursor: not-allowed; }
 .device-settings-manual input {
   background: var(--bg-elev);
 }
-.device-library-list {
-  overflow: hidden;
-  border: 0.5px solid var(--divider);
-  border-radius: 8px;
-  background: var(--bg-elev);
-  margin-top: 8px;
-}
 .device-config-actions {
   margin-top: 12px;
 }
@@ -7662,24 +9245,6 @@ button:disabled { cursor: not-allowed; }
   font-family: var(--font-mono);
   font-size: 11px;
 }
-.device-library-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 14px;
-  font-size: 13px;
-  border-bottom: 0.5px solid var(--divider);
-  cursor: default;
-}
-.device-library-row:last-child { border-bottom: none; }
-.device-library-row input { flex-shrink: 0; }
-.device-library-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.device-library-row .mono { color: var(--text-tertiary); font-size: 12px; }
 .device-progress {
   margin-bottom: 12px;
   padding: 8px 10px;
@@ -9739,33 +11304,39 @@ button.device-artwork-group-row:focus-visible {
   background: var(--bg-selected);
   color: var(--text-primary);
 }
-/* Device section tabs: a second line under the toolbar (all device views),
-   plus optional navbar sub-tabs for dashboard/sync. Both navbar rows share the
-   underlined .device-section-tab look and the same row height. */
+/* Section navigation (device views + Preferences): a centered stack at the top
+   of .content, scrolling with it. The primary row (device sections / settings
+   tabs) and the secondary row (dashboard, sync and playback sub-tabs) are
+   glass segmented controls: a recessed track with a raised thumb on the active
+   tab. The underlined .device-section-tab base below is still used by the
+   in-view .device-subtabs strips, so the segmented look is scoped under
+   .device-section-tabs. */
+.gl-section-nav {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0 20px;
+}
 .device-section-tabs {
   flex-shrink: 0;
   display: flex;
   align-items: stretch;
   gap: 2px;
+  max-width: calc(100% - 32px);
   height: var(--device-nav-row-height);
-  padding: 0 12px;
-  background:
-    linear-gradient(color-mix(in oklab, var(--bg-tint) 22%, transparent),
-                    color-mix(in oklab, var(--bg-tint) 22%, transparent)),
-    transparent;
-  border-bottom: 0.5px solid var(--divider);
+  padding: 3px;
+  border-radius: var(--r-pill);
+  background: var(--gl-seg-track);
+  box-shadow: var(--gl-seg-track-shadow);
   overflow-x: auto;
   scrollbar-width: none;
 }
 .device-section-tabs::-webkit-scrollbar { display: none; }
-/* Second navbar row for dashboard/sync sub-tabs, directly under the primary
-   device tabs. It keeps the same height and a quieter tint for hierarchy. */
+/* Secondary row: smaller and on a quieter track for hierarchy. */
 .device-section-subtabs {
-  height: var(--device-nav-row-height);
-  background:
-    linear-gradient(color-mix(in oklab, var(--bg-tint) 11%, transparent),
-                    color-mix(in oklab, var(--bg-tint) 11%, transparent)),
-    transparent;
+  height: 34px;
+  background: color-mix(in srgb, var(--gl-seg-track) 72%, transparent);
 }
 .device-subtabs {
   display: flex;
@@ -9807,16 +11378,42 @@ button.device-artwork-group-row:focus-visible {
   color: var(--text-primary);
   border-bottom-color: var(--accent);
 }
+/* Segmented buttons of the section nav rows (see .gl-section-nav above). */
+.device-section-tabs .device-section-tab {
+  flex-shrink: 0;
+  height: 100%;
+  padding: 0 15px 0 13px;
+  border: none;
+  border-radius: var(--r-pill);
+  color: var(--gl-seg-off);
+  font-size: 12.5px;
+  font-weight: 600;
+  transition: background 200ms ease, color 200ms ease, box-shadow 200ms ease;
+}
+.device-section-tabs .device-section-tab:hover { color: var(--gl-text); }
+.device-section-tabs .device-section-tab.active {
+  background: var(--gl-seg-thumb);
+  box-shadow: var(--gl-seg-thumb-shadow);
+  color: var(--gl-seg-on);
+}
+.device-section-tabs .device-section-tab:focus-visible {
+  outline: 2px solid var(--gl-accent-ic);
+  outline-offset: -2px;
+}
+.device-section-subtabs .device-section-tab { font-size: 12px; }
 .device-tab-badge {
   padding: 1px 6px;
-  border-radius: 999px;
-  background: var(--bg-selected);
-  color: var(--text-secondary);
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--gl-text) 13%, transparent);
+  color: var(--gl-text-2);
   font-size: 10.5px;
   font-weight: 650;
   line-height: 1.5;
 }
-.device-section-tab.active .device-tab-badge { color: var(--text-primary); }
+.device-section-tab.active .device-tab-badge { color: var(--gl-text); }
+@media (prefers-reduced-motion: reduce) {
+  .device-section-tabs .device-section-tab { transition: none; }
+}
 .device-select {
   width: 100%;
   height: 32px;
@@ -9989,7 +11586,10 @@ button.device-artwork-group-row:focus-visible {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 14px;
-  height: calc(100vh - var(--tb-h) - var(--device-nav-row-height) - var(--device-nav-row-height) - 210px);
+  /* Fill the visible content box: the window minus the content insets (toolbar
+     above, island room below), the two-row section nav stack at the top of the
+     content (6 + 38 + 10 + 34 + 20 = 108px) and the page header. */
+  height: calc(100vh - var(--gl-content-top) - var(--gl-content-pb) - 108px - 210px);
   min-height: 460px;
   width: 100%;
 }
@@ -11985,9 +13585,10 @@ button.device-artwork-group-row:focus-visible {
 
 /* ─── Library locations + setup ───────────────────────────────────────────── */
 
-.loc-settings-section,
-.loc-picker,
-.library-setup-overlay {
+/* Theme-independent status colours. Declared on :root (not on the Libraries
+   section) so the location dialogs, which ModalShell portals to <body>, can
+   read them too. */
+:root {
   --loc-blue: #0a84ff;
   --loc-blue-soft: color-mix(in oklab, var(--loc-blue) 14%, transparent);
   --loc-green: #30d158;
@@ -13369,17 +14970,23 @@ button.device-artwork-group-row:focus-visible {
    A quiet two-deck comparison surface. Green marks shared audio, amber marks
    a real difference, and the thin bridge between cards makes the A/B relation
    legible without introducing a second player into the app chrome. */
-.duplicate-review {
+/* The decision dialogs (Trash / Keep both) are portaled to <body> by
+   ModalShell, outside .duplicate-review, so they declare the tokens too. */
+.duplicate-review,
+.duplicate-decision-dialog {
   --duplicate-match: #62cfa7;
   --duplicate-match-soft: color-mix(in oklab, var(--duplicate-match) 13%, transparent);
   --duplicate-difference: #e4a15d;
   --duplicate-difference-soft: color-mix(in oklab, var(--duplicate-difference) 14%, transparent);
+}
+.duplicate-review {
   position: relative;
   min-height: 100%;
   padding: 0 20px 36px;
 }
 
-.theme-light .duplicate-review {
+.theme-light .duplicate-review,
+.theme-light .duplicate-decision-dialog {
   --duplicate-match: #237f62;
   --duplicate-difference: #a45d21;
 }
@@ -14482,29 +16089,38 @@ button.device-artwork-group-row:focus-visible {
   .duplicate-timeline button,
   .duplicate-analysis-progress i { transition: none; }
 }
+/* Source badge: small glass pill (folder / cloud icon + location). Fill and
+   rim derive from the text color so it reads on both themes. */
 .source-badge {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   min-width: 0;
   max-width: 100%;
-  padding: 4px 7px;
-  border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+  padding: 5px 9px 5px 7px;
+  overflow: hidden;
+  border: 0;
   border-radius: 999px;
-  color: var(--text-secondary);
-  background: color-mix(in srgb, var(--surface-raised, #fff) 52%, transparent);
+  color: color-mix(in srgb, var(--gl-text) 76%, transparent);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  box-shadow:
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.14),
+    inset 0 0 0 0.5px color-mix(in srgb, currentColor 12%, transparent);
   font-size: 11px;
   line-height: 1;
   white-space: nowrap;
 }
 
-.source-badge.compact { padding: 3px 6px; font-size: 10px; }
+.source-badge.compact { height: 22px; padding: 0 9px 0 7px; font-size: 10.5px; }
 .source-badge.plain,
 .source-badge.icon-only {
   padding: 0;
   border: 0;
   background: transparent;
+  box-shadow: none;
+  overflow: visible;
 }
+.source-badge.plain { color: inherit; }
 .source-badge.icon-only {
   width: fit-content;
   color: var(--text-tertiary);

@@ -9,6 +9,7 @@ import { SpectrumVisualizer } from './SpectrumVisualizer'
 import { UpNextToast } from './UpNextToast'
 import { TrackLoadingOverlay } from './TrackLoadingOverlay'
 import { ContextMenu } from './ContextMenu'
+import { trackMenuHeader } from './MediaActions'
 import { fmtTime, formatFeatured, formatPlaybackTimePair, splitArtist } from '@renderer/utils/format'
 import {
   TRACK_DELETE_ROW_EASE,
@@ -44,10 +45,57 @@ interface PlayerPaneProps {
 type PlayerTab = 'nowPlaying' | 'upNext'
 type InertPanelProps = { inert?: '' }
 
-const PLAYER_VISUALIZER_EXIT_MS = 260
+// Matches the accordion height transition in globals.css (.pp-acc-body), so the
+// visualizer/lyrics content unmounts only once the body has finished closing.
+const PLAYER_ACCORDION_EXIT_MS = 320
+// The artwork's 320ms size transition (.pp-player.art-easing) plus slack.
+const PLAYER_ART_EASE_MS = PLAYER_ACCORDION_EXIT_MS + 40
 
 const getInertPanelProps = (inactive: boolean): InertPanelProps =>
   inactive ? { inert: '' } : {}
+
+// Keeps accordion content mounted while its body animates closed, then drops it
+// so the visualizer/lyrics stop subscribing to FFT frames and lyric updates.
+function useMountedWhileOpen(open: boolean, exitMs: number): boolean {
+  const [mounted, setMounted] = useState(open)
+
+  useEffect(() => {
+    if (open) {
+      setMounted(true)
+      return
+    }
+    if (!mounted) return
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      setMounted(false)
+      return
+    }
+    const timeout = window.setTimeout(() => setMounted(false), exitMs)
+    return () => window.clearTimeout(timeout)
+  }, [open, mounted, exitMs])
+
+  return mounted
+}
+
+// Chevrons drawn on the design's 20px grid (the shared Icon set's chevD/chevR
+// sit off-center, which shows when the accordion chevron rotates).
+function PaneChevron({ direction, size }: { direction: 'down' | 'right'; size: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{ display: 'block', flexShrink: 0 }}
+    >
+      <path d={direction === 'down' ? 'M5 8l5 5 5-5' : 'M7 4l6 6-6 6'} />
+    </svg>
+  )
+}
 
 export function PlayerPane({
   isOpen,
@@ -90,8 +138,22 @@ export function PlayerPane({
   const showVisualizer = useTweakStore(s => s.tweak.showPlayerVisualizer)
   const showLyrics = useTweakStore(s => s.tweak.showPlayerLyrics)
   const setTweak = useTweakStore(s => s.setTweak)
-  const [visualizerVisible, setVisualizerVisible] = useState(() => showVisualizer)
-  const [visualizerClosing, setVisualizerClosing] = useState(false)
+  const visualizerMounted = useMountedWhileOpen(showVisualizer, PLAYER_ACCORDION_EXIT_MS)
+  const lyricsMounted = useMountedWhileOpen(showLyrics && !lyricsSidePaneOpen, PLAYER_ACCORDION_EXIT_MS)
+  // The artwork only eases its size while an accordion opens or closes, in
+  // step with the accordion body. Window resizes also move --pp-art (it tracks
+  // 100vh) and apply at once instead of lagging behind. Set during render so
+  // the class lands in the same frame as the accordion state.
+  const accordionLayout = `${showVisualizer}|${showLyrics}|${lyricsSidePaneOpen}`
+  const [settledAccordionLayout, setSettledAccordionLayout] = useState(accordionLayout)
+  const [artEasing, setArtEasing] = useState(false)
+  if (settledAccordionLayout !== accordionLayout) {
+    setSettledAccordionLayout(accordionLayout)
+    setArtEasing(true)
+  }
+  // The card mounts off-screen and slides in on the next frames, so opening it
+  // from the bottom player animates instead of popping in.
+  const [entered, setEntered] = useState(false)
   const [dragProgress, setDragProgress] = useState<number | null>(null)
   const [activeTab, setActiveTab] = useState<PlayerTab>('nowPlaying')
   const [deviceMenuOpen, setDeviceMenuOpen] = useState(false)
@@ -145,28 +207,21 @@ export function PlayerPane({
   }, [queueReorderMode, draggingQueueIndex])
 
   useEffect(() => {
-    if (showVisualizer) {
-      setVisualizerVisible(true)
-      setVisualizerClosing(false)
-      return
+    const inner = { id: 0 }
+    const outer = requestAnimationFrame(() => {
+      inner.id = requestAnimationFrame(() => setEntered(true))
+    })
+    return () => {
+      cancelAnimationFrame(outer)
+      if (inner.id) cancelAnimationFrame(inner.id)
     }
+  }, [])
 
-    if (!visualizerVisible) return
-
-    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
-      setVisualizerVisible(false)
-      setVisualizerClosing(false)
-      return
-    }
-
-    setVisualizerClosing(true)
-    const timeout = window.setTimeout(() => {
-      setVisualizerVisible(false)
-      setVisualizerClosing(false)
-    }, PLAYER_VISUALIZER_EXIT_MS)
-
+  useEffect(() => {
+    if (!artEasing) return
+    const timeout = window.setTimeout(() => setArtEasing(false), PLAYER_ART_EASE_MS)
     return () => window.clearTimeout(timeout)
-  }, [showVisualizer, visualizerVisible])
+  }, [artEasing, accordionLayout])
 
   const totalQueueRemainingSec =
     Math.max(0, durationSec - positionSec) + queueNext.reduce((sum, item) => sum + item.d, 0)
@@ -295,6 +350,8 @@ export function PlayerPane({
     event.preventDefault()
     setQueueContextMenu({ x: event.clientX, y: event.clientY, index })
   }
+  // Track under the open queue menu (identity row of the menu).
+  const queueMenuTrack = queueContextMenu ? queueNext[queueContextMenu.index - currentQueueIndex - 1] : undefined
 
   const toggleQueueShuffle = () => {
     toggleShuffle()
@@ -481,13 +538,20 @@ export function PlayerPane({
     }
   }
 
+  const shown = isOpen && entered
+
   return (
     <div
-      className={`player-pane ${isOpen ? 'player-pane-open' : 'player-pane-collapsed'}`}
+      className={`player-pane ${shown ? 'player-pane-open' : 'player-pane-collapsed'}`}
       aria-hidden={!isOpen}
     >
       <div className="pp-header">
-        <div className="pp-header-nav" role="tablist" aria-label="Player panel">
+        <div
+          className={`pp-header-nav ${activeTab === 'upNext' ? 'show-up-next' : 'show-now-playing'}`}
+          role="tablist"
+          aria-label="Player panel"
+        >
+          <span className="pp-seg-thumb" aria-hidden="true" />
           <button
             type="button"
             className={`pp-header-tab ${activeTab === 'nowPlaying' ? 'active' : ''}`}
@@ -497,7 +561,6 @@ export function PlayerPane({
           >
             Now Playing
           </button>
-          <span className="pp-header-separator" aria-hidden="true">|</span>
           <button
             type="button"
             className={`pp-header-tab ${activeTab === 'upNext' ? 'active' : ''}`}
@@ -509,10 +572,18 @@ export function PlayerPane({
           </button>
         </div>
         <div className="actions">
-          <button className="tb-icon-btn pp-collapse-arrow" title="Collapse to bottom player" aria-label="Collapse to bottom player" onClick={onCollapse}>
-            <Icon name="chevD" size={13} />
+          <button
+            type="button"
+            className="pp-icon-btn pp-collapse-arrow"
+            title="Collapse to bottom player"
+            aria-label="Collapse to bottom player"
+            onClick={onCollapse}
+          >
+            <PaneChevron direction="down" size={14} />
           </button>
-          <button className="tb-icon-btn" title="Expand" onClick={onExpand}><Icon name="expand" size={13} /></button>
+          <button type="button" className="pp-icon-btn" title="Expand" aria-label="Expand" onClick={onExpand}>
+            <Icon name="expand" size={13} stroke={1.6} />
+          </button>
         </div>
       </div>
 
@@ -528,14 +599,16 @@ export function PlayerPane({
               aria-hidden={activeTab !== 'nowPlaying'}
               {...getInertPanelProps(activeTab !== 'nowPlaying')}
             >
-              <div className="pp-player">
+              <div
+                className={`pp-player${showVisualizer ? ' viz-open' : ''}${showLyrics ? ' lyrics-open' : ''}${lyricsSidePaneOpen ? ' lyrics-side' : ''}${artEasing ? ' art-easing' : ''}`}
+              >
                 <div className="pp-player-top">
                   <div className="art" onClick={onExpand} onKeyDown={event => {
                     if (event.key !== 'Enter' && event.key !== ' ') return
                     event.preventDefault()
                     onExpand()
-                  }} role="button" tabIndex={0}>
-                    <CrossfadeArtwork album={displayAlbum} radius={8} objectFit="contain" />
+                  }} role="button" tabIndex={0} aria-label="Expand player">
+                    <CrossfadeArtwork album={displayAlbum} radius={16} objectFit="contain" />
                     <TrackLoadingOverlay />
                   </div>
 
@@ -557,15 +630,17 @@ export function PlayerPane({
                         <div className="t">{track.t}</div>
                       )}
                       <button
-                        className="tb-icon-btn"
-                        style={{ marginTop: -2 }}
+                        type="button"
+                        className="pp-icon-btn pp-love-btn"
                         title={track.loved ? 'Remove from favorites' : 'Mark as favorite'}
+                        aria-label={track.loved ? 'Remove from favorites' : 'Mark as favorite'}
+                        aria-pressed={track.loved}
                         onClick={() => {
                           if (track.dbId == null) return
                           void toggleTrackFavorite(track.dbId, !track.loved)
                         }}
                       >
-                        <Icon name={track.loved ? 'heartF' : 'heart'} size={14} />
+                        <Icon name={track.loved ? 'heartF' : 'heart'} size={15} />
                       </button>
                     </div>
                     <div className="a">
@@ -641,26 +716,28 @@ export function PlayerPane({
 
                   <div className="pp-controls">
                     <button
+                      type="button"
                       className={`sub ${shuffle ? 'active' : ''}`}
                       title="Shuffle"
                       aria-pressed={shuffle}
                       onClick={toggleShuffle}
-                    ><Icon name="shuffle" size={15} /></button>
-                    <button title="Previous" onClick={() => { void previous() }}><Icon name="prev" size={20} /></button>
-                    <button className="play" onClick={() => { void togglePlay() }} title={playing ? 'Pause' : 'Play'}>
-                      <Icon name={playing ? 'pause' : 'play'} size={16} />
+                    ><Icon name="shuffle" size={16} /></button>
+                    <button type="button" title="Previous" onClick={() => { void previous() }}><Icon name="prev" size={22} stroke={1.6} /></button>
+                    <button type="button" className="play" onClick={() => { void togglePlay() }} title={playing ? 'Pause' : 'Play'}>
+                      <Icon name={playing ? 'pause' : 'play'} size={20} style={playing ? undefined : { marginLeft: 2 }} />
                     </button>
-                    <button title="Next" disabled={isTrackTransitioning} onClick={() => { void next() }}><Icon name="next" size={20} /></button>
+                    <button type="button" title="Next" disabled={isTrackTransitioning} onClick={() => { void next() }}><Icon name="next" size={22} stroke={1.6} /></button>
                     <button
-                      className={`sub ${repeat !== 'off' ? 'active' : ''}`}
+                      type="button"
+                      className={`sub ${repeat !== 'off' ? 'active' : ''}${repeat === 'one' ? ' repeat-one' : ''}`}
                       title={repeat === 'one' ? 'Repeat One' : repeat === 'all' ? 'Repeat All' : 'Repeat'}
                       aria-pressed={repeat !== 'off'}
                       onClick={cycleRepeat}
-                    ><Icon name="repeat" size={15} /></button>
+                    ><Icon name="repeat" size={16} /></button>
                   </div>
 
                   <div className="pp-volume">
-                    <span className="ic"><Icon name={volume === 0 ? 'volumeM' : 'volume'} size={14} /></span>
+                    <span className="ic"><Icon name={volume === 0 ? 'volumeM' : 'volume'} size={15} /></span>
                     <div className="slider-wrap" style={{ '--pct': `${volume * 100}%` } as CSSProperties}>
                       <div
                         className="track"
@@ -685,13 +762,14 @@ export function PlayerPane({
                     </div>
                     <div className="output-device-control" ref={deviceMenuRef}>
                       <button
-                        className={`tb-icon-btn ${deviceMenuOpen ? 'active' : ''} ${exclusiveState.enabled ? 'exclusive-on' : ''}`}
+                        type="button"
+                        className={`pp-icon-btn pp-output-btn ${deviceMenuOpen ? 'active' : ''} ${exclusiveState.enabled ? 'exclusive-on' : ''}`}
                         title={exclusiveState.enabled ? 'Audio output (Exclusive mode)' : 'Audio output'}
                         aria-haspopup="menu"
                         aria-expanded={deviceMenuOpen}
                         onClick={onOutputButtonClick}
                       >
-                        <Icon name="speaker" size={14} />
+                        <Icon name="speaker" size={15} />
                       </button>
                       {deviceMenuOpen && (
                         <div className={`output-device-menu upward ${exclusiveBusy ? 'transitioning' : ''}`} role="menu">
@@ -736,65 +814,78 @@ export function PlayerPane({
                       )}
                     </div>
                   </div>
-                  <div className={`pp-player-viz${showVisualizer ? '' : ' collapsed'}${visualizerClosing ? ' closing' : ''}`}>
-                    <button
-                      type="button"
-                      className="pp-player-viz-head"
-                      onClick={() => setTweak('showPlayerVisualizer', !showVisualizer)}
-                      aria-expanded={showVisualizer}
-                      title={showVisualizer ? 'Hide visualizer' : 'Show visualizer'}
-                    >
-                      <span>Visualizer</span>
-                      <Icon name={showVisualizer ? 'chevD' : 'chevR'} size={12} />
-                    </button>
-                    {visualizerVisible && (
-                      <div className="pp-player-viz-body" aria-hidden={!showVisualizer}>
-                        <div className="pp-player-viz-clip">
-                          <SpectrumVisualizer
-                            mode="mini"
-                            active={isOpen && activeTab === 'nowPlaying' && showVisualizer}
-                          />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <div className={`pp-player-lyrics${showLyrics ? '' : ' collapsed'}${lyricsSidePaneOpen ? ' side-open' : ''}`}>
-                    <div className="pp-player-lyrics-head">
+
+                  <div className="pp-footer">
+                    <div className={`pp-acc pp-acc-viz${showVisualizer ? ' open' : ''}`}>
                       <button
                         type="button"
-                        className="pp-player-lyrics-toggle"
+                        className="pp-acc-head"
+                        onClick={() => setTweak('showPlayerVisualizer', !showVisualizer)}
+                        aria-expanded={showVisualizer}
+                        title={showVisualizer ? 'Hide visualizer' : 'Show visualizer'}
+                      >
+                        <span>Visualizer</span>
+                        <span className="pp-acc-chev"><PaneChevron direction="right" size={13} /></span>
+                      </button>
+                      <div
+                        className="pp-acc-body"
+                        aria-hidden={!showVisualizer}
+                        {...getInertPanelProps(!showVisualizer)}
+                      >
+                        <div className="pp-acc-inner pp-viz-inner">
+                          {visualizerMounted && (
+                            <SpectrumVisualizer
+                              mode="mini"
+                              active={isOpen && activeTab === 'nowPlaying' && showVisualizer}
+                            />
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className={`pp-acc pp-acc-lyrics${showLyrics ? ' open' : ''}`}>
+                      <button
+                        type="button"
+                        className="pp-acc-head"
                         onClick={() => setTweak('showPlayerLyrics', !showLyrics)}
                         aria-expanded={showLyrics}
                         title={showLyrics ? 'Hide lyrics' : 'Show lyrics'}
                       >
                         <span>Lyrics</span>
-                        <Icon name={showLyrics ? 'chevD' : 'chevR'} size={12} />
+                        <span className="pp-acc-chev"><PaneChevron direction="right" size={13} /></span>
                       </button>
-                    </div>
-                    {showLyrics && (
                       <button
                         type="button"
-                        className="tb-icon-btn pp-lyrics-side-toggle"
-                        title="Open lyrics sidebar"
-                        aria-label="Open lyrics sidebar"
+                        className={`pp-icon-btn pp-lyrics-side-toggle${lyricsSidePaneOpen ? ' active' : ''}`}
+                        title={lyricsSidePaneOpen ? 'Close lyrics sidebar' : 'Open lyrics sidebar'}
+                        aria-label={lyricsSidePaneOpen ? 'Close lyrics sidebar' : 'Open lyrics sidebar'}
                         aria-pressed={lyricsSidePaneOpen}
                         onClick={onToggleLyricsSidePane}
                       >
                         <Icon name="sidebarRight" size={13} />
                       </button>
-                    )}
-                    {showLyrics && (
-                      <div className="pp-lyrics-preview">
-                        <LyricsPanel
-                          variant="inline"
-                          showActions={false}
-                          showInlineHeader={false}
-                          sidePaneOpen={lyricsSidePaneOpen}
-                          onToggleSidePane={onToggleLyricsSidePane}
-                          active={isOpen && activeTab === 'nowPlaying' && showLyrics && !lyricsSidePaneOpen}
-                        />
+                      <div
+                        className="pp-acc-body"
+                        aria-hidden={!showLyrics}
+                        {...getInertPanelProps(!showLyrics)}
+                      >
+                        <div className="pp-acc-inner pp-lyrics-preview">
+                          {lyricsSidePaneOpen ? (
+                            <div className="pp-lyrics-status">
+                              Las letras se muestran en el panel lateral.
+                            </div>
+                          ) : lyricsMounted && (
+                            <LyricsPanel
+                              variant="inline"
+                              showActions={false}
+                              showInlineHeader={false}
+                              sidePaneOpen={lyricsSidePaneOpen}
+                              onToggleSidePane={onToggleLyricsSidePane}
+                              active={isOpen && activeTab === 'nowPlaying' && showLyrics && !lyricsSidePaneOpen}
+                            />
+                          )}
+                        </div>
                       </div>
-                    )}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -808,10 +899,8 @@ export function PlayerPane({
             >
               <div className="pp-queue">
                 <div className="queue-head">
-                  <div className="queue-head-main">
-                    <h3>Up Next</h3>
-                    <div className="queue-remaining">{totalQueueRemainingText} remaining</div>
-                  </div>
+                  <h3>Up Next</h3>
+                  <div className="queue-remaining">{totalQueueRemainingText} remaining</div>
                   {track && (
                     <>
                       <div className="queue-options" ref={queueMenuRef}>
@@ -857,6 +946,7 @@ export function PlayerPane({
                         <ContextMenu
                           x={queueContextMenu.x}
                           y={queueContextMenu.y}
+                          header={queueMenuTrack ? trackMenuHeader(queueMenuTrack) : undefined}
                           items={[
                             {
                               id: 'move-next',
@@ -887,21 +977,20 @@ export function PlayerPane({
                 >
                   <div className="queue-section-label">Playing from · {displayAlbum?.title ?? '—'}</div>
                   <div className="queue-item now">
-                    <div className="art"><Artwork album={displayAlbum} /></div>
-                    <div>
+                    <div className="art"><Artwork album={displayAlbum} radius={8} /></div>
+                    <div className="queue-item-meta">
                       <div className="t">{track.t}</div>
                       <div className="a">{artistPrimary}</div>
                       {artistFeatured.length > 0 && (
                         <div className="pp-feat">{formatFeatured(artistFeatured)}</div>
                       )}
                     </div>
-                    <EQBars
-                      active={isOpen && activeTab === 'upNext'}
-                      style={{ color: 'var(--text-primary)' }}
-                    />
+                    <span className="queue-now-eq">
+                      <EQBars active={isOpen && activeTab === 'upNext'} />
+                    </span>
                   </div>
                   {queueNext.length === 0 && queueHistory.length === 0 && (
-                    <div className="queue-section-label" style={{ color: 'var(--text-tertiary)' }}>
+                    <div className="queue-section-label queue-empty-label">
                       Queue is empty
                     </div>
                   )}
@@ -989,8 +1078,8 @@ function QueueItem({
           <Icon name="list" size={12} />
         </button>
       )}
-      <div className="art"><Artwork album={album} /></div>
-      <div>
+      <div className="art"><Artwork album={album} radius={8} /></div>
+      <div className="queue-item-meta">
         <div className="t">{track.t}</div>
         <div className="a">{artistPrimary}</div>
         {artistFeatured.length > 0 && (

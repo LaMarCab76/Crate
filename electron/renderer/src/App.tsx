@@ -1,4 +1,4 @@
-import { type CSSProperties, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { type CSSProperties, type PointerEvent as ReactPointerEvent, type UIEvent as ReactUIEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Album, Artist, Playlist } from '@shared/types/library'
 import { Sidebar } from './components/Sidebar'
 import { Toolbar } from './components/Toolbar'
@@ -12,6 +12,7 @@ import { LyricsCandidates } from './components/LyricsCandidates'
 import { ActivityCenter } from './components/ActivityCenter'
 import { DeviceConnectModal, type DeviceConnectTarget } from './components/DeviceConnectModal'
 import { LibrarySetupWizard } from './components/LibrarySetupWizard'
+import { useTrackActions } from './components/MediaActions'
 import { LibraryView } from './views/LibraryView'
 import { AlbumsView } from './views/AlbumsView'
 import { AlbumView } from './views/AlbumView'
@@ -66,14 +67,29 @@ export type View =
 
 const SIDEBAR_WIDTH_STORAGE_KEY = 'crate.layout.sidebarWidth.v1'
 const PLAYER_PANE_OPEN_STORAGE_KEY = 'crate.layout.playerPaneOpen.v1'
-const PLAYER_PANE_EXIT_MS = 280
-// Matches the .player-dock grid-template-rows collapse transition (globals.css)
-// so the docked bar finishes animating its height before it unmounts. Kept in
-// sync with PLAYER_PANE_EXIT_MS so the horizontal↔lateral swap feels coordinated.
-const PB_PLAYER_EXIT_MS = 280
+// Matches the floating player card's slide-out transition (globals.css) so the
+// card finishes leaving before it unmounts.
+const PLAYER_PANE_EXIT_MS = 460
+// Matches the bottom island's drop-out transition (globals.css) so it finishes
+// animating before it unmounts. Kept in sync with PLAYER_PANE_EXIT_MS so the
+// card↔island swap feels coordinated.
+const PB_PLAYER_EXIT_MS = 460
 const LYRICS_SIDE_PANE_EXIT_MS = 340
 
-const SIDEBAR_WIDTH_DEFAULT = 240
+// Floating glass shell geometry. App publishes it as CSS vars on .window (see
+// the "Liquid Glass shell" rules in globals.css) so every floating surface —
+// content, toolbar, island, popovers — clears the sidebar and the right dock.
+const SIDEBAR_CONTENT_GAP = 4   // sidebar card → content
+const DOCK_INSET = 8            // right dock → window edges
+const DOCK_GAP = 8              // between dock cards, and dock → content
+const PLAYER_CARD_WIDTH = 340
+// Quiet period after the last window 'resize' event before layout transitions
+// come back.
+const WINDOW_RESIZE_SETTLE_MS = 160
+// The toolbar switches to its compact (titled) look past this scroll offset.
+const CONTENT_SCROLLED_THRESHOLD = 60
+
+const SIDEBAR_WIDTH_DEFAULT = 248
 const SIDEBAR_WIDTH_MIN = 180
 const SIDEBAR_WIDTH_MAX = 420
 
@@ -162,7 +178,7 @@ function DeviceNavbarSubTabs<Key extends string>({
             })
           }}
         >
-          <Icon name={tab.icon} size={14} />
+          <Icon name={tab.icon} size={variant === 'secondary' ? 13 : 14} />
           {tab.label}
         </button>
       ))}
@@ -170,9 +186,9 @@ function DeviceNavbarSubTabs<Key extends string>({
   )
 }
 
-// Section tabs rendered as a second line directly under the toolbar whenever a
-// device view is open. Mirrors the device's sidebar sub-items so the active
-// section is switchable from the top chrome.
+// Section tabs rendered as the primary segmented row at the top of the content
+// whenever a device view is open. Mirrors the device's sidebar sub-items so the
+// active section is switchable without going back to the sidebar.
 function DeviceSectionTabs({
   deviceId,
   section,
@@ -268,8 +284,8 @@ export default function App() {
   const [history, setHistory] = useState<View[]>([{ kind: 'library' }])
   const [idx, setIdx] = useState(0)
   const [expanded, setExpanded] = useState(false)
-  // Active sub-tabs rendered as the device navbar's second row. Lifted here so
-  // the top chrome owns them; reset per device below.
+  // Active sub-tabs rendered as the section nav's secondary row. Lifted here so
+  // the shell owns them; reset per device below.
   const [dashboardTab, setDashboardTab] = useState<DeviceDashboardTab>('overview')
   const [syncTab, setSyncTab] = useState<DeviceSyncTab>('sync')
   const [settingsTab, setSettingsTab] = useState<SettingsMainTab>('apariencia')
@@ -291,9 +307,12 @@ export default function App() {
   )
   const [isResizingLyricsSide, setIsResizingLyricsSide] = useState(false)
   const lyricsSideWidthRef = useRef(lyricsSideWidth)
+  const [isResizingWindow, setIsResizingWindow] = useState(false)
   const contentRef = useRef<HTMLDivElement>(null)
-  const frameRef = useRef<HTMLDivElement>(null)
+  const windowRef = useRef<HTMLDivElement>(null)
   const scrollPositionsRef = useRef(new Map<number, number>())
+  const [contentScrolled, setContentScrolled] = useState(false)
+  const contentScrolledRef = useRef(false)
   const view = history[idx]
   // Default device sub-tabs back to their primary views whenever the open device
   // changes.
@@ -342,6 +361,10 @@ export default function App() {
   const nowAlbum = useAlbumByUiId(nowTrack?.albumId)
   const viewedAlbum = useAlbumByUiId(viewAlbumId)
   const favoriteTracks = useFavoriteTracks()
+  // The island's track menu and dialogs live here, outside the dock: saving,
+  // moving or trashing the playing track stops playback, which unmounts the
+  // dock while the dialog is still working.
+  const islandTrackActions = useTrackActions()
   const duplicateReviewOpen = view.kind === 'duplicates'
   const canShowPlayerPane = nowTrack != null && !expanded && !duplicateReviewOpen
   const isPlayerPaneOpen = playerPaneOpen && canShowPlayerPane
@@ -403,6 +426,24 @@ export default function App() {
   useEffect(() => {
     lyricsSideWidthRef.current = lyricsSideWidth
   }, [lyricsSideWidth])
+
+  // On a narrow window the sidebar gives way to the toolbar pill (--sb-w in
+  // globals.css depends on the window width), so a window resize can move the
+  // content edge. Drop the 420ms layout transitions while the window is being
+  // resized so nothing trails behind the sidebar.
+  useEffect(() => {
+    let settleTimer: number | undefined
+    const onResize = () => {
+      setIsResizingWindow(true)
+      window.clearTimeout(settleTimer)
+      settleTimer = window.setTimeout(() => setIsResizingWindow(false), WINDOW_RESIZE_SETTLE_MS)
+    }
+    window.addEventListener('resize', onResize)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      window.clearTimeout(settleTimer)
+    }
+  }, [])
 
   useEffect(() => {
     try {
@@ -529,6 +570,19 @@ export default function App() {
   }, [loadPendingDeviceJournals, refreshDeviceVolumes])
 
   useEffect(() => installAutoHideScrollbars(), [])
+
+  // The floating toolbar turns into its titled look once the content scrolls
+  // under it. Only commits state when the threshold is crossed, not per frame.
+  const syncContentScrolled = useCallback((el: HTMLElement) => {
+    const scrolled = el.scrollTop > CONTENT_SCROLLED_THRESHOLD
+    if (scrolled === contentScrolledRef.current) return
+    contentScrolledRef.current = scrolled
+    setContentScrolled(scrolled)
+  }, [])
+
+  const handleContentScroll = (event: ReactUIEvent<HTMLDivElement>) => {
+    syncContentScrolled(event.currentTarget)
+  }
 
   const saveCurrentScroll = () => {
     const el = contentRef.current
@@ -705,10 +759,13 @@ export default function App() {
     const top = scrollPositionsRef.current.get(idx) ?? 0
     const frame = window.requestAnimationFrame(() => {
       el.scrollTo({ top, behavior: 'auto' })
+      // A restore that doesn't move (or gets clamped) may not fire a scroll
+      // event, so re-sync the toolbar state explicitly.
+      syncContentScrolled(el)
     })
 
     return () => window.cancelAnimationFrame(frame)
-  }, [idx, view])
+  }, [idx, view, syncContentScrolled])
 
   // Body class management (theme + density + layout).
   useEffect(() => {
@@ -751,20 +808,24 @@ export default function App() {
     // color (artwork or the assigned preset/custom). Falls back to the playing
     // artwork color for the colorless 'default' mode, then to neutral.
     const next = viewedTint ?? (nowTrack ? playerCurrentTint : null) ?? (isPlaying ? playingTint : null)
+    // --gl-t is the Liquid Glass twin of --bg-tint (registered, so it
+    // cross-fades); clearing it falls back to the neutral @property default.
     if (next) {
       root.style.setProperty('--bg-tint', next)
       root.style.setProperty('--bg-control-tint', next)
+      root.style.setProperty('--gl-t', next)
     } else {
       root.style.removeProperty('--bg-tint')
       root.style.removeProperty('--bg-control-tint')
+      root.style.removeProperty('--gl-t')
     }
   }, [viewAlbum, albumTint, viewAlbumFallbackTint, playerCurrentTint, nowTrack, playingTint, isPlaying])
 
-  // Propagate the content-area palette (--bg-pal-0/1/2) to :root so .content can
-  // render a 3-color gradient instead of the flat single-color wash. Source
+  // Propagate the content-area palette (--bg-pal-0/1/2) to :root. Source
   // priority mirrors --bg-tint (viewed album → playing track), and each var
-  // falls back to --bg-tint in CSS, so when this is cleared the content backdrop
-  // gracefully degrades to the original single-color look.
+  // falls back to --bg-tint in CSS, so when this is cleared the surfaces that
+  // read it degrade to the single-color look. The same palette drives the glass
+  // shell's --gl-p0/1/2 (window wash, tinted controls).
   useEffect(() => {
     const root = document.documentElement
     const palette =
@@ -776,13 +837,17 @@ export default function App() {
         ? [playerCurrentTint, playerCurrentTint, playerCurrentTint]
       : null
     if (palette) {
-      root.style.setProperty('--bg-pal-0', palette[0])
-      root.style.setProperty('--bg-pal-1', palette[1] ?? palette[0])
-      root.style.setProperty('--bg-pal-2', palette[2] ?? palette[1] ?? palette[0])
+      const [p0, p1 = p0, p2 = p1] = palette
+      root.style.setProperty('--bg-pal-0', p0)
+      root.style.setProperty('--bg-pal-1', p1)
+      root.style.setProperty('--bg-pal-2', p2)
+      root.style.setProperty('--gl-p0', p0)
+      root.style.setProperty('--gl-p1', p1)
+      root.style.setProperty('--gl-p2', p2)
     } else {
-      root.style.removeProperty('--bg-pal-0')
-      root.style.removeProperty('--bg-pal-1')
-      root.style.removeProperty('--bg-pal-2')
+      for (const prop of ['--bg-pal-0', '--bg-pal-1', '--bg-pal-2', '--gl-p0', '--gl-p1', '--gl-p2']) {
+        root.style.removeProperty(prop)
+      }
     }
   }, [viewAlbum, albumPalette, nowTrack, tweak.playerTintSource, playingPalette, playerCurrentTint])
 
@@ -790,12 +855,15 @@ export default function App() {
   // pane share the same artwork-based tint. PlayerPane's own inline style
   // continues to override on that element (same value), while LyricsSidePane
   // picks up this global value since it's a DOM sibling, not a descendant.
+  // --gl-nt is its Liquid Glass twin (island, eq bars, now-playing accents).
   useEffect(() => {
     const root = document.documentElement
     if (playerCurrentTint) {
       root.style.setProperty('--np-tint', playerCurrentTint)
+      root.style.setProperty('--gl-nt', playerCurrentTint)
     } else {
       root.style.removeProperty('--np-tint')
+      root.style.removeProperty('--gl-nt')
     }
   }, [playerCurrentTint])
 
@@ -804,7 +872,8 @@ export default function App() {
   // the fullscreen player. Mirrors --np-tint's source logic: artwork → the
   // extracted 3-color palette; preset/custom → the single chosen color across
   // all blobs; default/none → cleared (blobs fall back to the transparent
-  // :root defaults).
+  // :root defaults). --gl-n0/1/2 mirror it for the glass shell (neutral
+  // @property defaults when cleared).
   useEffect(() => {
     const root = document.documentElement
     const palette =
@@ -813,13 +882,17 @@ export default function App() {
       : playerCurrentTint ? [playerCurrentTint, playerCurrentTint, playerCurrentTint]
       : null
     if (palette) {
-      root.style.setProperty('--np-pal-0', palette[0])
-      root.style.setProperty('--np-pal-1', palette[1] ?? palette[0])
-      root.style.setProperty('--np-pal-2', palette[2] ?? palette[1] ?? palette[0])
+      const [n0, n1 = n0, n2 = n1] = palette
+      root.style.setProperty('--np-pal-0', n0)
+      root.style.setProperty('--np-pal-1', n1)
+      root.style.setProperty('--np-pal-2', n2)
+      root.style.setProperty('--gl-n0', n0)
+      root.style.setProperty('--gl-n1', n1)
+      root.style.setProperty('--gl-n2', n2)
     } else {
-      root.style.removeProperty('--np-pal-0')
-      root.style.removeProperty('--np-pal-1')
-      root.style.removeProperty('--np-pal-2')
+      for (const prop of ['--np-pal-0', '--np-pal-1', '--np-pal-2', '--gl-n0', '--gl-n1', '--gl-n2']) {
+        root.style.removeProperty(prop)
+      }
     }
   }, [tweak.playerTintSource, playingPalette, playerCurrentTint])
 
@@ -900,11 +973,23 @@ export default function App() {
     event.preventDefault()
     event.currentTarget.setPointerCapture?.(event.pointerId)
 
+    // On a narrow window the sidebar gives way to the toolbar pill: globals.css
+    // caps --sb-w at --gl-sb-cap (a typed var, so it reads back in px). Stop
+    // the drag there too, so the stored width is the one the user sees.
+    const shellAtStart = windowRef.current
+    const fitCap = shellAtStart
+      ? Number.parseFloat(getComputedStyle(shellAtStart).getPropertyValue('--gl-sb-cap'))
+      : Number.NaN
+    const maxWidth = Number.isFinite(fitCap)
+      ? clamp(Math.floor(fitCap), SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX)
+      : SIDEBAR_WIDTH_MAX
+
+    // The sidebar card is pinned to the window's left edge.
     const onMove = (e: globalThis.PointerEvent) => {
-      const frame = frameRef.current
-      if (!frame) return
-      const rect = frame.getBoundingClientRect()
-      const nextWidth = clamp(Math.round(e.clientX - rect.left), SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX)
+      const shell = windowRef.current
+      if (!shell) return
+      const rect = shell.getBoundingClientRect()
+      const nextWidth = clamp(Math.round(e.clientX - rect.left), SIDEBAR_WIDTH_MIN, maxWidth)
       sidebarWidthRef.current = nextWidth
       setSidebarWidth(nextWidth)
     }
@@ -931,11 +1016,13 @@ export default function App() {
     event.preventDefault()
     event.currentTarget.setPointerCapture?.(event.pointerId)
 
+    // The handle is centered on the lyrics card's left edge; the card's right
+    // edge (next to the player card, or the dock edge) stays put while dragging.
+    const handleRect = event.currentTarget.getBoundingClientRect()
+    const cardRight = handleRect.left + handleRect.width / 2 + lyricsSideWidthRef.current
+
     const onMove = (e: globalThis.PointerEvent) => {
-      const frame = frameRef.current
-      if (!frame) return
-      const rect = frame.getBoundingClientRect()
-      const nextWidth = clamp(Math.round(rect.right - e.clientX), LYRICS_SIDE_WIDTH_MIN, LYRICS_SIDE_WIDTH_MAX)
+      const nextWidth = clamp(Math.round(cardRight - e.clientX), LYRICS_SIDE_WIDTH_MIN, LYRICS_SIDE_WIDTH_MAX)
       lyricsSideWidthRef.current = nextWidth
       setLyricsSideWidth(nextWidth)
     }
@@ -1042,171 +1129,205 @@ export default function App() {
     }
   }
 
+  // Floating shell geometry contract: inline vars + state classes on .window,
+  // inherited by every floating surface (globals.css derives the toolbar /
+  // island insets from these). Visibility follows the mounted-and-open state
+  // so content starts reclaiming space as soon as a card begins to leave.
+  const playerCardShown = playerPaneVisible && isPlayerPaneOpen
+  const lyricsCardShown = lyricsSidePaneVisible && showLyricsSidePane
+  const islandShown = bottomPlayerVisible && showBottomPlayer
+  const dockWidth =
+    (playerCardShown ? PLAYER_CARD_WIDTH : 0)
+    + (lyricsCardShown ? lyricsSideWidth : 0)
+    + (playerCardShown && lyricsCardShown ? DOCK_GAP : 0)
+  // The lyrics card sits left of the player card (or at the dock edge alone).
+  const lyricsCardRight = playerCardShown ? PLAYER_CARD_WIDTH + DOCK_GAP : 0
+  const shellStyle = {
+    // The user's sidebar width. globals.css derives the effective --sb-w from
+    // it, capped on narrow windows so the toolbar pill keeps its minimum width.
+    '--gl-sb-pref': `${sidebarWidth}px`,
+    '--gl-content-l': sidebarOpen ? `calc(var(--sb-w) + ${SIDEBAR_CONTENT_GAP}px)` : '0px',
+    '--gl-content-r': dockWidth > 0 ? `${dockWidth + DOCK_INSET + DOCK_GAP}px` : '0px',
+    '--gl-lyrics-r': `${lyricsCardRight}px`,
+  } as CSSProperties
+  const shellClassName = [
+    'window',
+    sidebarOpen && 'gl-sidebar-open',
+    playerCardShown && 'gl-pane-open',
+    lyricsCardShown && 'gl-lyrics-open',
+    islandShown && 'gl-island-open',
+    isResizingSidebar && 'layout-resizing-sidebar',
+    isResizingLyricsSide && 'layout-resizing-lyrics-side',
+    isResizingWindow && 'layout-resizing-window',
+  ].filter(Boolean).join(' ')
+  // Device and Preferences sections no longer fit a second toolbar row; they
+  // render as a centered segmented stack at the top of the content instead.
+  const showSectionNav = view.kind === 'devices' || view.kind === 'device' || view.kind === 'settings'
+
   return (
     <div className="desktop">
-      <div className="window">
-        <div
-          ref={frameRef}
-          className={`frame ${isResizingSidebar ? 'layout-resizing-sidebar' : ''} ${isResizingLyricsSide ? 'layout-resizing-lyrics-side' : ''}`}
-          style={{
-            '--sb-w': `${sidebarWidth}px`,
-          } as CSSProperties}
-        >
-          <Sidebar
-            setView={navigate}
-            selectedKey={sidebarKey}
-            isOpen={sidebarOpen}
-            translucent={tweak.translucent}
-            onSelectPlaylist={pl => navigate({ kind: 'playlist', playlist: pl })}
-            onSelectArtist={ar => navigate({ kind: 'artist', artist: ar })}
-            onSelectFavoriteTracks={() => navigate({ kind: 'favoriteTracks' })}
-            favoriteTracksCount={favoriteTracks.length}
-            onConnectDevice={setConnectTarget}
+      <div ref={windowRef} className={shellClassName} style={shellStyle}>
+        {/* Thin drag strip along the top edge so the window stays draggable
+            with the sidebar hidden. First in tree order so the no-drag
+            controls rendered later still carve themselves out of it. */}
+        <div className="gl-drag-strip" aria-hidden="true" />
+        {/* With the sidebar hidden: the grab spot beside the traffic lights,
+            left of the toolbar pill (hidden by CSS while the sidebar shows). */}
+        <div className="gl-drag-corner" aria-hidden="true" />
+
+        <Sidebar
+          setView={navigate}
+          selectedKey={sidebarKey}
+          isOpen={sidebarOpen}
+          translucent={tweak.translucent}
+          onSelectPlaylist={pl => navigate({ kind: 'playlist', playlist: pl })}
+          onSelectArtist={ar => navigate({ kind: 'artist', artist: ar })}
+          onSelectFavoriteTracks={() => navigate({ kind: 'favoriteTracks' })}
+          favoriteTracksCount={favoriteTracks.length}
+          onConnectDevice={setConnectTarget}
+        />
+
+        {sidebarOpen && (
+          <div
+            className={`layout-resize-handle sidebar-resize-handle ${isResizingSidebar ? 'active' : ''}`}
+            style={{ left: 'var(--sb-w)' }}
+            onPointerDown={beginSidebarResize}
+            aria-hidden
           />
+        )}
 
-          {sidebarOpen && (
-            <div
-              className={`layout-resize-handle sidebar-resize-handle ${isResizingSidebar ? 'active' : ''}`}
-              style={{ left: `${sidebarWidth}px` }}
-              onPointerDown={beginSidebarResize}
-              aria-hidden
-            />
-          )}
-
-          <div className={`main-area ${sidebarOpen ? 'with-sidebar' : 'without-sidebar'}`}>
-            <Toolbar
-              view={view}
-              history={history}
-              idx={idx}
-              onBack={goBack}
-              onForward={goForward}
-              onNavigate={navigate}
-              searchQuery={searchQuery}
-              onSearchQueryChange={setSearchQuery}
-              searchScope={searchScope}
-              onSearchScopeChange={setSearchScope}
-              viewQuery={viewQuery}
-              onViewQueryChange={setViewQuery}
-              viewQueryable={viewQueryable}
-              sidebarOpen={sidebarOpen}
-              onToggleSidebar={() => setSidebarOpen(open => !open)}
-              playerPaneOpen={isPlayerPaneOpen}
-              canTogglePlayerPane={canShowPlayerPane}
-              onTogglePlayerPane={() => setPlayerPaneOpen(open => !open)}
-              activityOpen={activityOpen}
-              activityActiveCount={activityActiveCount}
-              activityUnreadCount={activityUnreadCount}
-              onToggleActivityCenter={toggleActivityPanel}
-            />
-            <ActivityCenter
-              open={activityOpen}
-              pinned={activityPinned}
-              fullscreen={activityFullscreen}
-              items={activityItems}
-              onClose={closeActivityPanel}
-              onTogglePinned={() => setActivityPinned(!activityPinned)}
-              onToggleFullscreen={() => setActivityFullscreen(!activityFullscreen)}
-              onMarkAllRead={markActivityRead}
-              onClearResolved={clearResolvedActivity}
-              onAction={(actionId, item) => { void handleActivityAction(actionId, item) }}
-            />
-            {view.kind === 'devices' && selectedDeviceId && (
-              <DeviceSectionTabs
-                deviceId={selectedDeviceId}
-                section="dashboard"
-                onNavigate={navigate}
-              />
-            )}
-            {view.kind === 'device' && (
-              <DeviceSectionTabs
-                deviceId={view.deviceId}
-                section={view.section}
-                onNavigate={navigate}
-              />
-            )}
-            {((view.kind === 'device' && view.section === 'dashboard') || view.kind === 'devices') && (
-              <DeviceNavbarSubTabs
-                tabs={DEVICE_DASHBOARD_SUBTABS}
-                active={dashboardTab}
-                ariaLabel="Vista del resumen del dispositivo"
-                onChange={setDashboardTab}
-              />
-            )}
-            {view.kind === 'device' && view.section === 'sync' && (
-              <DeviceNavbarSubTabs
-                tabs={DEVICE_SYNC_SUBTABS}
-                active={syncTab}
-                ariaLabel="Vista de sincronización"
-                idPrefix="device-sync"
-                onChange={setSyncTab}
-              />
-            )}
-            {view.kind === 'settings' && (
-              <SettingsSectionTabs active={settingsTab} onChange={setSettingsTab} />
-            )}
-            {view.kind === 'settings' && settingsTab === 'reproduccion' && (
-              <DeviceNavbarSubTabs
-                tabs={SETTINGS_PLAYBACK_SUBTABS}
-                active={settingsPlaybackTab}
-                ariaLabel="Subsecciones de reproducción"
-                onChange={setSettingsPlaybackTab}
-              />
-            )}
-            <div
-              ref={contentRef}
-              className="content"
-            >
-              {renderContent()}
-            </div>
-          </div>
-
-          {!duplicateReviewOpen && (playerPaneVisible || lyricsSidePaneVisible) && (
-            <div className="np-dock-lateral">
-              <div className="pane-bg-canvas" aria-hidden="true">
-                <div className="np-bg-blob np-bg-blob-a" />
-                <div className="np-bg-blob np-bg-blob-b" />
-                <div className="np-bg-blob np-bg-blob-c" />
-                <div className="np-bg-blob np-bg-blob-d" />
+        <div className={`main-area ${sidebarOpen ? 'with-sidebar' : 'without-sidebar'}`}>
+          <Toolbar
+            view={view}
+            history={history}
+            idx={idx}
+            onBack={goBack}
+            onForward={goForward}
+            onNavigate={navigate}
+            searchQuery={searchQuery}
+            onSearchQueryChange={setSearchQuery}
+            searchScope={searchScope}
+            onSearchScopeChange={setSearchScope}
+            viewQuery={viewQuery}
+            onViewQueryChange={setViewQuery}
+            viewQueryable={viewQueryable}
+            sidebarOpen={sidebarOpen}
+            onToggleSidebar={() => setSidebarOpen(open => !open)}
+            playerPaneOpen={isPlayerPaneOpen}
+            canTogglePlayerPane={canShowPlayerPane}
+            onTogglePlayerPane={() => setPlayerPaneOpen(open => !open)}
+            activityOpen={activityOpen}
+            activityActiveCount={activityActiveCount}
+            activityUnreadCount={activityUnreadCount}
+            onToggleActivityCenter={toggleActivityPanel}
+            contentScrolled={contentScrolled}
+          />
+          <ActivityCenter
+            open={activityOpen}
+            pinned={activityPinned}
+            fullscreen={activityFullscreen}
+            items={activityItems}
+            onClose={closeActivityPanel}
+            onTogglePinned={() => setActivityPinned(!activityPinned)}
+            onToggleFullscreen={() => setActivityFullscreen(!activityFullscreen)}
+            onMarkAllRead={markActivityRead}
+            onClearResolved={clearResolvedActivity}
+            onAction={(actionId, item) => { void handleActivityAction(actionId, item) }}
+          />
+          <div
+            ref={contentRef}
+            className="content"
+            onScroll={handleContentScroll}
+          >
+            {showSectionNav && (
+              <div className="gl-section-nav">
+                {view.kind === 'devices' && selectedDeviceId && (
+                  <DeviceSectionTabs
+                    deviceId={selectedDeviceId}
+                    section="dashboard"
+                    onNavigate={navigate}
+                  />
+                )}
+                {view.kind === 'device' && (
+                  <DeviceSectionTabs
+                    deviceId={view.deviceId}
+                    section={view.section}
+                    onNavigate={navigate}
+                  />
+                )}
+                {((view.kind === 'device' && view.section === 'dashboard') || view.kind === 'devices') && (
+                  <DeviceNavbarSubTabs
+                    tabs={DEVICE_DASHBOARD_SUBTABS}
+                    active={dashboardTab}
+                    ariaLabel="Vista del resumen del dispositivo"
+                    onChange={setDashboardTab}
+                  />
+                )}
+                {view.kind === 'device' && view.section === 'sync' && (
+                  <DeviceNavbarSubTabs
+                    tabs={DEVICE_SYNC_SUBTABS}
+                    active={syncTab}
+                    ariaLabel="Vista de sincronización"
+                    idPrefix="device-sync"
+                    onChange={setSyncTab}
+                  />
+                )}
+                {view.kind === 'settings' && (
+                  <SettingsSectionTabs active={settingsTab} onChange={setSettingsTab} />
+                )}
+                {view.kind === 'settings' && settingsTab === 'reproduccion' && (
+                  <DeviceNavbarSubTabs
+                    tabs={SETTINGS_PLAYBACK_SUBTABS}
+                    active={settingsPlaybackTab}
+                    ariaLabel="Subsecciones de reproducción"
+                    onChange={setSettingsPlaybackTab}
+                  />
+                )}
               </div>
-              <div className="pane-bg-scrim" aria-hidden="true" />
-
-              {playerPaneVisible && (
-                <PlayerPane
-                  isOpen={isPlayerPaneOpen}
-                  onExpand={() => {
-                    setLyricsSidePaneOpen(false)
-                    setExpanded(true)
-                  }}
-                  onCollapse={() => {
-                    setPlayerPaneOpen(false)
-                  }}
-                  lyricsSidePaneOpen={lyricsSidePaneOpen && canShowPlayerPane}
-                  onToggleLyricsSidePane={() => setLyricsSidePaneOpen(open => !open)}
-                  onOpenAlbum={album => navigate({ kind: 'album', album })}
-                  onOpenArtist={artist => navigate({ kind: 'artist', artist })}
-                />
-              )}
-
-              {lyricsSidePaneVisible && (
-                <div
-                  className={`layout-resize-handle lyrics-side-resize-handle ${isResizingLyricsSide ? 'active' : ''}`}
-                  style={{ right: `${lyricsSideWidth}px` }}
-                  onPointerDown={beginLyricsSideResize}
-                  aria-hidden
-                />
-              )}
-
-              {lyricsSidePaneVisible && (
-                <LyricsSidePane
-                  closing={lyricsSidePaneClosing || !showLyricsSidePane}
-                  width={lyricsSideWidth}
-                  onClose={() => setLyricsSidePaneOpen(false)}
-                />
-              )}
-            </div>
-          )}
-
+            )}
+            {renderContent()}
+          </div>
+          {/* Frosted edge the content scrolls under, behind the toolbar. */}
+          <div className="gl-scroll-edge" aria-hidden="true" />
         </div>
+
+        {!duplicateReviewOpen && (playerPaneVisible || lyricsSidePaneVisible) && (
+          <div className="np-dock-lateral">
+            {playerPaneVisible && (
+              <PlayerPane
+                isOpen={isPlayerPaneOpen}
+                onExpand={() => {
+                  setLyricsSidePaneOpen(false)
+                  setExpanded(true)
+                }}
+                onCollapse={() => {
+                  setPlayerPaneOpen(false)
+                }}
+                lyricsSidePaneOpen={lyricsSidePaneOpen && canShowPlayerPane}
+                onToggleLyricsSidePane={() => setLyricsSidePaneOpen(open => !open)}
+                onOpenAlbum={album => navigate({ kind: 'album', album })}
+                onOpenArtist={artist => navigate({ kind: 'artist', artist })}
+              />
+            )}
+
+            {lyricsSidePaneVisible && (
+              <div
+                className={`layout-resize-handle lyrics-side-resize-handle ${isResizingLyricsSide ? 'active' : ''}`}
+                style={{ right: `${lyricsCardRight + lyricsSideWidth}px` }}
+                onPointerDown={beginLyricsSideResize}
+                aria-hidden
+              />
+            )}
+
+            {lyricsSidePaneVisible && (
+              <LyricsSidePane
+                closing={lyricsSidePaneClosing || !showLyricsSidePane}
+                width={lyricsSideWidth}
+                onClose={() => setLyricsSidePaneOpen(false)}
+              />
+            )}
+          </div>
+        )}
 
         {!duplicateReviewOpen && bottomPlayerVisible && (
           <div className={`player-dock ${
@@ -1216,11 +1337,13 @@ export default function App() {
             <div className="player-dock-inner">
               <PlayerBottomBar
                 closing={isBottomPlayerClosing || bottomPlayerClosing}
+                viewKey={view}
                 onExpand={() => {
                   setLyricsSidePaneOpen(false)
                   setExpanded(true)
                 }}
                 onShowPanel={() => setPlayerPaneOpen(true)}
+                onOpenTrackMenu={islandTrackActions.openTrackMenu}
                 lyricsSidePaneOpen={lyricsSidePaneOpen && canShowPlayerPane}
                 onToggleLyricsSidePane={() => setLyricsSidePaneOpen(open => !open)}
                 onOpenAlbum={album => navigate({ kind: 'album', album })}
@@ -1229,6 +1352,7 @@ export default function App() {
             </div>
           </div>
         )}
+        {islandTrackActions.elements}
 
         {!duplicateReviewOpen && expanded && nowTrack && (
           <NowPlayingFull onCollapse={() => setExpanded(false)} />

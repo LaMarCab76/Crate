@@ -7,9 +7,13 @@ const settingsSource = readFileSync(new URL('../views/SettingsView.tsx', import.
 const sidebarSource = readFileSync(new URL('../components/Sidebar.tsx', import.meta.url), 'utf8')
 const css = readFileSync(new URL('../styles/globals.css', import.meta.url), 'utf8')
 
-test('settings tabs live in the top chrome with device-style icons', () => {
-  assert.ok(appSource.includes('function SettingsSectionTabs'), 'App should own the Settings top tabs')
+test('settings tabs live in the shell section nav with device-style icons', () => {
+  assert.ok(appSource.includes('function SettingsSectionTabs'), 'App should own the Settings section tabs')
   assert.ok(appSource.includes('className="device-section-tabs settings-section-tabs"'), 'Settings tabs should reuse the device tab row')
+  assert.ok(
+    appSource.indexOf('<SettingsSectionTabs') > appSource.indexOf('<div className="gl-section-nav">'),
+    'Settings tabs should render in the section nav at the top of the content',
+  )
   assert.ok(appSource.includes("icon: 'moon'"), 'Apariencia tab should render an icon')
   assert.ok(appSource.includes("icon: 'play'"), 'Reproduccion tab should render an icon')
   assert.ok(appSource.includes("icon: 'folder'"), 'Bibliotecas tab should render an icon')

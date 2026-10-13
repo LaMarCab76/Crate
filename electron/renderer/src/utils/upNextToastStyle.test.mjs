@@ -29,11 +29,19 @@ test('up-next toast surfaces use an explicit translucent glass background', () =
 })
 
 test('up-next toast panels share the translucent token instead of an elevated panel fill', () => {
-  for (const selector of ['.up-next-toast', '.up-next-inline-row']) {
+  for (const selector of ['.up-next-inline-row']) {
     const block = cssBlock(selector)
     assert.equal(declaration(block, 'background'), 'var(--up-next-toast-bg)')
     assert.equal(declaration(block, 'border'), '0.5px solid var(--up-next-toast-border)')
     assert.doesNotMatch(block, /var\(--bg-elev\)/)
     assert.doesNotMatch(block, /color-mix\(in\s+oklab,\s*var\(--bg-elev\)/)
   }
+})
+
+test('bottom up-next toast floats over the island as the same translucent island glass', () => {
+  const block = cssBlock('.up-next-toast')
+  assert.equal(declaration(block, 'background'), 'var(--gl-island-fill)')
+  assert.equal(declaration(block, 'backdrop-filter'), 'var(--gl-island-filter)')
+  assert.equal(declaration(block, 'box-shadow'), 'var(--gl-island-shadow)')
+  assert.doesNotMatch(block, /var\(--bg-elev\)/)
 })

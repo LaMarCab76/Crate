@@ -109,7 +109,8 @@ function createMainWindow(): BrowserWindow {
     show: false,
     icon: devIcon ?? undefined,
     titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 14, y: 16 },
+    // Lines up with the floating glass toolbar pill (top: 12px, 46px tall).
+    trafficLightPosition: { x: 22, y: 27 },
     backgroundColor: '#0a0a0c',
     vibrancy: 'sidebar',
     visualEffectState: 'active',

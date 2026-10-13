@@ -28,3 +28,16 @@ test('album covers use one fixed folder or cloud source icon', () => {
   assert.match(componentSource, /provider === 'onedrive' \? 'cloud' : 'folder'/)
   assert.doesNotMatch(albumsViewSource, /appearance="icon"[\s\S]{0,80}\bcompact\b/)
 })
+
+test('icon-only badges name every location when an item spans several', () => {
+  // Album and artist cards pass every track folder; a mixed set must not be
+  // presented as the first folder alone.
+  const iconBranch = componentSource.match(/if \(appearance === 'icon'\) \{[\s\S]*?\n  \}/)?.[0] ?? ''
+  assert.match(iconBranch, /isMixed \? 'library'/)
+  assert.match(iconBranch, /title=\{isMixed \? mixedTitle : accessibleName\}/)
+  assert.match(iconBranch, /aria-label=\{isMixed \? `Varias fuentes\. \$\{mixedTitle\}` : accessibleName\}/)
+  assert.ok(
+    componentSource.indexOf('const mixedTitle') < componentSource.indexOf("if (appearance === 'icon')"),
+    'the mixed-source description is computed before the icon branch returns',
+  )
+})

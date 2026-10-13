@@ -1,4 +1,4 @@
-import type { LibraryProvider, SourceBadgePresentation } from '@shared/types/library-locations'
+import type { LibraryProvider, SourceBadgePresentation, SourceDisplayPreferences } from '@shared/types/library-locations'
 import { useLibraryLocationsStore, type LibraryLocation } from '@renderer/stores/libraryLocationsStore'
 import { useTweakStore } from '@renderer/stores/settingsStore'
 import { Icon } from './Icon'
@@ -41,6 +41,19 @@ function ProviderPart({
   )
 }
 
+function describeLocations(
+  ids: readonly number[],
+  locations: readonly LibraryLocation[],
+  providers: SourceDisplayPreferences['providers'],
+): string {
+  const selected = ids
+    .map(id => locations.find(location => location.id === id))
+    .filter((location): location is LibraryLocation => location != null)
+  return selected.length > 0
+    ? selected.map(location => `${location.name} · ${providers[location.provider].name} · ${location.remotePath ?? location.path}`).join('\n')
+    : 'Varias ubicaciones de biblioteca'
+}
+
 export function SourceBadge({
   folderId,
   folderIds,
@@ -62,26 +75,26 @@ export function SourceBadge({
   const fullName = location?.name ?? providerConfig.name
   const fullPath = location?.remotePath ?? location?.path ?? 'Ubicación no disponible'
   const accessibleName = `${fullName} · ${providerConfig.name} · ${fullPath}`
+  // Items spread over several library locations name every one of them, in
+  // both the full badge and the icon-only form (album / artist cards).
+  const isMixed = ids.length > 1
+  const mixedTitle = isMixed ? describeLocations(ids, locations, prefs.providers) : ''
 
   if (appearance === 'icon') {
     return (
       <span
         className={`source-badge icon-only ${className}`}
-        title={accessibleName}
-        aria-label={accessibleName}
+        title={isMixed ? mixedTitle : accessibleName}
+        aria-label={isMixed ? `Varias fuentes. ${mixedTitle}` : accessibleName}
       >
-        <Icon name={provider === 'onedrive' ? 'cloud' : 'folder'} size={14} />
+        <Icon name={isMixed ? 'library' : provider === 'onedrive' ? 'cloud' : 'folder'} size={14} />
       </span>
     )
   }
 
-  if (ids.length > 1) {
-    const selected = ids.map(id => locations.find(location => location.id === id)).filter(Boolean)
-    const title = selected.length > 0
-      ? selected.map(location => `${location!.name} · ${prefs.providers[location!.provider].name} · ${location!.remotePath ?? location!.path}`).join('\n')
-      : 'Varias ubicaciones de biblioteca'
+  if (isMixed) {
     return (
-      <span className={`source-badge${compact ? ' compact' : ''}${appearanceClass} mixed ${className}`} title={title} aria-label={`Varias fuentes. ${title}`}>
+      <span className={`source-badge${compact ? ' compact' : ''}${appearanceClass} mixed ${className}`} title={mixedTitle} aria-label={`Varias fuentes. ${mixedTitle}`}>
         <Icon name="library" size={12} />
         <span>Varias fuentes</span>
       </span>

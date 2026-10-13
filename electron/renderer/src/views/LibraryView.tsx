@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Icon } from '@renderer/components/Icon'
 import { TrackTable } from '@renderer/components/TrackTable'
-import { ListPrefsMenu, SortDirectionButton } from '@renderer/components/ListPrefsMenu'
+import { ListPrefsDivider, ListPrefsMenu, ListPrefsOptions, SortDirectionButton } from '@renderer/components/ListPrefsMenu'
 import { useListPrefs } from '@renderer/stores/settingsStore'
 import { useNavIntentStore } from '@renderer/stores/navIntentStore'
 import { createListPrefsDefaults, trackMatchesQuery, type LibraryTrackSortBy, sortTracks } from '@renderer/utils/listSort'
@@ -89,14 +89,6 @@ export function LibraryView() {
     return <EmptyState />
   }
 
-  if (visibleTracks.length === 0) {
-    return (
-      <div style={{ padding: 48, color: 'var(--text-secondary)' }}>
-        No hay resultados para este filtro.
-      </div>
-    )
-  }
-
   const totalDur = visibleTracks.reduce((s, t) => s + t.d, 0)
   const filters = [
     ...prefs.query.trim() ? [`texto “${prefs.query.trim()}”`] : [],
@@ -109,7 +101,7 @@ export function LibraryView() {
       <div className="lib-head">
         <div>
           <h1>Songs</h1>
-          <div className="sub">{sub}</div>
+          <div className="sub" title={sub}>{sub}</div>
         </div>
         <div className="actions list-toolbar">
           <ListPrefsMenu
@@ -118,37 +110,26 @@ export function LibraryView() {
             menuTitle="Library"
             onReset={() => setPrefs(defaults.library)}
           >
-            <div className="list-prefs-row">
-              <div className="list-prefs-row-inline">
-                <div className="list-prefs-label">Ordenar por</div>
-                <select
-                  className="list-select"
-                  value={prefs.sortBy}
-                  onChange={e => setPrefs({ sortBy: e.target.value as LibraryTrackSortBy })}
-                  aria-label="Ordenar canciones"
-                >
-                  {LIBRARY_SORT_OPTIONS.map(option => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                <SortDirectionButton
-                  direction={prefs.sortDir}
-                  onToggle={() => setPrefs({ sortDir: prefs.sortDir === 'asc' ? 'desc' : 'asc' })}
-                />
-              </div>
-            </div>
-            <div className="list-prefs-row-inline">
-              <label className="list-toggle">
-                <input
-                  type="checkbox"
-                  checked={prefs.favoritesOnly}
-                  onChange={e => setPrefs({ favoritesOnly: e.target.checked })}
-                />
-                Solo favoritas
-              </label>
-            </div>
+            <ListPrefsOptions
+              label="Ordenar por"
+              ariaLabel="Ordenar canciones"
+              value={prefs.sortBy}
+              options={LIBRARY_SORT_OPTIONS}
+              onChange={sortBy => setPrefs({ sortBy })}
+            />
+            <ListPrefsDivider />
+            <SortDirectionButton
+              direction={prefs.sortDir}
+              onToggle={() => setPrefs({ sortDir: prefs.sortDir === 'asc' ? 'desc' : 'asc' })}
+            />
+            <label className="list-toggle">
+              <input
+                type="checkbox"
+                checked={prefs.favoritesOnly}
+                onChange={e => setPrefs({ favoritesOnly: e.target.checked })}
+              />
+              Solo favoritas
+            </label>
           </ListPrefsMenu>
         </div>
       </div>
@@ -167,7 +148,11 @@ export function LibraryView() {
           </button>
         </div>
       )}
-      <TrackTable tracks={visibleTracks} showArt />
+      {visibleTracks.length === 0 ? (
+        <div className="list-empty">No hay resultados para este filtro.</div>
+      ) : (
+        <TrackTable tracks={visibleTracks} showArt />
+      )}
     </>
   )
 }

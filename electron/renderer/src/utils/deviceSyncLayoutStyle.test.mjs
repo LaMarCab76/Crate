@@ -58,12 +58,13 @@ test('refactored sync controls (base selector, section tabs, destination) are st
   const select = cssBlock('.device-select')
 
   assert.equal(declaration(base, 'display'), 'inline-flex')
-  // Primary device tabs and dashboard/sync navbar sub-tabs share height and the
-  // same underlined .device-section-tab look.
+  // Primary device tabs and dashboard/sync sub-tabs are glass segmented rows in
+  // the section nav; the secondary row is a smaller control under the primary.
   assert.equal(declaration(root, '--device-nav-row-height'), '38px')
   assert.equal(declaration(sectionTabs, 'display'), 'flex')
   assert.equal(declaration(sectionTabs, 'height'), 'var(--device-nav-row-height)')
-  assert.equal(declaration(sectionSubtabs, 'height'), 'var(--device-nav-row-height)')
+  assert.equal(declaration(sectionTabs, 'background'), 'var(--gl-seg-track)')
+  assert.equal(declaration(sectionSubtabs, 'height'), '34px')
   // In-view Biblioteca/grouping sub-tabs keep their compact strip styling.
   assert.equal(declaration(subtabs, 'display'), 'flex')
   assert.equal(declaration(sectionTab, 'border-bottom'), '2px solid transparent')
