@@ -1,12 +1,20 @@
-import { type FormEvent, type MouseEvent, useEffect, useMemo, useState } from 'react'
+import { type FormEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from 'react'
 import type { Album, Playlist, Track } from '@shared/types/library'
-import type { TrackAlbumMovePreview, TrackAlbumMoveQuality, TrackMetadataUpdatePayload } from '@shared/types/ipc-contract'
+import type {
+  OriginalAlbumCandidatesResult,
+  TrackAlbumMoveManualAlbum,
+  TrackAlbumMovePreview,
+  TrackAlbumMoveQuality,
+  TrackAlbumMoveTarget,
+  TrackMetadataUpdatePayload,
+} from '@shared/types/ipc-contract'
 import type { CloudMoveDisposition, CloudMoveProgressEvent } from '@shared/types/cloud'
 import { fmtTime, fmtTotal } from '@renderer/utils/format'
 import {
   addTracksToPlaylist,
   applyTrackAlbumMove,
   createPlaylistWithTracks,
+  findOriginalAlbums,
   previewTrackAlbumMove,
   toggleTrackFavorite,
   trashTracksWithAnimation,
@@ -486,8 +494,54 @@ function isAlbumSuggestionTextIncluded(haystack: string, needle: string): boolea
   score: number
 }
 
+const VARIOUS_ARTISTS_NAMES = new Set(['various artists', 'various', 'va', 'v a', 'varios artistas', 'varios', 'artistas varios'])
+
+// A track that sits in a compilation opens the move modal on the original-album
+// search; anything else starts on the library albums like before.
+function trackLooksLikeCompilation(track: Track): boolean {
+  if (track.compilation) return true
+  const albumArtist = normalizeAlbumSuggestionText(track.albumArtist).replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim()
+  return VARIOUS_ARTISTS_NAMES.has(albumArtist)
+}
+
+// "Álbum", "EP · Soundtrack"... from MusicBrainz release-group types.
+function releaseKindLabel(primaryType: string | null, secondaryTypes: string[]): string {
+  const names: Record<string, string> = {
+    album: 'Álbum',
+    ep: 'EP',
+    single: 'Single',
+    broadcast: 'Broadcast',
+    other: 'Otro',
+    compilation: 'Recopilatorio',
+    soundtrack: 'Soundtrack',
+    live: 'En vivo',
+    remix: 'Remixes',
+    'dj-mix': 'DJ mix',
+    'mixtape/street': 'Mixtape',
+    demo: 'Demo',
+  }
+  const label = (value: string) => names[value.toLowerCase()] ?? value
+  return [primaryType, ...secondaryTypes].filter((type): type is string => !!type).map(label).join(' · ') || 'Lanzamiento'
+}
+
+type AlbumMoveTab = 'original' | 'library'
+
+interface ManualAlbumDraft {
+  title: string
+  albumArtist: string
+  year: string
+  trackNumber: string
+  totalTracks: string
+  discNumber: string
+  totalDiscs: string
+}
+
+const MANUAL_ALBUM_KEY = 'manual'
+const NEW_ALBUM_ART_PALETTE: [string, string, string] = ['#2b2d33', '#3b3f48', '#565c69']
+
 function TrackAlbumMoveModal({ track, onClose }: { track: Track; onClose: () => void }) {
   const albums = useAlbums()
+  const [tab, setTab] = useState<AlbumMoveTab>(() => (trackLooksLikeCompilation(track) ? 'original' : 'library'))
   const [query, setQuery] = useState('')
   const candidates = useMemo<AlbumSuggestion[]>(() => {
     const q = normalizeAlbumSuggestionText(query)
@@ -511,6 +565,23 @@ function TrackAlbumMoveModal({ track, onClose }: { track: Track; onClose: () => 
   }, [albums, query, track.albumId, track.artist, track.albumArtist, track.genre, track.t, track.year])
   const firstAlbumId = candidates.map(candidate => albumDbId(candidate.album)).find((id): id is number => id != null)
   const [targetAlbumId, setTargetAlbumId] = useState<number | null>(firstAlbumId ?? null)
+
+  // Original-album search (MusicBrainz), fetched the first time that tab shows.
+  const [originals, setOriginals] = useState<OriginalAlbumCandidatesResult | null>(null)
+  const originalsRequested = useRef(false)
+  const [originalsError, setOriginalsError] = useState<string | null>(null)
+  const [originalKey, setOriginalKey] = useState<string | null>(null)
+  const [manualDraft, setManualDraft] = useState<ManualAlbumDraft>(() => ({
+    title: '',
+    albumArtist: track.artist,
+    year: '',
+    trackNumber: '',
+    totalTracks: '',
+    discNumber: '',
+    totalDiscs: '',
+  }))
+  const [manualAlbum, setManualAlbum] = useState<{ album: TrackAlbumMoveManualAlbum; trackNumber: number | null } | null>(null)
+
   // User-chosen destination slot. Reset whenever the target album changes so each
   // album starts from its own MusicBrainz/recommended slot.
   const [trackNumberOverride, setTrackNumberOverride] = useState<number | null>(null)
@@ -528,20 +599,50 @@ function TrackAlbumMoveModal({ track, onClose }: { track: Track; onClose: () => 
   }, [candidates, firstAlbumId, targetAlbumId])
 
   useEffect(() => {
-    setTrackNumberOverride(null)
-  }, [targetAlbumId])
+    if (tab !== 'original' || originalsRequested.current || track.dbId == null) return
+    originalsRequested.current = true
+    setOriginalsError(null)
+    void findOriginalAlbums(track.dbId)
+      .then(result => {
+        setOriginals(result)
+        const first = result.candidates.find(candidate => !candidate.isCurrentAlbum)
+        setOriginalKey(current => current ?? first?.releaseId ?? MANUAL_ALBUM_KEY)
+      })
+      .catch(err => {
+        setOriginalsError(err instanceof Error ? err.message : String(err))
+        setOriginalKey(current => current ?? MANUAL_ALBUM_KEY)
+      })
+  }, [tab, track.dbId])
+
+  const moveTarget = useMemo<TrackAlbumMoveTarget | null>(() => {
+    if (tab === 'library') return targetAlbumId != null ? { kind: 'library', albumId: targetAlbumId } : null
+    if (originalKey === MANUAL_ALBUM_KEY) return manualAlbum ? { kind: 'manual', album: manualAlbum.album } : null
+    const candidate = originals?.candidates.find(item => item.releaseId === originalKey)
+    if (!candidate || candidate.isCurrentAlbum) return null
+    return candidate.localAlbumId != null
+      ? { kind: 'library', albumId: candidate.localAlbumId }
+      : { kind: 'release', releaseId: candidate.releaseId, recordingId: candidate.recordingId }
+  }, [manualAlbum, originalKey, originals, tab, targetAlbumId])
+  const moveTargetKey = moveTarget ? JSON.stringify(moveTarget) : null
+  const manualTrackNumber = moveTarget?.kind === 'manual' ? manualAlbum?.trackNumber ?? null : null
 
   useEffect(() => {
-    if (track.dbId == null || targetAlbumId == null) {
+    setTrackNumberOverride(null)
+  }, [moveTargetKey])
+
+  useEffect(() => {
+    if (track.dbId == null || moveTargetKey == null) {
       setPreview(null)
+      setLoading(false)
       return
     }
     let cancelled = false
+    const target = JSON.parse(moveTargetKey) as TrackAlbumMoveTarget
     setLoading(true)
     setError(null)
     setPreview(null)
     setConfirmLower(false)
-    void previewTrackAlbumMove({ trackId: track.dbId, targetAlbumId, trackNumber: trackNumberOverride })
+    void previewTrackAlbumMove({ trackId: track.dbId, target, trackNumber: trackNumberOverride ?? manualTrackNumber })
       .then(next => {
         if (!cancelled) setPreview(next)
       })
@@ -552,9 +653,9 @@ function TrackAlbumMoveModal({ track, onClose }: { track: Track; onClose: () => 
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [targetAlbumId, track.dbId, trackNumberOverride])
+  }, [manualTrackNumber, moveTargetKey, track.dbId, trackNumberOverride])
 
-  const selectedAlbum = candidates.find(candidate => albumDbId(candidate.album) === targetAlbumId)?.album ?? null
+  const isNewAlbum = preview?.targetAlbum.isNew === true
   const lowerQualityBlocked = !!preview?.replacement && !preview.replacement.incomingIsBetter && !confirmLower
   const canApply = preview?.status === 'ready' && !loading && !applying && !lowerQualityBlocked
   const willReplace = confirmLower || preview?.replacement?.incomingIsBetter === true
@@ -563,6 +664,7 @@ function TrackAlbumMoveModal({ track, onClose }: { track: Track; onClose: () => 
   // preview: each current slot, with the chosen slot showing the incoming track.
   // A same-title occupant (the replacement candidate) is marked "reemplaza"; a
   // different song sitting in the chosen slot is a "conflicto" (hard block).
+  // Empty slots show the official title (dimmed) when MusicBrainz provided it.
   const afterRows = useMemo(() => {
     if (!preview) return []
     const sel = preview.selectedTrackNumber
@@ -582,8 +684,8 @@ function TrackAlbumMoveModal({ track, onClose }: { track: Track; onClose: () => 
       }
       return {
         trackNumber: slot.trackNumber,
-        title: slot.occupiedBy?.title ?? '—',
-        kind: 'existing' as const,
+        title: slot.occupiedBy?.title ?? slot.officialTitle ?? '—',
+        kind: slot.occupiedBy ? 'existing' as const : 'missing' as const,
         displacedTitle: null,
         replacing: false,
         conflict: false,
@@ -594,6 +696,31 @@ function TrackAlbumMoveModal({ track, onClose }: { track: Track; onClose: () => 
     }
     return rows
   }, [preview, track.t])
+
+  const switchTab = (next: AlbumMoveTab) => {
+    if (next === tab) return
+    setTab(next)
+    setError(null)
+  }
+
+  const submitManualAlbum = (event: FormEvent) => {
+    event.preventDefault()
+    setManualAlbum({
+      album: {
+        title: manualDraft.title.trim(),
+        albumArtist: manualDraft.albumArtist.trim(),
+        year: manualDraft.year.trim() || null,
+        totalTracks: parseOptionalInt(manualDraft.totalTracks),
+        discNumber: parseOptionalInt(manualDraft.discNumber),
+        totalDiscs: parseOptionalInt(manualDraft.totalDiscs),
+      },
+      trackNumber: parseOptionalInt(manualDraft.trackNumber),
+    })
+  }
+
+  const setManualField = (field: keyof ManualAlbumDraft) => (value: string) => {
+    setManualDraft(draft => ({ ...draft, [field]: value }))
+  }
 
   const apply = async () => {
     if (!preview || preview.status !== 'ready') return
@@ -618,49 +745,170 @@ function TrackAlbumMoveModal({ track, onClose }: { track: Track; onClose: () => 
           <button type="button" className="btn" onClick={onClose} disabled={applying}>Cancelar</button>
           <button type="button" className="btn primary" disabled={!canApply} onClick={() => { void apply() }}>
             {applying
-              ? (willReplace ? 'Reemplazando...' : 'Moviendo...')
-              : (willReplace ? 'Reemplazar' : 'Mover')}
+              ? (willReplace ? 'Reemplazando...' : isNewAlbum ? 'Creando álbum...' : 'Moviendo...')
+              : (willReplace ? 'Reemplazar' : isNewAlbum ? 'Crear álbum y mover' : 'Mover')}
           </button>
         </>
       )}
     >
       <div className="album-move-modal">
-        <div className="album-move-search">
-          <Icon name="search" size={14} />
-          <input
-            value={query}
-            onChange={event => setQuery(event.target.value)}
-            placeholder="Buscar álbum"
-            autoFocus
-          />
+        <div className="album-move-tabs" role="tablist" aria-label="Destino">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'original'}
+            className={tab === 'original' ? 'active' : ''}
+            onClick={() => switchTab('original')}
+          >
+            Álbum original
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'library'}
+            className={tab === 'library' ? 'active' : ''}
+            onClick={() => switchTab('library')}
+          >
+            En tu biblioteca
+          </button>
         </div>
 
-        <div className="album-move-picker" role="listbox" aria-label="Álbum destino">
-          {candidates.map(({ album, score }) => {
-            const id = albumDbId(album)
-            if (id == null) return null
-            return (
-              <button
-                key={album.id}
-                type="button"
-                className={id === targetAlbumId ? 'selected' : ''}
-                onClick={() => setTargetAlbumId(id)}
-              >
-                <span className="album-move-pick-text">
-                  <strong>{album.title}</strong>
-                  <em>{album.artist} · {album.year || '-'} · {album.tracks.length}</em>
-                </span>
-                <span className="album-move-percent" title={albumMoveSuggestionLabel(score)}>
-                  {albumMoveSuggestionPercent(score)}%
-                </span>
-              </button>
-            )
-          })}
-          {candidates.length === 0 && <div className="album-move-empty">No hay álbumes locales coincidentes.</div>}
-        </div>
+        {tab === 'library' ? (
+          <>
+            <div className="album-move-search">
+              <Icon name="search" size={14} />
+              <input
+                value={query}
+                onChange={event => setQuery(event.target.value)}
+                placeholder="Buscar álbum"
+                autoFocus
+              />
+            </div>
+
+            <div className="album-move-picker" role="listbox" aria-label="Álbum destino">
+              {candidates.map(({ album, score }) => {
+                const id = albumDbId(album)
+                if (id == null) return null
+                return (
+                  <button
+                    key={album.id}
+                    type="button"
+                    className={id === targetAlbumId ? 'selected' : ''}
+                    onClick={() => setTargetAlbumId(id)}
+                  >
+                    <span className="album-move-pick-text">
+                      <strong>{album.title}</strong>
+                      <em>{album.artist} · {album.year || '-'} · {album.tracks.length}</em>
+                    </span>
+                    <span className="album-move-percent" title={albumMoveSuggestionLabel(score)}>
+                      {albumMoveSuggestionPercent(score)}%
+                    </span>
+                  </button>
+                )
+              })}
+              {candidates.length === 0 && <div className="album-move-empty">No hay álbumes locales coincidentes.</div>}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="album-move-picker" role="listbox" aria-label="Álbum original">
+              {!originals && !originalsError && <div className="album-move-empty">Buscando el álbum original en MusicBrainz...</div>}
+              {originals?.candidates.map(candidate => {
+                const meta = [
+                  candidate.artist,
+                  candidate.year || '-',
+                  releaseKindLabel(candidate.primaryType, candidate.secondaryTypes),
+                  candidate.trackNumber
+                    ? `Pista ${candidate.discNumber && candidate.discNumber > 1 ? `${candidate.discNumber}-` : ''}${candidate.trackNumber}${candidate.totalTracks ? `/${candidate.totalTracks}` : ''}`
+                    : null,
+                ].filter(Boolean).join(' · ')
+                const badge = candidate.isCurrentAlbum
+                  ? 'Álbum actual'
+                  : candidate.localAlbumId != null ? 'En tu biblioteca' : 'Nuevo'
+                return (
+                  <button
+                    key={candidate.releaseId}
+                    type="button"
+                    role="option"
+                    aria-selected={candidate.releaseId === originalKey}
+                    className={candidate.releaseId === originalKey ? 'selected' : ''}
+                    disabled={candidate.isCurrentAlbum}
+                    onClick={() => setOriginalKey(candidate.releaseId)}
+                  >
+                    <span className="album-move-pick-text">
+                      <strong>{candidate.title}</strong>
+                      <em>{meta}</em>
+                    </span>
+                    <span className={`album-move-badge ${candidate.localAlbumId != null ? 'local' : 'new'}`}>{badge}</span>
+                  </button>
+                )
+              })}
+              {(originals || originalsError) && (
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={originalKey === MANUAL_ALBUM_KEY}
+                  className={originalKey === MANUAL_ALBUM_KEY ? 'selected' : ''}
+                  onClick={() => setOriginalKey(MANUAL_ALBUM_KEY)}
+                >
+                  <span className="album-move-pick-text">
+                    <strong>Crear álbum a mano</strong>
+                    <em>Si MusicBrainz no tiene el álbum correcto</em>
+                  </span>
+                  <span className="album-move-badge new">Nuevo</span>
+                </button>
+              )}
+            </div>
+            {originalsError && <div className="modal-error">{originalsError}</div>}
+            {originals?.warnings.map(item => <div className="modal-muted" key={item}>{item}</div>)}
+
+            {originalKey === MANUAL_ALBUM_KEY && (
+              <form className="album-move-manual" onSubmit={submitManualAlbum}>
+                <div className="form-grid-2">
+                  <Field label="Álbum" value={manualDraft.title} onChange={setManualField('title')} />
+                  <Field label="Album artist" value={manualDraft.albumArtist} onChange={setManualField('albumArtist')} />
+                </div>
+                <div className="album-move-manual-numbers">
+                  <Field label="Año" value={manualDraft.year} onChange={setManualField('year')} type="number" />
+                  <Field label="Track" value={manualDraft.trackNumber} onChange={setManualField('trackNumber')} type="number" />
+                  <Field label="Total tracks" value={manualDraft.totalTracks} onChange={setManualField('totalTracks')} type="number" />
+                  <Field label="Disco" value={manualDraft.discNumber} onChange={setManualField('discNumber')} type="number" />
+                  <Field label="Total discos" value={manualDraft.totalDiscs} onChange={setManualField('totalDiscs')} type="number" />
+                </div>
+                <div className="album-move-manual-actions">
+                  <button type="submit" className="btn" disabled={!manualDraft.title.trim() || !manualDraft.albumArtist.trim()}>
+                    {manualAlbum ? 'Recalcular' : 'Calcular'}
+                  </button>
+                </div>
+              </form>
+            )}
+          </>
+        )}
+
+        {isNewAlbum && preview?.proposal && (
+          <div className="album-move-newalbum">
+            <div className="album-move-newalbum-art">
+              <Artwork
+                album={{
+                  seed: preview.source.id,
+                  palette: NEW_ALBUM_ART_PALETTE,
+                  pattern: 'grid',
+                  artworkPath: preview.targetAlbum.artworkPath ?? undefined,
+                }}
+                radius={6}
+              />
+            </div>
+            <div className="album-move-newalbum-text">
+              <span>Álbum nuevo en tu biblioteca</span>
+              <strong>{preview.targetAlbum.title}</strong>
+              <em>{preview.targetAlbum.artist} · {preview.targetAlbum.year || '-'}</em>
+              <small title={preview.proposal.destinationDirectory}>{preview.proposal.destinationDirectory}</small>
+            </div>
+          </div>
+        )}
 
         {preview && preview.slots.length > 0 && (
-          <div className="album-move-columns">
+          <div className={`album-move-columns${isNewAlbum ? ' two' : ''}`}>
             <div className="album-move-col">
               <span className="album-move-col-head">Elegir pista</span>
               <div className="album-move-poslist" role="listbox" aria-label="Número de pista destino">
@@ -675,7 +923,7 @@ function TrackAlbumMoveModal({ track, onClose }: { track: Track; onClose: () => 
                   ].filter(Boolean).join(' ')
                   const hint = slot.occupiedBy
                     ? `Ocupada: ${slot.occupiedBy.title} (${albumMoveQualityLabel(slot.occupiedBy.quality)})`
-                    : 'Libre'
+                    : slot.officialTitle ? `Libre · en el álbum: ${slot.officialTitle}` : 'Libre'
                   return (
                     <button
                       key={slot.trackNumber}
@@ -687,31 +935,33 @@ function TrackAlbumMoveModal({ track, onClose }: { track: Track; onClose: () => 
                       onClick={() => setTrackNumberOverride(slot.trackNumber)}
                     >
                       <span className="album-move-slot-no">{slot.trackNumber}</span>
-                      <span className="album-move-slot-title">{slot.occupiedBy?.title ?? 'Libre'}</span>
+                      <span className="album-move-slot-title">{slot.occupiedBy?.title ?? slot.officialTitle ?? 'Libre'}</span>
                     </button>
                   )
                 })}
               </div>
             </div>
 
-            <div className="album-move-col">
-              <span className="album-move-col-head">{selectedAlbum?.title ?? 'Actual'}</span>
-              <div className="album-move-rows">
-                {preview.slots.map(slot => (
-                  <div className={`album-move-row ${slot.occupiedBy ? '' : 'empty'}`} key={slot.trackNumber}>
-                    <span className="album-move-row-no">{slot.trackNumber}</span>
-                    <span className="album-move-row-title">{slot.occupiedBy?.title ?? '—'}</span>
-                  </div>
-                ))}
+            {!isNewAlbum && (
+              <div className="album-move-col">
+                <span className="album-move-col-head">{preview.targetAlbum.title}</span>
+                <div className="album-move-rows">
+                  {preview.slots.map(slot => (
+                    <div className={`album-move-row ${slot.occupiedBy ? '' : 'empty'}`} key={slot.trackNumber}>
+                      <span className="album-move-row-no">{slot.trackNumber}</span>
+                      <span className="album-move-row-title">{slot.occupiedBy?.title ?? slot.officialTitle ?? '—'}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
             <div className="album-move-col">
               <span className="album-move-col-head">Cómo queda</span>
               <div className="album-move-rows">
                 {afterRows.map(row => (
                   <div
-                    className={`album-move-row ${row.kind === 'incoming' ? (row.conflict ? 'conflict' : 'incoming') : ''}`}
+                    className={`album-move-row ${row.kind === 'incoming' ? (row.conflict ? 'conflict' : 'incoming') : row.kind === 'missing' ? 'empty' : ''}`}
                     key={row.trackNumber}
                   >
                     <span className="album-move-row-no">{row.trackNumber}</span>
@@ -781,7 +1031,13 @@ function TrackAlbumMoveModal({ track, onClose }: { track: Track; onClose: () => 
           <div><span>Confianza</span><strong>{preview?.proposal ? (preview.proposal.musicBrainzConfidence > 0 ? `${Math.round(preview.proposal.musicBrainzConfidence * 100)}%` : 'Sin confirmar') : '-'}</strong></div>
         </div>
 
-        {loading && <div className="modal-muted">Validando en MusicBrainz...</div>}
+        {loading && (
+          <div className="modal-muted">
+            {moveTarget?.kind === 'release'
+              ? 'Buscando el álbum y su carátula en MusicBrainz (puede tardar unos segundos)...'
+              : 'Validando en MusicBrainz...'}
+          </div>
+        )}
         {preview?.errors.map(item => <div className="modal-error" key={item}>{item}</div>)}
         {preview?.warnings.map(item => <div className="modal-muted" key={item}>{item}</div>)}
         {error && <div className="modal-error">{error}</div>}

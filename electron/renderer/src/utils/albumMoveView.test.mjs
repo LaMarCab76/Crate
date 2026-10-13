@@ -61,7 +61,7 @@ test('album move modal orders candidates by score and preselects first ranked ca
 })
 
 test('move modal calls preview and apply APIs and blocks the apply button unless preview is ready', () => {
-  assert.match(mediaActions, /previewTrackAlbumMove\(\{ trackId: track\.dbId, targetAlbumId, trackNumber: trackNumberOverride \}\)/)
+  assert.match(mediaActions, /previewTrackAlbumMove\(\{ trackId: track\.dbId, target, trackNumber: trackNumberOverride \?\? manualTrackNumber \}\)/)
   assert.match(mediaActions, /applyTrackAlbumMove\(preview, confirmLower\)/)
   assert.match(mediaActions, /preview\?\.status === 'ready'/)
   assert.match(mediaActions, /Validando en MusicBrainz\.\.\./)
@@ -72,7 +72,7 @@ test('move modal exposes a track-number slot picker and quality-based replacemen
   assert.match(mediaActions, /function albumMoveSuggestionPercent/)
   assert.match(mediaActions, /function albumMoveQualityLabel/)
   assert.match(mediaActions, /const \[trackNumberOverride, setTrackNumberOverride\]/)
-  assert.match(mediaActions, /className="album-move-columns"/)
+  assert.match(mediaActions, /className=\{`album-move-columns\$\{isNewAlbum \? ' two' : ''\}`\}/)
   assert.match(mediaActions, /preview\.slots\.map/)
   assert.match(mediaActions, /setTrackNumberOverride\(slot\.trackNumber\)/)
   assert.match(mediaActions, /preview\?\.replacement/)
@@ -121,4 +121,34 @@ test('library store skips normalized albums with no tracks after a move', () => 
     /dbAlbums\.map\(a => albumsById\.get\(`a\$\{a\.id\}`\) \?\? dbToUiAlbum/,
     'album list must not synthesize empty albums from stale DB rows',
   )
+})
+
+test('move modal offers the original album (MusicBrainz) next to the library albums', () => {
+  assert.match(mediaActions, /type AlbumMoveTab = 'original' \| 'library'/)
+  assert.match(mediaActions, /trackLooksLikeCompilation\(track\) \? 'original' : 'library'/, 'compilation tracks open on the original-album search')
+  assert.match(mediaActions, /findOriginalAlbums\(track\.dbId\)/)
+  assert.match(mediaActions, />\s*Álbum original\s*</)
+  assert.match(mediaActions, />\s*En tu biblioteca\s*</)
+  assert.match(mediaActions, /candidate\.localAlbumId != null[\s\S]*?\{ kind: 'library', albumId: candidate\.localAlbumId \}[\s\S]*?\{ kind: 'release', releaseId: candidate\.releaseId, recordingId: candidate\.recordingId \}/)
+  assert.match(mediaActions, /Crear álbum a mano/)
+  assert.match(mediaActions, /\{ kind: 'manual', album: manualAlbum\.album \}/)
+  assert.match(mediaActions, /isNewAlbum \? 'Crear álbum y mover' : 'Mover'/)
+  assert.match(mediaActions, /slot\.officialTitle/, 'empty slots of a new album show the official tracklist')
+})
+
+test('preload, store and IPC contract expose the original album search', () => {
+  assert.match(preload, /findOriginalAlbums: \(trackId: number\)/)
+  assert.match(preload, /track:originalAlbum:candidates/)
+  assert.match(store, /export async function findOriginalAlbums/)
+  assert.match(ipcTypes, /findOriginalAlbums\(trackId: number\): Promise<OriginalAlbumCandidatesResult>/)
+  assert.match(ipcTypes, /export type TrackAlbumMoveTarget =/)
+  assert.match(ipcTypes, /\| \{ kind: 'release'; releaseId: string; recordingId\?: string \| null \}/)
+  assert.match(ipcTypes, /target: TrackAlbumMoveTarget/)
+})
+
+test('album move styles define the destination tabs and the new album card', () => {
+  assert.match(cssBlock('.album-move-tabs'), /border-radius:\s*999px/)
+  assert.match(cssBlock('.album-move-tabs button.active'), /var\(--gl-seg-thumb\)/)
+  assert.match(cssBlock('.album-move-newalbum'), /grid-template-columns:\s*56px minmax\(0, 1fr\)/)
+  assert.match(cssBlock('.album-move-columns.two'), /grid-template-columns:\s*minmax\(0, 0\.85fr\) minmax\(0, 1fr\)/)
 })

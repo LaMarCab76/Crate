@@ -75,15 +75,13 @@
    Shared tokens for the floating glass shell. The tint colors are registered
    so artwork changes cross-fade instead of snapping: App.tsx sets them from
    the extracted palettes (--gl-t/--gl-p* follow the viewed album, else the
-   playing track; --gl-nt/--gl-n* always follow the playing track, --gl-nw is
-   --gl-nt before vivify) and removes them to fall back to the neutral
-   defaults below. */
+   playing track; --gl-nt/--gl-n* always follow the playing track) and removes
+   them to fall back to the neutral defaults below. */
 @property --gl-t  { syntax: '<color>'; inherits: true; initial-value: #8e8e93; }
 @property --gl-p0 { syntax: '<color>'; inherits: true; initial-value: #3a3a40; }
 @property --gl-p1 { syntax: '<color>'; inherits: true; initial-value: #232327; }
 @property --gl-p2 { syntax: '<color>'; inherits: true; initial-value: #55555c; }
 @property --gl-nt { syntax: '<color>'; inherits: true; initial-value: #8e8e93; }
-@property --gl-nw { syntax: '<color>'; inherits: true; initial-value: #8e8e93; }
 @property --gl-n0 { syntax: '<color>'; inherits: true; initial-value: #3a3a40; }
 @property --gl-n1 { syntax: '<color>'; inherits: true; initial-value: #232327; }
 @property --gl-n2 { syntax: '<color>'; inherits: true; initial-value: #55555c; }
@@ -187,9 +185,11 @@
   --gl-switch-off: rgba(255, 255, 255, 0.16);
   --gl-danger: #ff8a80;
 
-  /* Now-playing row: outline only, in the playing artwork's own color (not
-     the vivified accent), so it sits quietly beside the album sections. */
-  --gl-current-shadow: inset 0 0 0 1px color-mix(in oklab, var(--gl-nw) 55%, rgba(255, 255, 255, 0.12));
+  /* Now-playing row: the same neutral glass box as the in-list banners (the
+     metadata prompt), no artwork tint. Redeclared per theme so the panel
+     tokens resolve to that theme's values. */
+  --gl-current-fill: var(--gl-panel-fill);
+  --gl-current-shadow: var(--gl-panel-shadow);
 
   --gl-r-panel: 24px;
   --gl-r-pop: 18px;
@@ -317,7 +317,8 @@
   --gl-switch-off: rgba(0, 0, 0, 0.14);
   --gl-danger: #d93025;
 
-  --gl-current-shadow: inset 0 0 0 1px color-mix(in oklab, var(--gl-nw) 55%, rgba(0, 0, 0, 0.1));
+  --gl-current-fill: var(--gl-panel-fill);
+  --gl-current-shadow: var(--gl-panel-shadow);
 }
 
 /* Density */
@@ -4233,9 +4234,12 @@ textarea,
   transition: background-color 140ms ease;
 }
 .tbl tbody tr:hover { background-color: var(--gl-hover); }
-/* Now playing: just an outline tinted from the playing artwork, no fill, in
-   every listing (the artist page's album sections included). */
-.tbl tbody tr.playing { box-shadow: var(--gl-current-shadow); }
+/* Now playing: the banner's glass box, in every listing (the artist page's
+   album sections included). */
+.tbl tbody tr.playing {
+  background-color: var(--gl-current-fill);
+  box-shadow: var(--gl-current-shadow);
+}
 .tbl tbody tr.playing td.title .title-main { font-weight: 600; }
 /* Compact rows for art-less track listings (album / artist views) so they stay
    tight instead of reading like the full-height library/playlist rows. Fixed
@@ -5626,6 +5630,125 @@ button:disabled { cursor: not-allowed; }
   color: #ffb3aa;
 }
 
+/* Destination switch: the song's original album (MusicBrainz) vs. albums
+   already in the library. Same thumb tokens as the other segmented controls. */
+.album-move-tabs {
+  display: inline-flex;
+  justify-self: start;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  border: 0.5px solid var(--border-subtle);
+  background: color-mix(in oklab, var(--bg-active) 45%, transparent);
+}
+.album-move-tabs button {
+  height: 26px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--gl-seg-off);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 200ms ease, background 200ms ease;
+}
+.album-move-tabs button:not(.active):hover { color: var(--gl-text-2); }
+.album-move-tabs button.active {
+  background: var(--gl-seg-thumb);
+  box-shadow: var(--gl-seg-thumb-shadow);
+  color: var(--gl-seg-on);
+}
+.album-move-picker button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.album-move-picker button:disabled:hover {
+  background: color-mix(in oklab, var(--bg-active) 45%, transparent);
+}
+.album-move-badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  background: color-mix(in oklab, var(--bg-active) 70%, transparent);
+}
+.album-move-badge.local {
+  color: var(--text-primary);
+  background: color-mix(in oklab, var(--accent) 30%, transparent);
+}
+.album-move-manual {
+  display: grid;
+  gap: 8px;
+}
+.album-move-manual-numbers {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+.album-move-manual-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.album-move-newalbum {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 10px;
+  border: 0.5px solid var(--border-subtle);
+  border-radius: 7px;
+  background: color-mix(in oklab, var(--bg-active) 45%, transparent);
+}
+.album-move-newalbum-art {
+  width: 56px;
+  height: 56px;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.album-move-newalbum-text {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.album-move-newalbum-text span {
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.album-move-newalbum-text strong,
+.album-move-newalbum-text em,
+.album-move-newalbum-text small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.album-move-newalbum-text strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+}
+.album-move-newalbum-text em {
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-style: normal;
+}
+.album-move-newalbum-text small {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+/* A brand-new album has no "current" contents to show: pick + result only. */
+.album-move-columns.two {
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1fr);
+}
+
 /* Album view */
 .album-hero {
   display: flex; gap: 28px; padding: 26px 28px 30px;
@@ -5791,6 +5914,9 @@ button:disabled { cursor: not-allowed; }
 /* Artist view */
 .artist-page {
   --artist-inline: 34px;
+  /* The album cards (and the controls and grid above them) sit closer to
+     the content edges than the hero text. */
+  --artist-card-inline: calc(var(--artist-inline) * 0.5);
 }
 .artist-hero {
   position: relative; height: 280px;
@@ -5865,7 +5991,7 @@ button:disabled { cursor: not-allowed; }
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   min-height: 38px;
-  margin: 18px var(--artist-inline);
+  margin: 18px var(--artist-card-inline);
   gap: 14px;
 }
 .artist-view-controls .view-toggle {
@@ -5877,79 +6003,37 @@ button:disabled { cursor: not-allowed; }
 }
 
 .artist-grid {
-  padding: 14px var(--artist-inline) 34px;
+  padding: 14px var(--artist-card-inline) 34px;
 }
 
-/* Artist page — per-album block. Every block is tinted by what's playing
-   (the artwork color before vivify), like the window wash behind the page,
-   not by its own cover. */
+/* Artist page — per-album block: one neutral glass card per album (the
+   in-list banner's panel glass, no artwork tint), spaced apart, so albums
+   read as separate groups without coloring them. The track list bleeds to
+   the card edges; the rows keep the table's own 8px inset. */
 .artist-album {
   --artist-album-pad-top: 18px;
-  --artist-album-tint: var(--gl-nw);
-  padding: var(--artist-album-pad-top) var(--artist-inline) 10px;
-  border-bottom: 0.5px solid color-mix(in oklab, var(--artist-album-tint) 22%, var(--divider));
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in oklab, var(--artist-album-tint) 18%, transparent),
-      color-mix(in oklab, var(--artist-album-tint) 10%, transparent)
-    ),
-    var(--bg-content);
+  --artist-album-inline: 20px;
+  margin: 0 var(--artist-card-inline) 16px;
+  padding: var(--artist-album-pad-top) var(--artist-album-inline) 8px;
+  border-radius: var(--gl-r-panel);
+  background: var(--gl-panel-fill);
+  box-shadow: var(--gl-panel-shadow);
 }
-.artist-album:last-child { border-bottom: none; }
-.artist-album > .tbl {
-  width: calc(100% + var(--artist-inline) + var(--artist-inline));
-  margin-left: calc(0px - var(--artist-inline));
-  margin-right: calc(0px - var(--artist-inline));
-}
+.artist-album:last-child { margin-bottom: var(--artist-card-inline); }
+.artist-album > .tbl,
 .artist-album > .disc-track-groups {
-  width: calc(100% + var(--artist-inline) + var(--artist-inline));
-  margin-left: calc(0px - var(--artist-inline));
-  margin-right: calc(0px - var(--artist-inline));
+  width: calc(100% + var(--artist-album-inline) + var(--artist-album-inline));
+  margin-left: calc(0px - var(--artist-album-inline));
+  margin-right: calc(0px - var(--artist-album-inline));
 }
 .artist-album > .disc-track-groups .disc-track-heading {
-  padding-left: var(--artist-inline);
-  padding-right: var(--artist-inline);
-  color: color-mix(in oklab, var(--artist-album-tint) 68%, var(--text-secondary));
-}
-/* The darker track well is painted once on the body, not per row: the rows
-   are rounded now, so per-row fills left notches between them. Rows only
-   paint their (rounded) hover. It reaches up over the header's 4px gap so
-   it starts at the header line. */
-.artist-album > .tbl tbody,
-.artist-album > .disc-track-groups .tbl tbody {
-  margin-top: -4px;
-  padding-top: 4px;
-  background:
-    linear-gradient(
-      color-mix(in oklab, var(--artist-album-tint) 8%, transparent),
-      color-mix(in oklab, var(--artist-album-tint) 8%, transparent)
-    ),
-    var(--bg-content);
-}
-.artist-album > .tbl tbody tr:hover,
-.artist-album > .disc-track-groups .tbl tbody tr:hover {
-  background:
-    linear-gradient(
-      color-mix(in oklab, var(--artist-album-tint) 18%, transparent),
-      color-mix(in oklab, var(--artist-album-tint) 18%, transparent)
-    ),
-    var(--bg-hover);
-}
-.artist-album > .tbl tbody td,
-.artist-album > .disc-track-groups .tbl tbody td {
-  border-bottom-color: color-mix(in oklab, var(--artist-album-tint) 12%, var(--border-subtle));
+  padding-left: var(--artist-album-inline);
+  padding-right: var(--artist-album-inline);
+  color: var(--gl-text-2);
 }
 .aa-head {
   display: flex; align-items: flex-end; gap: 18px;
-  margin: calc(0px - var(--artist-album-pad-top)) calc(0px - var(--artist-inline)) 0;
-  padding: var(--artist-album-pad-top) var(--artist-inline) 14px;
-  background:
-    linear-gradient(
-      90deg,
-      color-mix(in oklab, var(--artist-album-tint) 24%, transparent),
-      color-mix(in oklab, var(--artist-album-tint) 10%, transparent)
-    );
+  padding-bottom: 14px;
 }
 .aa-art {
   width: 130px; height: 130px; flex-shrink: 0;
@@ -5961,7 +6045,7 @@ button:disabled { cursor: not-allowed; }
 .aa-kicker {
   font-size: 10.5px; font-weight: 600;
   letter-spacing: 0.06em; text-transform: uppercase;
-  color: color-mix(in oklab, var(--artist-album-tint) 68%, var(--text-tertiary));
+  color: var(--gl-text-3);
 }
 .aa-title {
   font-size: 24px; font-weight: 700;
@@ -5975,49 +6059,65 @@ button:disabled { cursor: not-allowed; }
 
 .editorial .artist-page { --artist-inline: 42px; }
 .editorial .artist-view-controls { margin-block: 24px; }
-.editorial .artist-grid { padding: 18px var(--artist-inline) 38px; }
+.editorial .artist-grid { padding: 18px var(--artist-card-inline) 38px; }
 .editorial .artist-album { --artist-album-pad-top: 28px; padding-bottom: 12px; }
 .editorial .aa-art { width: 170px; height: 170px; }
 .editorial .aa-title { font-size: 32px; }
 .dense .artist-page { --artist-inline: 18px; }
 .dense .artist-view-controls { margin-block: 10px; }
-.dense .artist-grid { padding: 10px var(--artist-inline) 22px; }
+.dense .artist-grid { padding: 10px var(--artist-card-inline) 22px; }
 .dense .artist-album { --artist-album-pad-top: 10px; padding-bottom: 6px; }
 .dense .aa-art { width: 80px; height: 80px; }
 .dense .aa-title { font-size: 16px; }
 .dense .aa-head { padding-bottom: 8px; }
 
-/* Segmented view toggle (Discography / Albums) */
+/* Segmented view toggle (Discography / Albums): the Liquid Glass segmented
+   control, like the player card's Now Playing / Up Next: a recessed pill
+   track and a raised thumb that springs between two equal segments. */
 .view-toggle {
-  display: inline-flex;
-  background: var(--bg-elev);
-  border: 0.5px solid var(--border-default);
-  border-radius: var(--r-input);
+  position: relative;
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  height: 34px;
   padding: 2px;
-  gap: 2px;
+  border-radius: 999px;
+  background: var(--gl-seg-track);
+  box-shadow: var(--gl-seg-track-shadow);
 }
+.view-toggle-thumb {
+  position: absolute;
+  top: 2px; bottom: 2px; left: 2px;
+  width: calc(50% - 2px);
+  border-radius: 999px;
+  background: var(--gl-seg-thumb);
+  box-shadow: var(--gl-seg-thumb-shadow);
+  pointer-events: none;
+  transition: transform 340ms var(--gl-spring);
+}
+.view-toggle.on-second .view-toggle-thumb { transform: translateX(100%); }
 .view-toggle button {
-  display: inline-flex; align-items: center; gap: 5px;
-  height: 22px; padding: 0 9px;
-  background: transparent; border: none;
-  color: var(--text-secondary);
-  font: 500 11.5px var(--font-sans);
-  border-radius: 5px;
+  position: relative;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-width: 112px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--gl-seg-off);
+  font: 600 12px var(--font-sans);
+  white-space: nowrap;
   cursor: pointer;
+  transition: color 200ms ease;
 }
-.view-toggle button:hover { color: var(--text-primary); }
-.view-toggle button.on {
-  background: var(--bg-window);
-  color: var(--text-primary);
-  box-shadow: 0 1px 2px rgba(0,0,0,0.18), 0 0 0 0.5px var(--border-default);
+.view-toggle button:hover,
+.view-toggle button.on { color: var(--gl-seg-on); }
+.view-toggle button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--gl-text) 55%, transparent);
+  outline-offset: -2px;
 }
-.artist-view-controls .view-toggle button {
-  height: 27px;
-  padding-inline: 12px;
-}
-.artist-view-controls .view-toggle button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+@media (prefers-reduced-motion: reduce) {
+  .view-toggle-thumb { transition: none; }
 }
 
 /* Artist artwork picker */

@@ -25,6 +25,7 @@ import type {
   MetadataCompletionApplyResult,
   MetadataCompletionPreview,
   MetadataCompletionTargetsPayload,
+  OriginalAlbumCandidatesResult,
   PickFolderResult,
   PlaybackSource,
   PlaybackAnalysisResult,
@@ -323,6 +324,8 @@ const api: Api = {
       ipcRenderer.invoke('track:metadataCompletion:preview', trackIds) as Promise<MetadataCompletionPreview>,
     applyMetadataCompletions: (payload: MetadataCompletionApplyRequest) =>
       ipcRenderer.invoke('track:metadataCompletion:apply', payload) as Promise<MetadataCompletionApplyResult>,
+    findOriginalAlbums: (trackId: number) =>
+      ipcRenderer.invoke('track:originalAlbum:candidates', trackId) as Promise<OriginalAlbumCandidatesResult>,
     previewAlbumMove: (payload: TrackAlbumMovePreviewRequest) =>
       ipcRenderer.invoke('track:albumMove:preview', payload) as Promise<TrackAlbumMovePreview>,
     applyAlbumMove: (payload: TrackAlbumMoveApplyRequest) =>

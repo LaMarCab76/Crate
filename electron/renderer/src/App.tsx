@@ -401,9 +401,6 @@ export default function App() {
     : (tweak.playerTintSource === 'preset' || tweak.playerTintSource === 'custom') ? tweak.playerTintColor
     : null
   ), [tweak.playerTintSource, tweak.playerTintColor, playingTint])
-  // Same source, but the artwork color as extracted (no vivify): for surfaces
-  // that sit beside the album-tinted sections, like the now-playing row.
-  const playerCurrentWash = tweak.playerTintSource === 'artwork' ? playingWash : playerCurrentTint
   const activityActiveCount = activityItems.filter(item => isActiveActivityStatus(item.status)).length
   const activityUnreadCount = activityItems.filter(item => !item.read).length
 
@@ -862,9 +859,8 @@ export default function App() {
 
   // Window backdrop wash (--gl-p0, behind the sidebar, the content and the
   // dock): the artwork's dominant color as extracted, so the background
-  // matches the album instead of the vivified accent tint (the artist page's
-  // album sections use the same color via --gl-nw). Source priority mirrors
-  // the palette above.
+  // matches the album instead of the vivified accent tint. Source priority
+  // mirrors the palette above.
   useEffect(() => {
     const root = document.documentElement
     const wash =
@@ -890,13 +886,6 @@ export default function App() {
       root.style.removeProperty('--gl-nt')
     }
   }, [playerCurrentTint])
-
-  // --gl-nw: the unvivified twin of --gl-nt, for the now-playing row outline.
-  useEffect(() => {
-    const root = document.documentElement
-    if (playerCurrentWash) root.style.setProperty('--gl-nw', playerCurrentWash)
-    else root.style.removeProperty('--gl-nw')
-  }, [playerCurrentWash])
 
   // Propagate the artwork palette (--np-pal-0/1/2) to :root so the immersive
   // player pane and lyrics side pane render the same animated color blobs as

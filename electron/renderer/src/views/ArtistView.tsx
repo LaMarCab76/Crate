@@ -82,7 +82,7 @@ function ArtistAlbumBlock({
           <Artwork album={al} radius={6} />
         </div>
         <div className="aa-meta">
-          <div className="aa-kicker">{al.genre} · {al.year}</div>
+          <div className="aa-kicker">{[al.genre, al.year].filter(Boolean).join(' · ')}</div>
           <div className="aa-title" onClick={() => onSelectAlbum?.(al)} onKeyDown={event => {
             if (event.key !== 'Enter' && event.key !== ' ') return
             event.preventDefault()
@@ -183,7 +183,8 @@ export function ArtistView({ artist, onSelectAlbum }: Props) {
 
       <div className="artist-view-controls">
         <div aria-hidden />
-        <div className="view-toggle" role="group" aria-label="Vista del artista">
+        <div className={`view-toggle${mode === 'albums' ? ' on-second' : ''}`} role="group" aria-label="Vista del artista">
+          <span className="view-toggle-thumb" aria-hidden />
           <button className={mode === 'discography' ? 'on' : ''} onClick={() => setMode('discography')} title="Álbumes con pistas">
             <Icon name="list" size={13} /> Discografía
           </button>

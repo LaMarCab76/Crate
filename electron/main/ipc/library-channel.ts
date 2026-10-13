@@ -31,9 +31,55 @@ import type {
   RemoveFolderOptions,
   SearchResultsPayload,
   MetadataCompletionApplyRequest,
+  TrackAlbumMovePreviewRequest,
+  TrackAlbumMoveTarget,
   TrackMetadataUpdatePayload,
   TrashTracksResult,
 } from '@shared/types/ipc-contract'
+
+const MBID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function optionalPositiveInt(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null
+}
+
+function optionalText(value: unknown, maxLength = 300): string | null {
+  if (typeof value !== 'string') return null
+  const cleaned = value.trim().slice(0, maxLength)
+  return cleaned || null
+}
+
+// Validates the album-move destination sent by the renderer. Accepts the
+// legacy `targetAlbumId` field as a library target.
+function parseAlbumMoveTarget(payload: { target?: unknown; targetAlbumId?: unknown } | null | undefined): TrackAlbumMoveTarget {
+  const raw = payload?.target as Record<string, unknown> | null | undefined
+  if (raw == null && payload?.targetAlbumId != null) {
+    return { kind: 'library', albumId: assertId(payload.targetAlbumId, 'targetAlbumId') }
+  }
+  if (!raw || typeof raw !== 'object') throw new Error('Invalid album move target')
+  if (raw.kind === 'library') return { kind: 'library', albumId: assertId(raw.albumId, 'albumId') }
+  if (raw.kind === 'release') {
+    const releaseId = assertNonEmptyString(raw.releaseId, 'releaseId').trim()
+    if (!MBID.test(releaseId)) throw new Error('Invalid releaseId')
+    const recordingId = typeof raw.recordingId === 'string' && MBID.test(raw.recordingId.trim()) ? raw.recordingId.trim() : null
+    return { kind: 'release', releaseId, recordingId }
+  }
+  if (raw.kind === 'manual') {
+    const album = (raw.album && typeof raw.album === 'object' ? raw.album : {}) as Record<string, unknown>
+    return {
+      kind: 'manual',
+      album: {
+        title: optionalText(album.title) ?? '',
+        albumArtist: optionalText(album.albumArtist) ?? '',
+        year: optionalText(album.year, 16),
+        totalTracks: optionalPositiveInt(album.totalTracks),
+        discNumber: optionalPositiveInt(album.discNumber),
+        totalDiscs: optionalPositiveInt(album.totalDiscs),
+      },
+    }
+  }
+  throw new Error('Invalid album move target')
+}
 
 async function refreshTrackMetadataInDb(repos: Repos, trackId: number): Promise<DbTrack | null> {
   const track = repos.tracks.getById(trackId)
@@ -343,18 +389,19 @@ export function registerLibraryChannel(): void {
     return result
   })
 
-  ipcMain.handle('track:albumMove:preview', async (event, payload: { trackId: number; targetAlbumId: number; trackNumber?: number | null }) => {
+  ipcMain.handle('track:originalAlbum:candidates', async (_, trackId: number) => {
+    return albumMove.findOriginalAlbums(assertId(trackId, 'trackId'))
+  })
+
+  ipcMain.handle('track:albumMove:preview', async (event, payload: TrackAlbumMovePreviewRequest & { targetAlbumId?: number }) => {
     const trackNumber = Number.isInteger(payload?.trackNumber) && (payload!.trackNumber as number) > 0
       ? (payload!.trackNumber as number)
       : null
     const trackId = assertId(payload?.trackId, 'trackId')
+    const target = parseAlbumMoveTarget(payload)
     const track = repos.tracks.getById(trackId)
     const folder = track ? repos.folders.getById(track.folder_id) : null
-    const operation = () => albumMove.preview(
-      trackId,
-      assertId(payload?.targetAlbumId, 'targetAlbumId'),
-      trackNumber,
-    )
+    const operation = () => albumMove.preview(trackId, target, trackNumber)
     if (track?.provider !== 'local' || folder?.provider !== 'local') return operation()
     return getLocalFileAccessService().runWithAccess(
       folder.path,

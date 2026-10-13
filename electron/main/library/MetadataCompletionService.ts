@@ -17,6 +17,7 @@ import { writeTrackMetadata, type MetadataArtworkPayload } from './MetadataWrite
 import { getLibraryBackup } from '../services/LibraryBackup'
 import { getMusicBrainzMetadataClient } from './MusicBrainzMetadata'
 import { requireLocalLibraryTrackPath } from './localLibraryTrackGuard'
+import { fetchCoverArtForRelease } from './CoverArtArchive'
 import type { DbTrack } from '@shared/types/db'
 import type {
   MetadataCompletionApplyRequest,
@@ -44,12 +45,10 @@ import {
 
 const PREVIEW_TTL_MS = 30 * 60 * 1000
 const MB_BASE = 'https://musicbrainz.org/ws/2'
-const CAA_BASE = 'https://coverartarchive.org'
 const REQUEST_TIMEOUT_MS = 6000
 const ONLINE_PREVIEW_BUDGET_MS = 9000
 const MAX_ONLINE_TRACKS_PER_PREVIEW = 4
 const MB_SPACING_MS = 1100
-const MAX_ARTWORK_BYTES = 8 * 1024 * 1024
 const AUTO_ACCEPT = 0.78
 const REVIEW_ACCEPT = 0.58
 
@@ -931,59 +930,8 @@ export class MetadataCompletionService {
     releaseGroupId: string | null,
     confidence: number,
   ): Promise<ArtworkProposal | null> {
-    const urls = [
-      releaseId ? `${CAA_BASE}/release/${encodeURIComponent(releaseId)}` : null,
-      releaseGroupId ? `${CAA_BASE}/release-group/${encodeURIComponent(releaseGroupId)}` : null,
-    ].filter((url): url is string => url != null)
-
-    for (const url of urls) {
-      try {
-        const json = await this.fetchJson(url, false)
-        const artUrl = this.coverUrlFromArchive(json)
-        if (!artUrl) continue
-        const art = await this.fetchArtworkBytes(artUrl)
-        if (art) return { ...art, source: 'cover-art-archive', confidence: Math.max(confidence, 0.8) }
-      } catch {
-        /* Try the next cover source. */
-      }
-    }
-    return null
-  }
-
-  private coverUrlFromArchive(json: unknown): string | null {
-    if (!json || typeof json !== 'object') return null
-    const images = Array.isArray((json as Record<string, unknown>)['images'])
-      ? (json as Record<string, unknown>)['images'] as Record<string, unknown>[]
-      : []
-    const image = images.find(item => item['front'] === true)
-      ?? images.find(item => item['approved'] === true)
-      ?? images[0]
-    if (!image) return null
-    const thumbnails = image['thumbnails'] && typeof image['thumbnails'] === 'object'
-      ? image['thumbnails'] as Record<string, unknown>
-      : {}
-    return asString(thumbnails['1200'])
-      ?? asString(thumbnails['500'])
-      ?? asString(image['image'])
-  }
-
-  private async fetchArtworkBytes(url: string): Promise<Omit<ArtworkProposal, 'source' | 'confidence'> | null> {
-    const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS)
-    try {
-      const response = await fetch(url, {
-        headers: { 'User-Agent': this.userAgent(), Accept: 'image/jpeg,image/png,image/webp' },
-        signal: ctrl.signal,
-      })
-      if (!response.ok) return null
-      const mimeType = (response.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase()
-      if (!['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(mimeType)) return null
-      const bytes = Buffer.from(await response.arrayBuffer())
-      if (bytes.byteLength === 0 || bytes.byteLength > MAX_ARTWORK_BYTES) return null
-      return { data: bytes, mimeType: mimeType === 'image/jpg' ? 'image/jpeg' : mimeType }
-    } finally {
-      clearTimeout(timer)
-    }
+    const art = await fetchCoverArtForRelease({ releaseId, releaseGroupId, userAgent: this.userAgent() })
+    return art ? { ...art, source: 'cover-art-archive', confidence: Math.max(confidence, 0.8) } : null
   }
 
   private async fetchMusicBrainzJson(url: string): Promise<unknown> {

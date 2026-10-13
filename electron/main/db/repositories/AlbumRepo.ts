@@ -1,6 +1,6 @@
 import type { Database as BetterSqliteDatabase } from 'better-sqlite3'
 import type { DbAlbum } from '@shared/types/db'
-import { normalizeName, sortKey } from './normalize'
+import { normalizeName, sortKey } from './normalize.ts'
 
 export class AlbumRepo {
   private db: BetterSqliteDatabase
@@ -114,5 +114,37 @@ export class AlbumRepo {
       metadata.releaseDate ?? null,
       id,
     )
+  }
+
+  // Sets the release identity outright instead of merging it like
+  // enrichReleaseMetadata (MAX/COALESCE can never clear a value). Only touches
+  // an album with no tracks yet — a row just created for a track moved out of a
+  // compilation, where merging would keep a stale compilation flag or the
+  // compilation's MusicBrainz ids. Returns whether the row was updated.
+  replaceReleaseMetadataIfEmpty(id: number, metadata: {
+    releaseTypes?: readonly string[]
+    isCompilation?: boolean
+    musicbrainzAlbumId?: string | null
+    musicbrainzReleaseGroupId?: string | null
+    releaseDate?: string | null
+  }): boolean {
+    const releaseType = metadata.releaseTypes?.map(value => value.trim()).filter(Boolean).join(', ') || null
+    const result = this.db.prepare(`
+      UPDATE albums
+      SET release_type = ?,
+          is_compilation = ?,
+          musicbrainz_album_id = ?,
+          musicbrainz_release_group_id = ?,
+          release_date = ?
+      WHERE id = ? AND track_count = 0
+    `).run(
+      releaseType,
+      metadata.isCompilation ? 1 : 0,
+      metadata.musicbrainzAlbumId ?? null,
+      metadata.musicbrainzReleaseGroupId ?? null,
+      metadata.releaseDate ?? null,
+      id,
+    )
+    return result.changes > 0
   }
 }

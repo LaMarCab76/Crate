@@ -12,7 +12,8 @@ const albumRepo = readFileSync(new URL('../db/repositories/AlbumRepo.ts', import
 test('apply keeps the original track row and records a per-device sync move', () => {
   assert.match(source, /applyAlbumMoveFileOperation\(/, 'apply must use the rollback-capable file operation')
   assert.match(source, /moveAndUpdateMetadata\(\{[\s\S]*?id: originalTrack\.id/, 'DB update must preserve the track id')
-  assert.match(source, /albumId: targetAlbum\.id/, 'DB update must move the row to the target album')
+  assert.match(source, /const albumId = targetAlbum\?\.id \?\? this\.createAlbumForMovedTrack\(md\)/, 'DB update must move the row to the target (or newly created) album')
+  assert.match(source, /moveAndUpdateMetadata\(\{[\s\S]*?albumId,[\s\S]*?\}\)/, 'the moved row points at the resolved album')
   assert.match(source, /this\.deps\.recordMove\(moveRecord\)/, 'sync movement journal must be recorded')
   assert.match(source, /scheduleBackupForTrack\(originalTrack\.id\)/, 'changed track must be scheduled for backup')
 })
@@ -74,4 +75,63 @@ test('album move cleanup removes source albums orphaned by track album_id update
 test('album repository does not return empty normalized album rows', () => {
   assert.match(albumRepo, /WHERE track_count > 0[\s\S]*ORDER BY sort_name/, 'getAll must hide empty albums')
   assert.match(albumRepo, /album_artist = \? AND track_count > 0/, 'getByArtist must hide empty albums')
+})
+
+test('preview can target an album that is not in the library yet', () => {
+  assert.match(source, /async preview\(trackId: number, target: TrackAlbumMoveTarget, trackNumberOverride: number \| null = null\)/)
+  assert.match(source, /target\.kind === 'library'[\s\S]*?this\.buildPreview\([\s\S]*?this\.buildNewAlbumPreview\(track, target, trackNumberOverride\)/)
+  assert.match(source, /this\.loadRelease\(target\.releaseId\)/, 'a MusicBrainz target is built from the full release')
+  assert.match(source, /lookupReleaseDetail\(releaseId\)/)
+  assert.match(source, /this\.releases\.set\(releaseId, loaded\)/, 'release + cover are cached so slot changes stay fast')
+  assert.match(source, /normalizeManualAlbum\(target\.album\)/, 'a manual target is validated')
+  assert.match(source, /chooseNewAlbumDirectory\(\{[\s\S]*?rootPath: sourceFolder\.path/, 'the new album stays in the track library root')
+  assert.match(source, /planNewAlbumDestination\(/)
+})
+
+test('a new-album target that already exists locally becomes a plain library move', () => {
+  assert.match(
+    source,
+    /const existing = matchLocalAlbumForRelease\([\s\S]*?if \(existing\) \{[\s\S]*?this\.buildPreview\(track, existing, trackNumberOverride\)/,
+  )
+  assert.match(source, /private assertNewAlbumStillMissing/, 'apply re-checks the library before creating the album')
+  assert.match(source, /if \(stored\.target\.kind === 'new'\) this\.assertNewAlbumStillMissing\(stored\.target\)/)
+})
+
+test('new album previews keep the same safety checks and never block on cover art', () => {
+  const body = source.slice(source.indexOf('private async buildNewAlbumPreview'), source.indexOf('private artistAlbumDirectories'))
+  assert.match(body, /Ya existe un archivo en destino/)
+  assert.match(body, /Ya existe una letra \.lrc en destino/)
+  assert.match(body, /La ruta destino queda fuera de la biblioteca del álbum/)
+  assert.match(source, /fetchCoverArt\(detail\.releaseId, detail\.releaseGroupId\)/)
+  assert.match(body, /se mantiene la carátula actual/, 'missing cover art is a warning, not an error')
+  assert.doesNotMatch(body, /errors\.push\([^)]*Cover Art/)
+  assert.match(body, /tracklist\.find\(entry => entry\.recordingId === target\.recordingId\)/, 'the exact recording locates the slot first')
+})
+
+test('apply writes release tags so nothing from the compilation survives', () => {
+  assert.match(source, /release: stored\.release,/, 'the move writes the destination release identity')
+  assert.match(source, /isCompilation: isVariousArtists\(albumArtist\)/)
+  assert.match(source, /clearAlbumReplayGain: true/)
+  assert.match(source, /private releaseTagsForLibraryAlbum/, 'moves into library albums also replace release tags')
+  assert.match(source, /release: this\.releaseTagsForLibraryAlbum\(track, targetAlbum, targetTracks\)/)
+})
+
+test('a new album row is created inside the move transaction with its release identity set outright', () => {
+  assert.match(source, /private createAlbumForMovedTrack\(md: TrackMetadata\): number/)
+  assert.match(source, /albums\.getOrCreate\(md\.album, md\.albumArtist \?\? null, md\.year \|\| null\)/, 'keyed exactly like the importer')
+  assert.match(source, /replaceReleaseMetadataIfEmpty\(album\.id, md\)/, 'stale MAX/COALESCE merging is bypassed for new rows')
+  assert.match(source, /extendedMetadata: serializeTrackExtendedMetadata\(md\)/, 'extended metadata is refreshed after the move')
+  assert.match(source, /releaseDate: md\.releaseDate/)
+})
+
+test('original album candidates are matched against library albums', () => {
+  assert.match(source, /async findOriginalAlbums\(trackId: number\): Promise<OriginalAlbumCandidatesResult>/)
+  assert.match(source, /localAlbumId: local\?\.id \?\? null/)
+  assert.match(source, /isCurrentAlbum: local != null && local\.id === track\.album_id/)
+  assert.match(source, /Podés crear el álbum a mano/, 'MusicBrainz failures degrade to the manual album form')
+})
+
+test('album repository can reset the release identity of a brand-new album only', () => {
+  assert.match(albumRepo, /replaceReleaseMetadataIfEmpty\(/)
+  assert.match(albumRepo, /WHERE id = \? AND track_count = 0/)
 })

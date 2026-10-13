@@ -14,6 +14,7 @@ import type {
   MetadataCompletionPreview,
   MetadataCompletionTargetsPayload,
   RemoveFolderOptions,
+  OriginalAlbumCandidatesResult,
   TrackAlbumMoveApplyResult,
   TrackAlbumMovePreview,
   TrackAlbumMovePreviewRequest,
@@ -651,6 +652,10 @@ export async function applyMetadataCompletions(
     useLibraryStore.setState({ metadataCompletionPrompt: null })
   }
   return result
+}
+
+export async function findOriginalAlbums(trackDbId: number): Promise<OriginalAlbumCandidatesResult> {
+  return window.api.tracks.findOriginalAlbums(trackDbId)
 }
 
 export async function previewTrackAlbumMove(

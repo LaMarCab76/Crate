@@ -5,22 +5,33 @@ import type { Database as BetterSqliteDatabase } from 'better-sqlite3'
 import { getDatabase } from '../db/database'
 import { getRepos, type Repos } from '../db/repositories'
 import { parseArtistName } from './ArtistNameParser'
-import { readTrackMetadata, type TrackMetadata } from './MetadataExtractor'
-import { writeTrackMetadata, type MetadataArtworkPayload } from './MetadataWriter'
-import { artworkAbsolutePath } from './ArtworkCache'
-import { getMusicBrainzMetadataClient, type MusicBrainzMetadataClient, type MusicBrainzReleaseTrack } from './MusicBrainzMetadata'
+import { readTrackMetadata, serializeTrackExtendedMetadata, type TrackMetadata } from './MetadataExtractor'
+import { writeTrackMetadata, type MetadataArtworkPayload, type MetadataReleaseTags } from './MetadataWriter'
+import { artworkAbsolutePath, saveArtwork } from './ArtworkCache'
+import {
+  getMusicBrainzMetadataClient,
+  type MusicBrainzMetadataClient,
+  type MusicBrainzReleaseDetail,
+  type MusicBrainzReleaseTrack,
+} from './MusicBrainzMetadata'
+import { isVariousArtists, matchLocalAlbumForRelease, type RankedOriginalRelease } from './originalAlbumCandidates'
+import { albumDirectoryFromTrackPaths, chooseNewAlbumDirectory, planNewAlbumDestination } from './newAlbumMovePlanner'
 import { getLibraryBackup } from '../services/LibraryBackup'
 import { getLyricsIndexService } from '../lyrics/LyricsIndexService'
 import type { DbAlbum, DbFolder, DbTrack } from '@shared/types/db'
 import type {
+  OriginalAlbumCandidate,
+  OriginalAlbumCandidatesResult,
   TrackAlbumMoveApplyResult,
   TrackAlbumMoveDuplicate as PublicMoveDuplicate,
   TrackAlbumMoveEndpoint,
+  TrackAlbumMoveManualAlbum,
   TrackAlbumMovePlacementSource,
   TrackAlbumMovePreview,
   TrackAlbumMoveProposal,
   TrackAlbumMoveReplacement,
   TrackAlbumMoveSlot,
+  TrackAlbumMoveTarget,
 } from '@shared/types/ipc-contract'
 import {
   albumDiscOccupants,
@@ -47,11 +58,46 @@ import { requireLocalLibraryTrackPath } from './localLibraryTrackGuard'
 const PREVIEW_TTL_MS = 30 * 60 * 1000
 const MB_READY_CONFIDENCE = 0.58
 
+// Where an applied preview lands. A 'new' album doesn't exist yet: its row is
+// created inside the move transaction from the freshly written tags.
+type StoredMoveTarget =
+  | { kind: 'library'; albumId: number }
+  | {
+      kind: 'new'
+      folderId: number
+      title: string
+      albumArtist: string | null
+      releaseId: string | null
+      releaseGroupId: string | null
+    }
+
 interface StoredPreview {
   preview: TrackAlbumMovePreview
   sourcePath: string
-  targetAlbumId: number
-  artwork: MetadataArtworkPayload
+  target: StoredMoveTarget
+  // null keeps the file's current embedded cover.
+  artwork: MetadataArtworkPayload | null
+  // Release-level tags (compilation flag, MusicBrainz release ids...) for the
+  // destination album, so nothing from the source album survives the move.
+  release: MetadataReleaseTags
+}
+
+// A MusicBrainz release fetched for a new-album preview, with its Cover Art
+// Archive cover. Cached so picking another slot doesn't re-download either.
+interface LoadedRelease {
+  detail: MusicBrainzReleaseDetail
+  artwork: MetadataArtworkPayload | null
+  artworkPath: string | null
+  fetchedAt: number
+}
+
+interface NewAlbumIdentity {
+  title: string
+  albumArtist: string | null
+  year: string | null
+  releaseId: string | null
+  releaseGroupId: string | null
+  releaseType: string | null
 }
 
 interface TrackAlbumMoveRecordInput {
@@ -69,7 +115,10 @@ interface TrackAlbumMoveRecordInput {
 export interface TrackAlbumMoveServiceDeps {
   repos: Repos
   db: BetterSqliteDatabase
-  musicBrainz: Pick<MusicBrainzMetadataClient, 'lookupRecordingOnAlbum' | 'lookupAlbumTracklist'>
+  musicBrainz: Pick<
+    MusicBrainzMetadataClient,
+    'lookupRecordingOnAlbum' | 'lookupAlbumTracklist' | 'findOriginalReleases' | 'lookupReleaseDetail' | 'fetchCoverArt'
+  >
   readTrackMetadata: typeof readTrackMetadata
   writeTrackMetadata: typeof writeTrackMetadata
   scheduleBackupForTrack: (trackId: number) => void
@@ -79,6 +128,9 @@ export interface TrackAlbumMoveServiceDeps {
   // Sends the replaced track's file to the OS trash (recoverable). Lazily pulls
   // electron's shell so the service stays importable in plain node tests.
   trashItem: (path: string) => Promise<void>
+  // Stores downloaded cover art in the artwork cache so the preview can show
+  // it; returns the cache filename, or null if it couldn't be stored.
+  cacheArtwork: (artwork: MetadataArtworkPayload) => string | null
 }
 
 function nowIso(): string {
@@ -164,6 +216,7 @@ function moveErrorMessage(err: unknown): string {
 export class TrackAlbumMoveService {
   private deps: TrackAlbumMoveServiceDeps
   private previews = new Map<string, StoredPreview>()
+  private releases = new Map<string, LoadedRelease>()
 
   constructor(deps?: Partial<TrackAlbumMoveServiceDeps>) {
     const db = deps?.db ?? getDatabase()
@@ -181,15 +234,73 @@ export class TrackAlbumMoveService {
         const { shell } = await import('electron')
         await shell.trashItem(path)
       }),
+      cacheArtwork: deps?.cacheArtwork ?? (artwork => {
+        try {
+          return saveArtwork(artwork.data, artwork.mimeType).filename
+        } catch {
+          return null
+        }
+      }),
     }
   }
 
-  async preview(trackId: number, targetAlbumId: number, trackNumberOverride: number | null = null): Promise<TrackAlbumMovePreview> {
+  // Candidate original albums for a track (usually one downloaded from a
+  // compilation), each flagged with the library album it already matches.
+  async findOriginalAlbums(trackId: number): Promise<OriginalAlbumCandidatesResult> {
+    const track = this.requireTrack(trackId)
+    if (track.provider !== 'local') throw new Error('Mover entre álbumes no está disponible para pistas cloud.')
+    const sourceAlbum = track.album_id != null ? this.deps.repos.albums.getById(track.album_id) ?? null : null
+    const sourceIsCompilation = track.compilation === 1 ||
+      sourceAlbum?.is_compilation === 1 ||
+      isVariousArtists(track.album_artist)
+    const warnings: string[] = []
+    let ranked: RankedOriginalRelease[] = []
+    try {
+      ranked = await this.deps.musicBrainz.findOriginalReleases({
+        title: track.title,
+        artist: track.artist,
+        searchArtist: parseArtistName(track.artist).primary || track.artist,
+        durationSeconds: track.duration > 0 ? track.duration : null,
+      })
+    } catch (err) {
+      warnings.push(`MusicBrainz no está disponible (${moveErrorMessage(err)}). Podés crear el álbum a mano.`)
+    }
+    if (ranked.length === 0 && warnings.length === 0) {
+      warnings.push('MusicBrainz no encontró álbumes con este tema. Podés crear el álbum a mano.')
+    }
+    const localAlbums = this.deps.repos.albums.getAll()
+    const candidates = ranked.map((release): OriginalAlbumCandidate => {
+      const local = matchLocalAlbumForRelease(release, localAlbums)
+      return {
+        releaseId: release.releaseId,
+        releaseGroupId: release.releaseGroupId,
+        recordingId: release.recordingId,
+        title: release.title,
+        artist: release.artist,
+        year: release.year,
+        country: release.country,
+        status: release.status,
+        primaryType: release.primaryType,
+        secondaryTypes: release.secondaryTypes,
+        trackNumber: release.trackNumber,
+        discNumber: release.discNumber,
+        totalTracks: release.totalTracks,
+        confidence: release.confidence,
+        localAlbumId: local?.id ?? null,
+        localTrackCount: local?.track_count ?? 0,
+        isCurrentAlbum: local != null && local.id === track.album_id,
+      }
+    })
+    return { trackId, sourceIsCompilation, candidates, warnings }
+  }
+
+  async preview(trackId: number, target: TrackAlbumMoveTarget, trackNumberOverride: number | null = null): Promise<TrackAlbumMovePreview> {
     this.pruneExpiredPreviews()
     const track = this.requireTrack(trackId)
     if (track.provider !== 'local') throw new Error('Mover entre álbumes no está disponible para pistas cloud.')
-    const targetAlbum = this.requireAlbum(targetAlbumId)
-    const built = await this.buildPreview(track, targetAlbum, trackNumberOverride)
+    const built = target.kind === 'library'
+      ? await this.buildPreview(track, this.requireAlbum(target.albumId), trackNumberOverride)
+      : await this.buildNewAlbumPreview(track, target, trackNumberOverride)
     this.previews.set(built.preview.previewId, built)
     return built.preview
   }
@@ -206,8 +317,9 @@ export class TrackAlbumMoveService {
     if (track.path !== stored.sourcePath) {
       throw new Error('El archivo cambió desde la vista previa. Volvé a calcular el movimiento.')
     }
-    const targetAlbum = this.requireAlbum(stored.targetAlbumId)
-    const localErrors = this.validateStoredPreview(track, targetAlbum, stored.preview, confirmLowerQualityReplace)
+    const targetAlbum = stored.target.kind === 'library' ? this.requireAlbum(stored.target.albumId) : null
+    if (stored.target.kind === 'new') this.assertNewAlbumStillMissing(stored.target)
+    const localErrors = this.validateStoredPreview(track, targetAlbum, stored, confirmLowerQualityReplace)
     if (localErrors.length > 0) throw new Error(localErrors[0])
 
     const proposal = stored.preview.proposal
@@ -252,6 +364,7 @@ export class TrackAlbumMoveService {
         writeTempMetadata: tempPath => {
           this.deps.writeTrackMetadata(tempPath, this.payloadFromProposal(proposal), {
             artwork: stored.artwork,
+            release: stored.release,
             createBackup: false,
           })
         },
@@ -305,9 +418,324 @@ export class TrackAlbumMoveService {
     if (!sourceFolder || sourceFolder.provider !== 'local' || sourceFolder.role !== 'library') {
       throw new Error('La biblioteca original ya no existe.')
     }
-    const targetAlbum = this.requireAlbum(stored.targetAlbumId)
+    const targetAlbum = stored.target.kind === 'library' ? this.requireAlbum(stored.target.albumId) : null
     const destinationFolder = this.folderForDestination(targetAlbum, resolve(stored.preview.proposal.destinationPath))
     return [...new Set([resolve(sourceFolder.path), resolve(destinationFolder.path)])]
+  }
+
+  // Builds the move into an album that isn't in the library yet: from a
+  // MusicBrainz release (identity, official tracklist, Cover Art Archive cover)
+  // or from fields typed by the user. The folder goes next to the album
+  // artist's other albums in the track's library, else <root>/<Artist>/<Album>.
+  private async buildNewAlbumPreview(
+    track: DbTrack,
+    target: Exclude<TrackAlbumMoveTarget, { kind: 'library' }>,
+    trackNumberOverride: number | null,
+  ): Promise<StoredPreview> {
+    const sourceFolder = this.deps.repos.folders.getById(track.folder_id)
+    if (!sourceFolder || sourceFolder.provider !== 'local' || sourceFolder.role !== 'library') {
+      throw new Error('La biblioteca original ya no existe.')
+    }
+
+    let loaded: LoadedRelease | null = null
+    let detail: MusicBrainzReleaseDetail | null = null
+    let manual: TrackAlbumMoveManualAlbum | null = null
+    let album: NewAlbumIdentity
+    if (target.kind === 'release') {
+      loaded = await this.loadRelease(target.releaseId)
+      detail = loaded.detail
+      album = {
+        title: detail.title,
+        albumArtist: detail.albumArtist ?? track.artist,
+        year: detail.year,
+        releaseId: detail.releaseId,
+        releaseGroupId: detail.releaseGroupId,
+        releaseType: [detail.primaryType, ...detail.secondaryTypes].filter(Boolean).join(' + ') || null,
+      }
+    } else {
+      manual = normalizeManualAlbum(target.album)
+      album = {
+        title: manual.title,
+        albumArtist: manual.albumArtist,
+        year: manual.year,
+        releaseId: null,
+        releaseGroupId: null,
+        releaseType: null,
+      }
+    }
+
+    // The album may already be in the library (or have appeared since the
+    // candidates were listed): then it's a plain move into that album.
+    const existing = matchLocalAlbumForRelease({
+      releaseIds: album.releaseId ? [album.releaseId] : [],
+      releaseGroupId: album.releaseGroupId,
+      title: album.title,
+      artist: album.albumArtist,
+    }, this.deps.repos.albums.getAll())
+    if (existing) {
+      const built = await this.buildPreview(track, existing, trackNumberOverride)
+      if (existing.id !== track.album_id) {
+        built.preview.warnings.unshift(`"${existing.title}" ya está en tu biblioteca: el tema se mueve a ese álbum.`)
+      }
+      return built
+    }
+
+    const previewId = randomUUID()
+    const createdAt = Date.now()
+    const errors: string[] = []
+    const warnings: string[] = []
+
+    // Where the incoming song sits on the release: the exact recording first,
+    // then a title match on the official tracklist.
+    const tracklist = detail?.tracklist ?? []
+    const recordingSlot = target.kind === 'release' && target.recordingId
+      ? tracklist.find(entry => entry.recordingId === target.recordingId) ?? null
+      : null
+    const titleSlot = recordingSlot ? null : findTracklistSlot({ tracklist, title: track.title, discNumber: null })
+    const matchedSlot = recordingSlot ?? titleSlot
+    const overrideNumber = positiveTrackNumber(trackNumberOverride)
+    const discNumber = matchedSlot?.discNumber ?? manual?.discNumber ?? 1
+    let placementSource: TrackAlbumMovePlacementSource
+    let trackNumber: number
+    if (overrideNumber != null) {
+      trackNumber = overrideNumber
+      placementSource = 'override'
+    } else if (recordingSlot) {
+      trackNumber = recordingSlot.trackNumber
+      placementSource = 'musicbrainz'
+    } else if (titleSlot) {
+      trackNumber = titleSlot.trackNumber
+      placementSource = 'tracklist'
+      warnings.push(`Ubicada por la lista oficial de MusicBrainz en la pista ${trackNumber}.`)
+    } else {
+      trackNumber = 1
+      placementSource = 'append'
+      errors.push(detail
+        ? 'No encontramos el tema en la lista oficial del álbum. Elegí el número de pista.'
+        : 'Indicá el número de pista del tema en el álbum.')
+    }
+
+    const totalDiscs = detail ? detail.totalDiscs : manual?.totalDiscs ?? null
+    const totalTracks = detail ? detail.discTrackCounts[discNumber] ?? null : manual?.totalTracks ?? null
+    const officialTitles = officialTitlesForDisc(tracklist, discNumber)
+    const slots = buildAlbumMoveSlots(new Map(), totalTracks, trackNumber, officialTitles)
+
+    // Prefer the title as printed on the original album only when it is the
+    // very same recording or the same normalized title (fixes casing/edition
+    // suffixes from the compilation without renaming a different song).
+    const title = recordingSlot?.title ?? (titleSlot && titleSlot.score >= 1 ? titleSlot.title : track.title)
+    const albumArtist = album.albumArtist || track.artist
+    const year = album.year ?? ''
+    const genre = track.genre || detail?.genre || ''
+
+    const directoryPlan = chooseNewAlbumDirectory({
+      rootPath: sourceFolder.path,
+      albumArtist,
+      albumTitle: album.title,
+      year: album.year,
+      artistAlbumDirectories: this.artistAlbumDirectories(sourceFolder, albumArtist, track.album_id),
+    })
+    const destination = planNewAlbumDestination({
+      directory: directoryPlan.directory,
+      sourcePath: track.path,
+      title,
+      trackNumber,
+      totalTracks,
+      discNumber,
+      totalDiscs,
+    })
+    const destinationPath = resolve(destination.destinationPath)
+    if (!isInside(resolve(sourceFolder.path), destinationPath)) {
+      errors.push('La ruta destino queda fuera de la biblioteca del álbum.')
+    }
+    if (destinationPath === resolve(track.path)) {
+      errors.push('La ruta destino es igual a la ruta actual.')
+    }
+    if (existsSync(destinationPath)) {
+      errors.push(`Ya existe un archivo en destino: ${destinationPath}`)
+    }
+    const destinationSidecar = albumMoveSidecarPathFor(destinationPath)
+    if (existsSync(albumMoveSidecarPathFor(track.path)) && existsSync(destinationSidecar)) {
+      errors.push(`Ya existe una letra .lrc en destino: ${destinationSidecar}`)
+    }
+    if (process.platform === 'win32' && destinationPath.length >= 250) {
+      errors.push('La ruta destino es demasiado larga para Windows. Acortá el nombre del álbum o del tema.')
+    }
+
+    // Cover Art Archive cover for the release. Without one the file keeps its
+    // current embedded cover (never blocks the move).
+    const artwork = loaded?.artwork ?? null
+    const artworkPath = loaded?.artworkPath ?? null
+    if (detail && !artwork) {
+      warnings.push('Cover Art Archive no tiene carátula para este álbum; se mantiene la carátula actual.')
+    }
+
+    const proposal: TrackAlbumMoveProposal = {
+      title,
+      artist: track.artist,
+      album: album.title,
+      albumArtist,
+      genre,
+      year,
+      trackNumber,
+      totalTracks,
+      discNumber,
+      totalDiscs,
+      filename: destination.filename,
+      destinationPath,
+      destinationDirectory: destination.directory,
+      artworkPath: artworkPath ?? track.artwork_path ?? '',
+      musicBrainzConfidence: recordingSlot ? 1 : titleSlot?.score ?? 0,
+    }
+    const release: MetadataReleaseTags = detail
+      ? {
+          isCompilation: isVariousArtists(albumArtist),
+          musicBrainzReleaseId: detail.releaseId,
+          musicBrainzReleaseGroupId: detail.releaseGroupId,
+          musicBrainzReleaseArtistId: detail.albumArtistIds.length === 1 ? detail.albumArtistIds[0] : null,
+          musicBrainzReleaseType: [detail.primaryType, ...detail.secondaryTypes]
+            .filter((type): type is string => !!type)
+            .map(type => type.toLowerCase())
+            .join('; ') || null,
+          musicBrainzReleaseStatus: detail.status?.toLowerCase() ?? null,
+          musicBrainzReleaseCountry: detail.country,
+          clearMusicBrainzDiscId: true,
+          clearAlbumReplayGain: true,
+        }
+      : {
+          isCompilation: isVariousArtists(albumArtist),
+          musicBrainzReleaseId: null,
+          musicBrainzReleaseGroupId: null,
+          musicBrainzReleaseArtistId: null,
+          musicBrainzReleaseType: null,
+          musicBrainzReleaseStatus: null,
+          musicBrainzReleaseCountry: null,
+          clearMusicBrainzDiscId: true,
+          clearAlbumReplayGain: true,
+        }
+
+    const isReady = errors.length === 0
+    const preview: TrackAlbumMovePreview = {
+      previewId,
+      createdAt,
+      status: isReady ? 'ready' : 'blocked',
+      source: sourceEndpoint(track),
+      targetAlbum: {
+        id: null,
+        isNew: true,
+        title: album.title,
+        artist: albumArtist,
+        year: album.year,
+        artworkPath: artworkPath ?? track.artwork_path ?? null,
+        trackCount: 0,
+        releaseId: album.releaseId,
+        releaseType: album.releaseType,
+      },
+      proposal,
+      duplicate: null,
+      slots,
+      discNumber,
+      totalTracks,
+      selectedTrackNumber: trackNumber,
+      suggestedTrackNumber: matchedSlot?.trackNumber ?? null,
+      trackNumberFromMusicBrainz: placementSource === 'musicbrainz',
+      placementSource,
+      ...albumMovePreviewPlacementFlags(isReady ? proposal : null, placementSource),
+      replacement: null,
+      errors,
+      warnings,
+    }
+    return {
+      preview,
+      sourcePath: track.path,
+      target: {
+        kind: 'new',
+        folderId: sourceFolder.id,
+        title: album.title,
+        albumArtist,
+        releaseId: album.releaseId,
+        releaseGroupId: album.releaseGroupId,
+      },
+      artwork,
+      release,
+    }
+  }
+
+  private async loadRelease(releaseId: string): Promise<LoadedRelease> {
+    const cached = this.releases.get(releaseId)
+    if (cached && Date.now() - cached.fetchedAt <= PREVIEW_TTL_MS) return cached
+    let detail: MusicBrainzReleaseDetail | null
+    try {
+      detail = await this.deps.musicBrainz.lookupReleaseDetail(releaseId)
+    } catch (err) {
+      throw new Error(`No se pudo leer el álbum en MusicBrainz (${moveErrorMessage(err)}). Probá de nuevo o creá el álbum a mano.`)
+    }
+    if (!detail) throw new Error('MusicBrainz ya no tiene ese álbum. Elegí otro o creá el álbum a mano.')
+    let artwork: MetadataArtworkPayload | null = null
+    let artworkPath: string | null = null
+    try {
+      const art = await this.deps.musicBrainz.fetchCoverArt(detail.releaseId, detail.releaseGroupId)
+      if (art) {
+        artwork = { data: art.data, mimeType: art.mimeType }
+        artworkPath = this.deps.cacheArtwork(artwork)
+      }
+    } catch {
+      artwork = null
+    }
+    const loaded: LoadedRelease = { detail, artwork, artworkPath, fetchedAt: Date.now() }
+    this.releases.set(releaseId, loaded)
+    return loaded
+  }
+
+  // Folders of the album artist's other albums in this library root, used to
+  // place a new album next to them with the same naming style.
+  private artistAlbumDirectories(folder: DbFolder, albumArtist: string, sourceAlbumId: number | null): string[] {
+    const directories: string[] = []
+    for (const album of this.deps.repos.albums.getAll()) {
+      if (album.id === sourceAlbumId || album.is_compilation === 1) continue
+      if (!albumMoveTitlesMatch(album.album_artist, albumArtist)) continue
+      const paths = this.deps.repos.entityTracks.getTracksForAlbum(album.id)
+        .filter(row => row.provider === 'local' && row.folder_id === folder.id)
+        .map(row => row.path)
+      const directory = albumDirectoryFromTrackPaths(paths)
+      if (directory) directories.push(directory)
+    }
+    return directories
+  }
+
+  private assertNewAlbumStillMissing(target: Extract<StoredMoveTarget, { kind: 'new' }>): void {
+    const existing = matchLocalAlbumForRelease({
+      releaseIds: target.releaseId ? [target.releaseId] : [],
+      releaseGroupId: target.releaseGroupId,
+      title: target.title,
+      artist: target.albumArtist,
+    }, this.deps.repos.albums.getAll())
+    if (existing) {
+      throw new Error(`"${existing.title}" ya está en tu biblioteca. Volvé a calcular el movimiento.`)
+    }
+  }
+
+  // Release tags for a move into an album already in the library: its own
+  // compilation flag and MusicBrainz ids replace the source album's.
+  private releaseTagsForLibraryAlbum(track: DbTrack, album: DbAlbum, targetTracks: DbTrack[]): MetadataReleaseTags {
+    const siblings = targetTracks.filter(row => row.id !== track.id)
+    const isCompilation = siblings.length > 0
+      ? siblings.filter(row => row.compilation === 1).length * 2 > siblings.length
+      : album.is_compilation === 1
+    const sameAlbumArtist = albumMoveTitlesMatch(track.album_artist, targetAlbumArtist(album, targetTracks))
+    return {
+      isCompilation,
+      musicBrainzReleaseId: album.musicbrainz_album_id,
+      musicBrainzReleaseGroupId: album.musicbrainz_release_group_id,
+      // Still valid when both albums share the album artist; otherwise it names
+      // the old album's artist (e.g. "Various Artists").
+      musicBrainzReleaseArtistId: sameAlbumArtist ? undefined : null,
+      musicBrainzReleaseType: album.release_type,
+      musicBrainzReleaseStatus: null,
+      musicBrainzReleaseCountry: album.release_country,
+      clearMusicBrainzDiscId: true,
+      clearAlbumReplayGain: true,
+    }
   }
 
   private async buildPreview(track: DbTrack, targetAlbum: DbAlbum, trackNumberOverride: number | null): Promise<StoredPreview> {
@@ -447,7 +875,7 @@ export class TrackAlbumMoveService {
         placementSource = 'append'
       }
       selectedTrackNumber = effective
-      slots = buildAlbumMoveSlots(occupants, totalTracks, effective)
+      slots = buildAlbumMoveSlots(occupants, totalTracks, effective, officialTitlesForDisc(officialTracklist, discNumberForSlots))
 
       if (overrideNumber == null) {
         if (placementSource === 'tracklist') {
@@ -548,11 +976,14 @@ export class TrackAlbumMoveService {
       source: sourceEndpoint(track),
       targetAlbum: {
         id: targetAlbum.id,
+        isNew: false,
         title: targetAlbum.title,
         artist: targetAlbumArtist(targetAlbum, targetTracks),
         year: targetAlbum.year,
         artworkPath: artworkTrack?.artwork_path ?? null,
         trackCount: targetTracks.length,
+        releaseId: targetAlbum.musicbrainz_album_id,
+        releaseType: targetAlbum.release_type,
       },
       proposal,
       duplicate,
@@ -571,22 +1002,25 @@ export class TrackAlbumMoveService {
     return {
       preview,
       sourcePath: track.path,
-      targetAlbumId: targetAlbum.id,
-      artwork: artwork ?? { data: Buffer.alloc(0), mimeType: 'image/jpeg' },
+      target: { kind: 'library', albumId: targetAlbum.id },
+      artwork,
+      release: this.releaseTagsForLibraryAlbum(track, targetAlbum, targetTracks),
     }
   }
 
   private validateStoredPreview(
     track: DbTrack,
-    targetAlbum: DbAlbum,
-    preview: TrackAlbumMovePreview,
+    targetAlbum: DbAlbum | null,
+    stored: StoredPreview,
     confirmLowerQualityReplace = false,
   ): string[] {
     const errors: string[] = []
+    const preview = stored.preview
     const proposal = preview.proposal
     if (!proposal) return ['El movimiento no tiene propuesta para aplicar.']
-    const targetTracks = this.deps.repos.entityTracks.getTracksForAlbum(targetAlbum.id)
-      .filter(candidate => candidate.provider === 'local')
+    const targetTracks = targetAlbum
+      ? this.deps.repos.entityTracks.getTracksForAlbum(targetAlbum.id).filter(candidate => candidate.provider === 'local')
+      : []
     // The track we're allowed to overwrite/trash — when the incoming file is the
     // higher-quality one, or when the user confirmed deleting an equal/lower
     // quality same-title track. Its slot, file and sidecar are exempt below.
@@ -616,7 +1050,9 @@ export class TrackAlbumMoveService {
     if (existsSync(albumMoveSidecarPathFor(track.path)) && existsSync(destinationSidecar) && destinationSidecar !== replaceSidecar) {
       errors.push(`Ya existe una letra .lrc en destino: ${destinationSidecar}`)
     }
-    const folder = this.deps.repos.folders.getById(targetTracks[0]?.folder_id ?? track.folder_id)
+    const folderId = stored.target.kind === 'new' ? stored.target.folderId : targetTracks[0]?.folder_id ?? track.folder_id
+    const folder = this.deps.repos.folders.getById(folderId)
+    if (!folder && stored.target.kind === 'new') errors.push('La biblioteca destino ya no existe.')
     if (folder && !isInside(resolve(folder.path), resolve(proposal.destinationPath))) {
       errors.push('La ruta destino queda fuera de la biblioteca del álbum.')
     }
@@ -640,7 +1076,8 @@ export class TrackAlbumMoveService {
 
   private updateDbAfterMove(
     originalTrack: DbTrack,
-    targetAlbum: DbAlbum,
+    // null when moving into a new album, created here from the written tags.
+    targetAlbum: DbAlbum | null,
     md: TrackMetadata,
     destinationPath: string,
     moveId: string,
@@ -669,6 +1106,7 @@ export class TrackAlbumMoveService {
     }
 
     const replacesOther = replacedTrack != null && replacedTrack.id !== originalTrack.id
+    let targetAlbumId = targetAlbum?.id ?? null
     this.deps.runTransaction(() => {
       this.deps.removeLyricsIndexEntry(originalTrack)
       // Drop the displaced row in the same transaction. Its file remains in a
@@ -677,6 +1115,8 @@ export class TrackAlbumMoveService {
         this.deps.removeLyricsIndexEntry(replacedTrack)
         this.deps.repos.tracks.deleteById(replacedTrack.id)
       }
+      const albumId = targetAlbum?.id ?? this.createAlbumForMovedTrack(md)
+      targetAlbumId = albumId
       this.deps.repos.tracks.moveAndUpdateMetadata({
         id: originalTrack.id,
         path: destinationPath,
@@ -694,6 +1134,10 @@ export class TrackAlbumMoveService {
         discNumber: md.discNumber,
         totalDiscs: md.totalDiscs,
         compilation: md.isCompilation ? 1 : 0,
+        releaseDate: md.releaseDate,
+        originalReleaseDate: md.originalReleaseDate,
+        mediaType: md.mediaType,
+        extendedMetadata: serializeTrackExtendedMetadata(md),
         duration: md.duration,
         format: md.format,
         codec: md.codec,
@@ -707,7 +1151,7 @@ export class TrackAlbumMoveService {
         dateModified: md.dateModified,
         artworkPath: md.artwork?.filename ?? originalTrack.artwork_path,
         artistId: artist.id,
-        albumId: targetAlbum.id,
+        albumId,
         genreId: genre?.id ?? null,
       })
       this.deps.recordMove(moveRecord)
@@ -737,15 +1181,28 @@ export class TrackAlbumMoveService {
       disc_number: md.discNumber,
       total_discs: md.totalDiscs,
       artwork_path: md.artwork?.filename ?? originalTrack.artwork_path,
-      album_id: targetAlbum.id,
+      album_id: targetAlbumId,
       artist_id: artist.id,
       genre_id: genre?.id ?? null,
     }
   }
 
-  private folderForDestination(targetAlbum: DbAlbum, destinationPath: string): DbFolder {
-    const targetTracks = this.deps.repos.entityTracks.getTracksForAlbum(targetAlbum.id)
-      .filter(candidate => candidate.provider === 'local')
+  // Album row for a track moved into an album that wasn't in the library. Keyed
+  // exactly like the importer (title, album artist, year) so a later rescan
+  // lands on the same row; its release identity is SET from the new tags rather
+  // than merged, so no compilation flag or stale release id carries over.
+  private createAlbumForMovedTrack(md: TrackMetadata): number {
+    const album = this.deps.repos.albums.getOrCreate(md.album, md.albumArtist ?? null, md.year || null)
+    if (!this.deps.repos.albums.replaceReleaseMetadataIfEmpty(album.id, md)) {
+      this.deps.repos.albums.enrichReleaseMetadata(album.id, md)
+    }
+    return album.id
+  }
+
+  private folderForDestination(targetAlbum: DbAlbum | null, destinationPath: string): DbFolder {
+    const targetTracks = targetAlbum
+      ? this.deps.repos.entityTracks.getTracksForAlbum(targetAlbum.id).filter(candidate => candidate.provider === 'local')
+      : []
     const exact = targetTracks
       .map(track => this.deps.repos.folders.getById(track.folder_id))
       .filter((folder): folder is DbFolder =>
@@ -796,6 +1253,9 @@ export class TrackAlbumMoveService {
     for (const [id, stored] of this.previews.entries()) {
       if (now - stored.preview.createdAt > PREVIEW_TTL_MS) this.previews.delete(id)
     }
+    for (const [id, loaded] of this.releases.entries()) {
+      if (now - loaded.fetchedAt > PREVIEW_TTL_MS) this.releases.delete(id)
+    }
   }
 }
 
@@ -817,10 +1277,36 @@ function normalizedDiscNumber(value: number | null | undefined): number {
   return positiveTrackNumber(value) ?? 1
 }
 
+function officialTitlesForDisc(tracklist: MusicBrainzReleaseTrack[], discNumber: number): Map<number, string> {
+  const titles = new Map<number, string>()
+  for (const entry of tracklist) {
+    if (entry.discNumber === discNumber && !titles.has(entry.trackNumber)) titles.set(entry.trackNumber, entry.title)
+  }
+  return titles
+}
+
+function normalizeManualAlbum(input: TrackAlbumMoveManualAlbum): TrackAlbumMoveManualAlbum {
+  const title = text(input?.title)
+  const albumArtist = text(input?.albumArtist)
+  const year = text(input?.year)
+  if (!title) throw new Error('Indicá el nombre del álbum.')
+  if (!albumArtist) throw new Error('Indicá el artista del álbum.')
+  if (year && !/^\d{4}$/.test(year)) throw new Error('El año tiene que tener 4 dígitos.')
+  return {
+    title,
+    albumArtist,
+    year: year || null,
+    totalTracks: positiveTrackNumber(input?.totalTracks),
+    discNumber: positiveTrackNumber(input?.discNumber),
+    totalDiscs: positiveTrackNumber(input?.totalDiscs),
+  }
+}
+
 function buildAlbumMoveSlots(
   occupants: Map<number, DbTrack>,
   totalTracks: number | null,
   selected: number,
+  officialTitles: Map<number, string> = new Map(),
 ): TrackAlbumMoveSlot[] {
   const max = Math.max(
     positiveTrackNumber(totalTracks) ?? 0,
@@ -835,6 +1321,7 @@ function buildAlbumMoveSlots(
       occupiedBy: occupant
         ? { trackId: occupant.id, title: occupant.title, quality: summarizeTrackQuality(occupant) }
         : null,
+      officialTitle: officialTitles.get(number) ?? null,
     })
   }
   return slots

@@ -130,6 +130,7 @@ export function dbToUiTrack(t: DbTrack): Track {
     totalTracks: t.total_tracks,
     discNumber: t.disc_number,
     totalDiscs: t.total_discs,
+    compilation: t.compilation === 1,
     added: t.date_added,
     dateModified: t.date_modified,
     loved: t.is_favorite === 1,

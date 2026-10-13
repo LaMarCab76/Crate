@@ -2,6 +2,13 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { normalizeMetadataText, scoreMetadataCandidate } from './MetadataCompletionRules.ts'
+import { fetchCoverArtForRelease, type CoverArtImage } from './CoverArtArchive.ts'
+import {
+  formatArtistCredit,
+  rankOriginalReleases,
+  type OriginalReleaseQuery,
+  type RankedOriginalRelease,
+} from './originalAlbumCandidates.ts'
 
 const MB_BASE = 'https://musicbrainz.org/ws/2'
 const REQUEST_TIMEOUT_MS = 6000
@@ -250,6 +257,86 @@ export function enrichMatchFromRelease(
   }
 }
 
+export interface MusicBrainzReleaseDetailTrack extends MusicBrainzReleaseTrack {
+  recordingId: string | null
+}
+
+// Everything needed to create an album that isn't in the library yet from one
+// MusicBrainz release: identity, tags and the full official tracklist.
+export interface MusicBrainzReleaseDetail {
+  releaseId: string
+  releaseGroupId: string | null
+  title: string
+  albumArtist: string | null
+  albumArtistIds: string[]
+  date: string | null
+  year: string | null
+  country: string | null
+  status: string | null
+  primaryType: string | null
+  secondaryTypes: string[]
+  genre: string | null
+  totalDiscs: number
+  // Track count per disc number (from the medium's track-count when present).
+  discTrackCounts: Record<number, number>
+  tracklist: MusicBrainzReleaseDetailTrack[]
+}
+
+export function parseReleaseDetail(releaseJson: unknown): MusicBrainzReleaseDetail | null {
+  if (!releaseJson || typeof releaseJson !== 'object') return null
+  const row = releaseJson as Record<string, unknown>
+  const releaseId = asString(row['id'])
+  const title = asString(row['title'])
+  if (!releaseId || !title) return null
+  const group = row['release-group'] && typeof row['release-group'] === 'object'
+    ? row['release-group'] as Record<string, unknown>
+    : null
+  const media = Array.isArray(row['media']) ? row['media'] as Record<string, unknown>[] : []
+  const discTrackCounts: Record<number, number> = {}
+  const tracklist: MusicBrainzReleaseDetailTrack[] = []
+  for (const medium of media) {
+    const discNumber = asNumber(medium['position']) ?? 1
+    const tracks = Array.isArray(medium['tracks']) ? medium['tracks'] as Record<string, unknown>[] : []
+    discTrackCounts[discNumber] = asNumber(medium['track-count']) ?? tracks.length
+    for (const track of tracks) {
+      const rec = track['recording'] && typeof track['recording'] === 'object'
+        ? track['recording'] as Record<string, unknown>
+        : null
+      const trackTitle = asString(track['title']) ?? asString(rec?.['title'])
+      const trackNumber = asNumber(track['position'] ?? track['number'])
+      if (!trackTitle || trackNumber == null) continue
+      tracklist.push({ discNumber, trackNumber, title: trackTitle, recordingId: asString(rec?.['id']) })
+    }
+  }
+  const credits = Array.isArray(row['artist-credit']) ? row['artist-credit'] as Record<string, unknown>[] : []
+  const albumArtistIds = credits
+    .map(credit => credit['artist'] && typeof credit['artist'] === 'object'
+      ? asString((credit['artist'] as Record<string, unknown>)['id'])
+      : null)
+    .filter((id): id is string => id != null)
+  const date = asString(row['date'])
+  const secondaryTypes = group?.['secondary-types']
+  return {
+    releaseId,
+    releaseGroupId: asString(group?.['id']),
+    title,
+    albumArtist: formatArtistCredit(row['artist-credit']),
+    albumArtistIds,
+    date,
+    year: safeYear(date),
+    country: asString(row['country']),
+    status: asString(row['status']),
+    primaryType: asString(group?.['primary-type']),
+    secondaryTypes: Array.isArray(secondaryTypes)
+      ? secondaryTypes.map(asString).filter((type): type is string => type != null)
+      : [],
+    genre: firstTagName(row['genres']) ?? firstTagName(group?.['genres']) ?? firstTagName(row['tags']),
+    totalDiscs: Math.max(1, media.length),
+    discTrackCounts,
+    tracklist,
+  }
+}
+
 function userAgent(): string {
   const version = appVersion()
   return `Crate/${version} (https://github.com/LaMarCab76/LocalLibrary)`
@@ -312,6 +399,42 @@ export class MusicBrainzMetadataClient {
     const detailParams = new URLSearchParams({ fmt: 'json', inc: 'recordings' })
     const detailJson = await this.fetchMusicBrainzJson(`${MB_BASE}/release/${encodeURIComponent(releaseId)}?${detailParams.toString()}`)
     return parseReleaseTracklist(detailJson)
+  }
+
+  // Candidate ORIGINAL albums for a song — typically one downloaded from a
+  // compilation. Searches the recording by title + artist and ranks every
+  // release it appears on (see rankOriginalReleases). `searchArtist` lets the
+  // caller query with the primary artist only ("A feat. B" → "A") while scoring
+  // still uses the full credit.
+  async findOriginalReleases(query: OriginalReleaseQuery & { searchArtist?: string | null }): Promise<RankedOriginalRelease[]> {
+    const title = cleanQueryValue(query.title)
+    const artist = cleanQueryValue(query.searchArtist || query.artist)
+    if (!title) return []
+    const lucene = artist ? `recording:"${title}" AND artist:"${artist}"` : `recording:"${title}"`
+    const params = new URLSearchParams({ fmt: 'json', limit: '25', query: lucene })
+    let json = await this.fetchMusicBrainzJson(`${MB_BASE}/recording?${params.toString()}`)
+    let ranked = rankOriginalReleases((json as Record<string, unknown> | null)?.['recordings'], query)
+    if (ranked.length === 0) {
+      const fallback = new URLSearchParams({ fmt: 'json', limit: '25', query: `${title} ${artist}`.trim() })
+      json = await this.fetchMusicBrainzJson(`${MB_BASE}/recording?${fallback.toString()}`)
+      ranked = rankOriginalReleases((json as Record<string, unknown> | null)?.['recordings'], query)
+    }
+    return ranked
+  }
+
+  // Full release (identity + official tracklist) for creating a new album.
+  // Returns null when MusicBrainz doesn't know the id; throws on transport errors.
+  async lookupReleaseDetail(releaseId: string): Promise<MusicBrainzReleaseDetail | null> {
+    const params = new URLSearchParams({
+      fmt: 'json',
+      inc: 'recordings+artist-credits+release-groups+genres+tags',
+    })
+    const json = await this.fetchMusicBrainzJson(`${MB_BASE}/release/${encodeURIComponent(releaseId)}?${params.toString()}`)
+    return parseReleaseDetail(json)
+  }
+
+  async fetchCoverArt(releaseId: string | null, releaseGroupId: string | null): Promise<CoverArtImage | null> {
+    return fetchCoverArtForRelease({ releaseId, releaseGroupId, userAgent: userAgent() })
   }
 
   private async searchRecording(query: MusicBrainzTrackQuery): Promise<MusicBrainzTrackMatch | null> {

@@ -96,18 +96,17 @@ test('with the lyrics card open the player card squares every inner corner', () 
   }
 })
 
-test('the now-playing row is an outline in the artwork color, never a fill', () => {
-  assert.match(css, /--gl-current-shadow:[^;]*var\(--gl-nw\)/)
-  assert.doesNotMatch(css, /--gl-current-shadow:[^;]*var\(--gl-nt\)/, 'The outline skips the vivified accent')
-  assert.equal(declaration(cssBlock('.tbl tbody tr.playing'), 'box-shadow'), 'var(--gl-current-shadow)')
-  assert.doesNotMatch(css, /\.artist-album[^{]*tr\.playing[^{]*\{/, 'Album sections reuse the shared outline')
-})
+test('the now-playing row is the banner glass box in every listing', () => {
+  const row = cssBlock('.tbl tbody tr.playing')
+  const banner = cssBlock('.metadata-import-banner')
 
-test('artist page album sections follow the playing tint, not their own covers', () => {
-  const artistSource = readFileSync(new URL('../views/ArtistView.tsx', import.meta.url), 'utf8')
-
-  assert.equal(declaration(cssBlock('.artist-album'), '--artist-album-tint'), 'var(--gl-nw)')
-  assert.doesNotMatch(artistSource, /--artist-album-tint|extractDominantColor/)
+  assert.equal(declaration(row, 'background-color'), 'var(--gl-current-fill)')
+  assert.equal(declaration(row, 'box-shadow'), 'var(--gl-current-shadow)')
+  assert.equal(css.match(/--gl-current-fill:\s*var\(--gl-panel-fill\);/g)?.length, 2, 'Both themes')
+  assert.equal(css.match(/--gl-current-shadow:\s*var\(--gl-panel-shadow\);/g)?.length, 2, 'Both themes')
+  assert.equal(declaration(banner, 'background'), 'var(--gl-panel-fill)')
+  assert.equal(declaration(banner, 'box-shadow'), 'var(--gl-panel-shadow)')
+  assert.doesNotMatch(css, /\.artist-album[^{]*tr\.playing[^{]*\{/, 'Album sections reuse the shared box')
 })
 
 test('the visualizer/lyrics divider fades out once the lyrics open', () => {
@@ -115,13 +114,27 @@ test('the visualizer/lyrics divider fades out once the lyrics open', () => {
   assert.equal(declaration(cssBlock('.pp-acc + .pp-acc.open'), 'border-top-color'), 'transparent')
 })
 
-test('album sections keep the bare column header: no fill, just the shared line', () => {
-  assert.doesNotMatch(css, /\.artist-album[^{]*thead[^{]*\{/, 'The artist page should not repaint the column header')
+test('artist page albums are neutral glass cards, never tinted', () => {
+  const artistSource = readFileSync(new URL('../views/ArtistView.tsx', import.meta.url), 'utf8')
+  const section = cssBlock('.artist-album')
+
+  assert.equal(declaration(section, 'background'), 'var(--gl-panel-fill)')
+  assert.equal(declaration(section, 'box-shadow'), 'var(--gl-panel-shadow)')
+  assert.equal(declaration(section, 'border-radius'), 'var(--gl-r-panel)')
+  assert.doesNotMatch(cssBlock('.aa-head'), /(?:^|\n)\s*background\s*:/, 'No tinted album head')
+  // Rows, the column header and the now-playing box come from the shared .tbl rules.
+  assert.doesNotMatch(css, /\.artist-album[^{]*(?:thead|tbody)[^{]*\{/)
+  assert.doesNotMatch(css, /--artist-album-tint|--gl-nw/)
+  assert.doesNotMatch(artistSource, /--artist-album-tint|extractDominantColor/)
 })
 
-test('album sections paint the track well once, not as a rounded box per row', () => {
-  const well = cssBlock('.artist-album > .disc-track-groups .tbl tbody')
+test('the artist view toggle is the glass segmented control', () => {
+  // Anchored: `.artist-view-controls .view-toggle {` comes first in the file.
+  const track = css.match(/\n\.view-toggle\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? ''
+  const thumb = cssBlock('.view-toggle-thumb')
 
-  assert.match(declaration(well, 'background'), /--artist-album-tint\) 8%/)
-  assert.doesNotMatch(css, /\.artist-album > \.tbl tbody tr,\s*\.artist-album > \.disc-track-groups \.tbl tbody tr\s*\{/)
+  assert.equal(declaration(track, 'background'), 'var(--gl-seg-track)')
+  assert.equal(declaration(track, 'border-radius'), '999px')
+  assert.equal(declaration(thumb, 'background'), 'var(--gl-seg-thumb)')
+  assert.equal(declaration(cssBlock('.view-toggle.on-second .view-toggle-thumb'), 'transform'), 'translateX(100%)')
 })

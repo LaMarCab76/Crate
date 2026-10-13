@@ -31,6 +31,7 @@ export interface Track {
   totalTracks?: number | null
   discNumber?: number | null
   totalDiscs?: number | null
+  compilation?: boolean  // tagged as part of a compilation (COMPILATION flag)
   added: string
   dateModified?: string | null
   loved: boolean

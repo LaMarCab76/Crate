@@ -335,6 +335,9 @@ export interface TrackAlbumMoveQuality {
 export interface TrackAlbumMoveSlot {
   trackNumber: number
   occupiedBy: { trackId: number; title: string; quality: TrackAlbumMoveQuality } | null
+  // Title from the album's official MusicBrainz tracklist, when known. Lets a
+  // brand-new album show its real tracklist even though no slot is occupied.
+  officialTitle: string | null
 }
 
 // Present when the chosen slot (or a same-title track) is already taken. The
@@ -365,12 +368,17 @@ export interface TrackAlbumMovePreview {
   status: 'ready' | 'blocked'
   source: TrackAlbumMoveEndpoint
   targetAlbum: {
-    id: number
+    // null while the album doesn't exist yet: it's created on apply.
+    id: number | null
+    isNew: boolean
     title: string
     artist: string
     year: string | null
     artworkPath: string | null
     trackCount: number
+    // MusicBrainz release the new album is built from, when there is one.
+    releaseId: string | null
+    releaseType: string | null
   }
   proposal: TrackAlbumMoveProposal | null
   duplicate: TrackAlbumMoveDuplicate | null
@@ -394,12 +402,62 @@ export interface TrackAlbumMovePreview {
   warnings: string[]
 }
 
+// User-typed album for when MusicBrainz doesn't know the original album.
+export interface TrackAlbumMoveManualAlbum {
+  title: string
+  albumArtist: string
+  year: string | null
+  totalTracks: number | null
+  discNumber: number | null
+  totalDiscs: number | null
+}
+
+// Where a track moves to: an album already in the library, a MusicBrainz
+// release that isn't in the library yet (typically the original album of a song
+// downloaded from a compilation), or a manually described new album.
+export type TrackAlbumMoveTarget =
+  | { kind: 'library'; albumId: number }
+  | { kind: 'release'; releaseId: string; recordingId?: string | null }
+  | { kind: 'manual'; album: TrackAlbumMoveManualAlbum }
+
 export interface TrackAlbumMovePreviewRequest {
   trackId: number
-  targetAlbumId: number
+  target: TrackAlbumMoveTarget
   // Optional user-chosen destination slot. Overrides the MusicBrainz/recommended
   // track number when provided.
   trackNumber?: number | null
+}
+
+// One MusicBrainz release group the song appears on, ranked so the artist's
+// own studio album comes first and compilations last.
+export interface OriginalAlbumCandidate {
+  releaseId: string
+  releaseGroupId: string | null
+  recordingId: string | null
+  title: string
+  artist: string
+  year: string | null
+  country: string | null
+  status: string | null
+  primaryType: string | null
+  secondaryTypes: string[]
+  trackNumber: number | null
+  discNumber: number | null
+  totalTracks: number | null
+  confidence: number
+  // The album already in the library that IS this release, if any.
+  localAlbumId: number | null
+  localTrackCount: number
+  // The track already belongs to that library album.
+  isCurrentAlbum: boolean
+}
+
+export interface OriginalAlbumCandidatesResult {
+  trackId: number
+  // The track currently sits in a compilation (flag or "Various Artists").
+  sourceIsCompilation: boolean
+  candidates: OriginalAlbumCandidate[]
+  warnings: string[]
 }
 
 export interface TrackAlbumMoveApplyRequest {
@@ -754,6 +812,7 @@ export interface TracksApi {
   findMetadataCompletionTargets(folderId?: number, limit?: number): Promise<MetadataCompletionTargetsPayload>
   previewMetadataCompletion(trackIds: number[]): Promise<MetadataCompletionPreview>
   applyMetadataCompletions(payload: MetadataCompletionApplyRequest): Promise<MetadataCompletionApplyResult>
+  findOriginalAlbums(trackId: number): Promise<OriginalAlbumCandidatesResult>
   previewAlbumMove(payload: TrackAlbumMovePreviewRequest): Promise<TrackAlbumMovePreview>
   applyAlbumMove(payload: TrackAlbumMoveApplyRequest): Promise<TrackAlbumMoveApplyResult>
   trash(trackIds: number[]): Promise<TrashTracksResult>
