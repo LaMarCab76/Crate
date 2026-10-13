@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
+import { useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import type { Album, Artist } from '@shared/types/library'
 import { Artwork } from '@renderer/components/Artwork'
 import { ListPrefsMenu, SortDirectionButton } from '@renderer/components/ListPrefsMenu'
@@ -15,7 +15,6 @@ import {
 import { DiscGroupedTrackTable } from '@renderer/components/TrackTable'
 import { fmtFileSize, fmtTotal } from '@renderer/utils/format'
 import { toggleArtistFavorite, useArtistByUiId } from '@renderer/stores/libraryStore'
-import { extractDominantColor } from '@renderer/utils/colorExtract'
 import { useQueueStore } from '@renderer/stores/queueStore'
 import { ArtistArtworkPicker } from '@renderer/components/ArtistArtworkPicker'
 
@@ -62,30 +61,16 @@ function ArtistAlbumBlock({
 }: ArtistAlbumBlockProps) {
   const playNow = useQueueStore(state => state.playNow)
   const playShuffled = useQueueStore(state => state.playShuffled)
-  const [tint, setTint] = useState(al.palette[1])
   const tracks = useMemo(
     () => sortTracks(al.tracks, trackSortBy, trackSortDir),
     [al.tracks, trackSortBy, trackSortDir],
   )
   const total = tracks.reduce((s, t) => s + t.d, 0)
   const totalSize = tracks.reduce((s, t) => s + (t.fileSize ?? 0), 0)
-  useEffect(() => {
-    setTint(al.palette[1])
-    if (!al.artworkPath) return
-
-    let cancelled = false
-    const src = `crate://artwork/${encodeURIComponent(al.artworkPath)}`
-    void extractDominantColor(src).then(hex => {
-      if (!cancelled && hex) setTint(hex)
-    })
-
-    return () => { cancelled = true }
-  }, [al.artworkPath, al.palette])
 
   return (
     <div
       className="artist-album"
-      style={{ '--artist-album-tint': tint } as CSSProperties}
       onContextMenu={e => onOpenAlbumMenu(e, al)}
     >
       <div className="aa-head">

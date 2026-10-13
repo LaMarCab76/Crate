@@ -233,7 +233,7 @@ export function TrackTable({
 
   // Every row (and the sticky header) is its own CSS grid with this template,
   // so the column set stays aligned without table layout. The now-playing row
-  // tint comes from the shared --gl-nt glass token (set by App).
+  // outline comes from the shared --gl-nw glass token (set by App).
   const tableStyle = useMemo(() => {
     const columns = [
       '36px',

@@ -17,6 +17,11 @@ const FFT_DISPLAY_GAIN = 2.2
 // sidebar and collapsed-player visualizers keep a familiar 25 Hz → 16 kHz layout.
 const MINI_BAND_COUNT = EQ_BAND_LABELS.length
 const MINI_SEGMENTS = 12
+// LED pitch (segment + its 2px gap) of the 12 LEDs at the player card's base
+// height. When the card gives the visualizer more room it adds LEDs at this
+// pitch instead of stretching the ones it has.
+const MINI_SEGMENT_PITCH_PX = 4.75
+const MINI_SEGMENTS_MAX = 18 // the player card grows the visualizer by up to 30%
 const BAR_SEGMENTS = 5
 // Full: a richer spectrum that sizes itself to the available width. Compact
 // uses the same live FFT feed but fewer steps/columns for the lyrics combo view.
@@ -100,7 +105,9 @@ export function SpectrumVisualizer({ mode = 'mini', active = true, columns }: Pr
   const isCompact = mode === 'compact'
   const isFullscreenSpectrum = isFull || isCompact
   const isBar = mode === 'bar'
-  const segmentCount = isFull ? FULL_SEGMENTS : isCompact ? COMPACT_SEGMENTS : isBar ? BAR_SEGMENTS : MINI_SEGMENTS
+  const isMini = !isFullscreenSpectrum && !isBar
+  const [miniSegments, setMiniSegments] = useState(MINI_SEGMENTS)
+  const segmentCount = isFull ? FULL_SEGMENTS : isCompact ? COMPACT_SEGMENTS : isBar ? BAR_SEGMENTS : miniSegments
 
   const bandsRef = useRef<HTMLDivElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -184,6 +191,30 @@ export function SpectrumVisualizer({ mode = 'mini', active = true, columns }: Pr
     ro.observe(el)
     return () => ro.disconnect()
   }, [isCompact, isFullscreenSpectrum, columns])
+
+  // Mini derives its LED count from the column height. The track is flex-sized
+  // by the band column, not by its LEDs, so measuring it can't feed back.
+  useEffect(() => {
+    if (!isMini) return
+    const track = bandsRef.current?.querySelector<HTMLElement>('.spectrum-band-track')
+    if (!track || typeof ResizeObserver === 'undefined') return
+
+    const measure = () => {
+      // The track's 2px padding on each side is not LED space.
+      const ledSpace = track.clientHeight - 4
+      if (ledSpace <= 0) return
+      const n = Math.max(
+        MINI_SEGMENTS,
+        Math.min(MINI_SEGMENTS_MAX, Math.floor((ledSpace + 2) / MINI_SEGMENT_PITCH_PX)),
+      )
+      setMiniSegments(prev => (prev === n ? prev : n))
+    }
+
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(track)
+    return () => ro.disconnect()
+  }, [isMini])
 
   useEffect(() => {
     if (typeof document === 'undefined') return

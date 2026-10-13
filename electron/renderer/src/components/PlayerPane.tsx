@@ -1,4 +1,4 @@
-import { type CSSProperties, Fragment, type DragEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { type CSSProperties, Fragment, type DragEvent, type MouseEvent, type RefObject, useEffect, useMemo, useRef, useState } from 'react'
 import { Artwork } from './Artwork'
 import { CrossfadeArtwork } from './CrossfadeArtwork'
 import { CodecStrip } from './CodecStrip'
@@ -76,6 +76,33 @@ function useMountedWhileOpen(open: boolean, exitMs: number): boolean {
   return mounted
 }
 
+// Upcoming lines in the inline lyrics preview: two once the lyrics body has
+// grown one line (--pp-lyrics-line-h) past its base --pp-lyrics-h, which the
+// card only does when it has height to spare (see .pp-player), otherwise one.
+function useInlineLyricsLinesAfter(bodyRef: RefObject<HTMLDivElement | null>, enabled: boolean): number {
+  const [linesAfter, setLinesAfter] = useState(1)
+
+  useEffect(() => {
+    const body = bodyRef.current
+    if (!enabled || !body || typeof ResizeObserver === 'undefined') return
+    const style = getComputedStyle(body)
+    const base = Number.parseFloat(style.getPropertyValue('--pp-lyrics-h'))
+    const step = Number.parseFloat(style.getPropertyValue('--pp-lyrics-line-h'))
+    if (!Number.isFinite(base) || !Number.isFinite(step)) return
+
+    const measure = () => {
+      const next = body.clientHeight >= base + step - 1 ? 2 : 1
+      setLinesAfter(prev => (prev === next ? prev : next))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(body)
+    return () => ro.disconnect()
+  }, [bodyRef, enabled])
+
+  return linesAfter
+}
+
 // Chevrons drawn on the design's 20px grid (the shared Icon set's chevD/chevR
 // sit off-center, which shows when the accordion chevron rotates).
 function PaneChevron({ direction, size }: { direction: 'down' | 'right'; size: number }) {
@@ -140,6 +167,8 @@ export function PlayerPane({
   const setTweak = useTweakStore(s => s.setTweak)
   const visualizerMounted = useMountedWhileOpen(showVisualizer, PLAYER_ACCORDION_EXIT_MS)
   const lyricsMounted = useMountedWhileOpen(showLyrics && !lyricsSidePaneOpen, PLAYER_ACCORDION_EXIT_MS)
+  const lyricsBodyRef = useRef<HTMLDivElement>(null)
+  const inlineLyricsLinesAfter = useInlineLyricsLinesAfter(lyricsBodyRef, lyricsMounted)
   // The artwork only eases its size while an accordion opens or closes, in
   // step with the accordion body. Window resizes also move --pp-art (it tracks
   // 100vh) and apply at once instead of lagging behind. Set during render so
@@ -864,6 +893,7 @@ export function PlayerPane({
                         <Icon name="sidebarRight" size={13} />
                       </button>
                       <div
+                        ref={lyricsBodyRef}
                         className="pp-acc-body"
                         aria-hidden={!showLyrics}
                         {...getInertPanelProps(!showLyrics)}
@@ -880,6 +910,7 @@ export function PlayerPane({
                               showInlineHeader={false}
                               sidePaneOpen={lyricsSidePaneOpen}
                               onToggleSidePane={onToggleLyricsSidePane}
+                              focusLinesAfter={inlineLyricsLinesAfter}
                               active={isOpen && activeTab === 'nowPlaying' && showLyrics && !lyricsSidePaneOpen}
                             />
                           )}

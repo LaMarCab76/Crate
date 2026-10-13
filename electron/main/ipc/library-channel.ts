@@ -10,6 +10,7 @@ import { parseArtistName } from '../library/ArtistNameParser'
 import { readTrackMetadata, serializeTrackExtendedMetadata } from '../library/MetadataExtractor'
 import { getMetadataCompletionService } from '../library/MetadataCompletionService'
 import { getTrackAlbumMoveService } from '../library/TrackAlbumMoveService'
+import { resolveAlbumFromFolderHints } from '../library/albumFolderHints'
 import { trashTrackBatch } from '../library/TrackTrashBatch'
 import { writeTrackMetadata } from '../library/MetadataWriter'
 import { getLibraryBackup } from '../services/LibraryBackup'
@@ -33,55 +34,6 @@ import type {
   TrackMetadataUpdatePayload,
   TrashTracksResult,
 } from '@shared/types/ipc-contract'
-
-function normText(value: string | null | undefined): string {
-  return (value ?? '').trim().toLowerCase()
-}
-
-function resolveAlbumFromFolderHints(track: DbTrack, candidates: DbTrack[]): number | null {
-  if (candidates.length === 0) return null
-
-  const albumName = normText(track.album)
-  const albumArtist = normText(track.album_artist) || normText(track.artist)
-
-  const withMatchingAlbum = candidates.filter(c => normText(c.album) === albumName)
-  const albumIds = new Set(withMatchingAlbum.map(t => t.album_id).filter((id): id is number => id != null))
-  if (albumIds.size === 1) {
-    const [singleId] = albumIds
-    return singleId
-  }
-
-  const withMatchingAlbumAndArtist = withMatchingAlbum.filter(t => (normText(t.artist) === albumArtist))
-  const albumArtistIds = new Set(withMatchingAlbumAndArtist.map(t => t.album_id).filter((id): id is number => id != null))
-  if (albumArtistIds.size === 1) {
-    const [singleId] = albumArtistIds
-    return singleId
-  }
-
-  const counts = new Map<number, number>()
-  for (const candidate of candidates) {
-    if (candidate.album_id == null) continue
-    counts.set(candidate.album_id, (counts.get(candidate.album_id) ?? 0) + 1)
-  }
-  if (counts.size === 0) return null
-
-  let topId: number | null = null
-  let topCount = 0
-  let secondCount = 0
-
-  for (const [albumId, count] of counts.entries()) {
-    if (count > topCount) {
-      secondCount = topCount
-      topCount = count
-      topId = albumId
-    } else if (count > secondCount) {
-      secondCount = count
-    }
-  }
-
-  if (topId == null) return null
-  return topCount > secondCount ? topId : null
-}
 
 async function refreshTrackMetadataInDb(repos: Repos, trackId: number): Promise<DbTrack | null> {
   const track = repos.tracks.getById(trackId)

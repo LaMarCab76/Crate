@@ -75,13 +75,15 @@
    Shared tokens for the floating glass shell. The tint colors are registered
    so artwork changes cross-fade instead of snapping: App.tsx sets them from
    the extracted palettes (--gl-t/--gl-p* follow the viewed album, else the
-   playing track; --gl-nt/--gl-n* always follow the playing track) and removes
-   them to fall back to the neutral defaults below. */
+   playing track; --gl-nt/--gl-n* always follow the playing track, --gl-nw is
+   --gl-nt before vivify) and removes them to fall back to the neutral
+   defaults below. */
 @property --gl-t  { syntax: '<color>'; inherits: true; initial-value: #8e8e93; }
 @property --gl-p0 { syntax: '<color>'; inherits: true; initial-value: #3a3a40; }
 @property --gl-p1 { syntax: '<color>'; inherits: true; initial-value: #232327; }
 @property --gl-p2 { syntax: '<color>'; inherits: true; initial-value: #55555c; }
 @property --gl-nt { syntax: '<color>'; inherits: true; initial-value: #8e8e93; }
+@property --gl-nw { syntax: '<color>'; inherits: true; initial-value: #8e8e93; }
 @property --gl-n0 { syntax: '<color>'; inherits: true; initial-value: #3a3a40; }
 @property --gl-n1 { syntax: '<color>'; inherits: true; initial-value: #232327; }
 @property --gl-n2 { syntax: '<color>'; inherits: true; initial-value: #55555c; }
@@ -96,7 +98,6 @@
 
 :root {
   --gl-base: 0.42;   /* chrome fill opacity */
-  --gl-blur: 30px;   /* panel blur */
   --gl-amb: 1;       /* strength of the artwork wash behind everything */
   --gl-bg: #101012;  /* window base under the artwork wash */
 
@@ -116,10 +117,16 @@
   --gl-chrome-filter: blur(24px) saturate(190%);
   --gl-chrome-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.42), inset 0 0 0 0.5px rgba(255, 255, 255, 0.12), 0 8px 26px rgba(0, 0, 0, 0.30);
 
-  /* Panel glass: floating sidebar and player card. */
+  /* Panel glass: the sidebar and the right dock's cards, pinned to the window
+     edges. Saturate only, no blur: nothing ever passes under them (the content
+     starts 4px past them and both slide in lockstep), so a blur only ever saw
+     the flat window backdrop. It also broke during playback: the EQ bars, the
+     progress and the visualizer repaint every frame, Chromium redraws just
+     that damage rect, and the blur read back the previous frame's panel along
+     the rect's edge, painting a lighter, oversaturated band there. */
   --gl-panel-fill: rgba(255, 255, 255, 0.06);
   --gl-panel-solid: rgb(30, 30, 34);
-  --gl-panel-filter: blur(var(--gl-blur)) saturate(160%);
+  --gl-panel-filter: saturate(160%);
   --gl-panel-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.2), inset 0 0 0 0.5px rgba(255, 255, 255, 0.08);
 
   /* Popover glass: context menus, filter popover. */
@@ -155,10 +162,11 @@
   --gl-well: rgba(0, 0, 0, 0.22);
   --gl-well-shadow: inset 0 0.5px 1.5px rgba(0, 0, 0, 0.35), inset 0 -0.5px 0 rgba(255, 255, 255, 0.08);
 
-  /* Sticky list headers. */
-  --gl-header-fill: rgba(22, 22, 26, 0.42);
-  --gl-header-filter: blur(20px) saturate(170%);
-  --gl-header-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.16), inset 0 0 0 0.5px rgba(255, 255, 255, 0.06);
+  /* Sticky list headers: no fill, just a line under the column titles. The
+     blur only shows once rows scroll beneath; no saturate, so a partial
+     redraw over the flat backdrop can't tint it (see .sidebar). */
+  --gl-header-filter: blur(20px);
+  --gl-header-shadow: inset 0 -1px 0 var(--gl-hairline);
 
   /* Selected nav item. */
   --gl-active-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.17), rgba(255, 255, 255, 0.09));
@@ -179,9 +187,9 @@
   --gl-switch-off: rgba(255, 255, 255, 0.16);
   --gl-danger: #ff8a80;
 
-  /* Now-playing row highlight. */
-  --gl-current-fill: linear-gradient(90deg, color-mix(in oklab, var(--gl-nt) 40%, transparent) 0%, color-mix(in oklab, var(--gl-nt) 16%, transparent) 55%, color-mix(in oklab, var(--gl-nt) 9%, transparent) 100%);
-  --gl-current-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.2), inset 0 0 0 0.5px color-mix(in oklab, var(--gl-nt) 45%, rgba(255, 255, 255, 0.1));
+  /* Now-playing row: outline only, in the playing artwork's own color (not
+     the vivified accent), so it sits quietly beside the album sections. */
+  --gl-current-shadow: inset 0 0 0 1px color-mix(in oklab, var(--gl-nw) 55%, rgba(255, 255, 255, 0.12));
 
   --gl-r-panel: 24px;
   --gl-r-pop: 18px;
@@ -293,9 +301,6 @@
   --gl-well: rgba(0, 0, 0, 0.05);
   --gl-well-shadow: inset 0 0.5px 1.5px rgba(0, 0, 0, 0.12), inset 0 -0.5px 0 rgba(255, 255, 255, 0.6);
 
-  --gl-header-fill: rgba(255, 255, 255, 0.6);
-  --gl-header-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.9), inset 0 0 0 0.5px rgba(0, 0, 0, 0.06);
-
   --gl-active-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.7));
   --gl-active-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.06), 0 1px 4px rgba(0, 0, 0, 0.1);
 
@@ -312,7 +317,7 @@
   --gl-switch-off: rgba(0, 0, 0, 0.14);
   --gl-danger: #d93025;
 
-  --gl-current-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.6), inset 0 0 0 0.5px color-mix(in oklab, var(--gl-nt) 45%, rgba(0, 0, 0, 0.08));
+  --gl-current-shadow: inset 0 0 0 1px color-mix(in oklab, var(--gl-nw) 55%, rgba(0, 0, 0, 0.1));
 }
 
 /* Density */
@@ -424,7 +429,7 @@ textarea,
   overflow: hidden;
   background: var(--gl-bg);
 }
-.window.gl-island-open { --gl-content-pb: 110px; }
+.window.gl-island-open { --gl-content-pb: 88px; }
 
 /* Backdrop: one flat color tinted by the artwork (--gl-p0 cross-fades). */
 .window::before {
@@ -541,14 +546,8 @@ textarea,
   border-radius: 0 var(--gl-r-panel) var(--gl-r-panel) 0;
   color: var(--gl-text);
   background: var(--gl-panel-fill);
-  /* Saturate only, no blur: nothing ever passes under the card (the content
-     starts 4px past it and both slide in lockstep), so the blur only ever saw
-     the flat window backdrop. It also broke during playback: the EQ bars and
-     the player pane repaint every frame, Chromium redraws just that damage
-     rect, and the blur read back the previous frame's sidebar along the
-     card's right edge, painting a lighter, oversaturated band there. */
-  backdrop-filter: saturate(160%);
-  -webkit-backdrop-filter: saturate(160%);
+  backdrop-filter: var(--gl-panel-filter);
+  -webkit-backdrop-filter: var(--gl-panel-filter);
   box-shadow: inset -0.5px 0 0 var(--gl-hairline);
   /* No permanent will-change: it kept a compositor layer alive 24/7 alongside
      the backdrop blur. The slide below is composited without it. */
@@ -1335,14 +1334,18 @@ textarea,
   }
 }
 
-/* Player pane (right column — player + queue): a floating glass card that
-   fills the right dock (.np-dock-lateral positions it). Collapsing slides it
+/* Player pane (right column — player + queue): a glass card that fills the
+   right dock (.np-dock-lateral pins it to the window's right edge), the mirror
+   of the sidebar: only its inner corners are rounded. Collapsing slides it
    out to the right; App keeps it mounted until the slide finishes. The card
    keeps a fixed width in both states, so the dock layout never reflows. */
 .player-pane {
   --pp-inline: 18px;
   --pp-viz-h: 96px;
   --pp-lyrics-h: 128px;
+  /* One more lyric line; PlayerPane reads it to show a second upcoming line
+     once the lyrics body has grown by this much. */
+  --pp-lyrics-line-h: 27px;
   --pp-lyrics-status-h: 50px;
   /* Pane-local glass details; the card surface itself uses the panel tokens. */
   --pp-band: rgba(255, 255, 255, 0.05);
@@ -1360,12 +1363,12 @@ textarea,
   min-height: 0;
   display: flex; flex-direction: column;
   overflow: hidden;
-  border-radius: var(--gl-r-panel);
+  border-radius: var(--gl-r-panel) 0 0 var(--gl-r-panel);
   color: var(--gl-text);
   background: var(--gl-panel-fill);
   backdrop-filter: var(--gl-panel-filter);
   -webkit-backdrop-filter: var(--gl-panel-filter);
-  box-shadow: var(--gl-panel-shadow);
+  box-shadow: inset 0.5px 0 0 var(--gl-hairline);
   /* No permanent will-change: avoids a 24/7 compositor layer; the slide is
      composited without it. */
   transition:
@@ -1412,11 +1415,13 @@ textarea,
   }
 }
 
-/* Lyrics side card: plain glass like the player card, sitting left of it in
-   the right dock (or alone at the dock edge). Absolutely positioned at
-   --gl-lyrics-r so it glides right when the player card leaves instead of
-   jumping when the card unmounts. Text follows the theme tokens, so it stays
-   readable on the dark and the frosted-light glass alike. */
+/* Lyrics side card: plain glass like the player card, flush against its left
+   side in the right dock (or alone at the window edge), so the two read as
+   one panel: the lyrics card carries the rounded inner corners and the player
+   card squares its own off. Absolutely positioned at --gl-lyrics-r so it
+   glides right when the player card leaves instead of jumping when the card
+   unmounts. Text follows the theme tokens, so it stays readable on the dark
+   and the frosted-light glass alike. */
 .lyrics-side-pane {
   --lyrics-side-w: 380px;
   --lyrics-side-duration: 340ms;
@@ -1432,16 +1437,19 @@ textarea,
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-  border-radius: var(--gl-r-panel);
+  border-radius: var(--gl-r-panel) 0 0 var(--gl-r-panel);
   color: var(--gl-text);
   background: var(--gl-panel-fill);
   backdrop-filter: var(--gl-panel-filter);
   -webkit-backdrop-filter: var(--gl-panel-filter);
-  box-shadow: var(--gl-panel-shadow);
+  box-shadow: inset 0.5px 0 0 var(--gl-hairline);
   animation: lyrics-side-enter var(--lyrics-side-duration) var(--lyrics-side-ease) both;
   transition: right 420ms var(--gl-ease);
 }
 .theme-light .lyrics-side-pane { --lyrics-side-band: rgba(255, 255, 255, 0.42); }
+.window.gl-lyrics-open .player-pane,
+.window.gl-lyrics-open .player-pane .pp-header,
+.window.gl-lyrics-open .player-pane .pp-footer { border-radius: 0; }
 
 .lyrics-side-pane.closing {
   animation: lyrics-side-exit var(--lyrics-side-duration) var(--lyrics-side-ease) both;
@@ -1574,7 +1582,7 @@ textarea,
   display: flex; align-items: center; justify-content: space-between;
   gap: 4px;
   padding: 0 10px 0 12px;
-  border-radius: var(--gl-r-panel) var(--gl-r-panel) 0 0;
+  border-radius: var(--gl-r-panel) 0 0 0;
   background: var(--pp-band);
   box-shadow: inset 0 -0.5px 0 var(--gl-hairline);
   -webkit-app-region: drag;
@@ -2332,11 +2340,25 @@ textarea,
 
 /* Now Playing tab. The art gives up size (down to a floor) when the window is
    short or an accordion opens, so the transport stays on screen; below the
-   floor the tab scrolls. 440px ≈ the card's non-art content + dock insets. */
+   floor the tab scrolls. --pp-chrome-h ≈ the card's non-art content (the
+   card spans the full window height).
+   On a tall window the art tops out at --pp-art-max and the leftover height
+   (--pp-room) goes to the open accordions instead of piling up above them:
+   the lyrics take one more line first (all or nothing, so two upcoming lines
+   show instead of one), then the visualizer grows by up to 30% of its own
+   height. */
 .pp-player {
+  --pp-chrome-h: 419px;
+  --pp-art-max: 304px;
+  --pp-viz-base: 0px;
+  --pp-lyr-base: 0px;
+  --pp-lyr-step: 0px;
+  --pp-room: max(0px, 100vh - var(--pp-chrome-h) - var(--pp-art-max) - var(--pp-viz-base) - var(--pp-lyr-base));
+  --pp-lyr-extra: clamp(0px, (var(--pp-room) - var(--pp-lyr-step) + 1px) * 1000, var(--pp-lyr-step));
+  --pp-viz-extra: clamp(0px, var(--pp-room) - var(--pp-lyr-extra), var(--pp-viz-base) * 0.3);
   --pp-viz-open-h: 0px;
   --pp-lyr-open-h: 0px;
-  --pp-art: clamp(148px, calc(100vh - 440px - var(--pp-viz-open-h) - var(--pp-lyr-open-h)), 304px);
+  --pp-art: clamp(148px, calc(100vh - var(--pp-chrome-h) - var(--pp-viz-open-h) - var(--pp-lyr-open-h)), var(--pp-art-max));
   flex: 1;
   min-height: 0;
   display: flex;
@@ -2346,9 +2368,20 @@ textarea,
   overflow-x: hidden;
   overflow-y: auto;
 }
-.pp-player.viz-open { --pp-viz-open-h: var(--pp-viz-h); }
-.pp-player.lyrics-open { --pp-lyr-open-h: var(--pp-lyrics-h); }
-.pp-player.lyrics-open.lyrics-side { --pp-lyr-open-h: var(--pp-lyrics-status-h); }
+.pp-player.viz-open {
+  --pp-viz-base: var(--pp-viz-h);
+  --pp-viz-open-h: calc(var(--pp-viz-h) + var(--pp-viz-extra));
+}
+.pp-player.lyrics-open {
+  --pp-lyr-base: var(--pp-lyrics-h);
+  --pp-lyr-step: var(--pp-lyrics-line-h);
+  --pp-lyr-open-h: calc(var(--pp-lyrics-h) + var(--pp-lyr-extra));
+}
+.pp-player.lyrics-open.lyrics-side {
+  --pp-lyr-base: var(--pp-lyrics-status-h);
+  --pp-lyr-step: 0px;
+  --pp-lyr-open-h: var(--pp-lyrics-status-h);
+}
 
 .pp-player-top {
   display: flex; flex-direction: column;
@@ -2548,7 +2581,7 @@ textarea,
   display: flex;
   flex-direction: column;
   margin: auto calc(-1 * var(--pp-inline)) calc(-1 * var(--pp-inline));
-  border-radius: 0 0 var(--gl-r-panel) var(--gl-r-panel);
+  border-radius: 0 0 0 var(--gl-r-panel);
   overflow: hidden;
   background: var(--pp-band);
   box-shadow: inset 0 0.5px 0 var(--gl-hairline);
@@ -2558,9 +2591,13 @@ textarea,
   position: relative;
 }
 
+/* Divider between the two accordion heads; once the lyrics open they flow on
+   from the visualizer, so it fades out. */
 .pp-acc + .pp-acc {
   border-top: 0.5px solid var(--gl-hairline);
+  transition: border-color 320ms var(--gl-ease);
 }
+.pp-acc + .pp-acc.open { border-top-color: transparent; }
 
 .pp-acc-head {
   width: 100%;
@@ -2598,12 +2635,14 @@ textarea,
 }
 
 /* Open heights come from .pp-player (--pp-viz-open-h / --pp-lyr-open-h), the
-   same values the artwork gives up, so both move together. */
+   same values the artwork gives up, so both move together. They also track
+   the window height, which must not lag behind a live resize. */
 .pp-acc-body {
   height: 0;
   overflow: hidden;
   transition: height 320ms var(--gl-ease);
 }
+.window.layout-resizing-window .pp-acc-body { transition: none; }
 
 .pp-acc-viz .pp-acc-body { height: var(--pp-viz-open-h); }
 .pp-acc-lyrics .pp-acc-body { height: var(--pp-lyr-open-h); }
@@ -2931,16 +2970,17 @@ textarea,
   border-radius: var(--r-pill);
 }
 
-/* Now Playing island: a floating glass capsule centered over the content,
-   between --gl-island-l / --gl-island-r (set on .window), that morphs into the
-   Now Playing sheet. App keeps .player-dock mounted through the exit and drives
+/* Now Playing island: a glass bar centered over the content, between
+   --gl-island-l / --gl-island-r (set on .window), that rises out of the
+   window's bottom edge (only its top corners are rounded, like the sidebar's
+   inner ones) and morphs into the Now Playing sheet. App keeps .player-dock mounted through the exit and drives
    the motion with its state classes: priming (first frame of the enter) and
    collapsed (exit) hold the island below the edge; open shows it. */
 .player-dock {
   position: absolute;
   left: var(--gl-island-l, 16px);
   right: var(--gl-island-r, 16px);
-  bottom: 18px;
+  bottom: 0;
   z-index: 35;
   display: flex;
   justify-content: center;
@@ -3005,7 +3045,7 @@ textarea,
   flex: 0 0 auto;
   width: var(--pb-compact-w);
   height: 64px;
-  border-radius: 32px;
+  border-radius: var(--gl-r-panel) var(--gl-r-panel) 0 0;
   overflow: hidden;
   pointer-events: auto;
   -webkit-app-region: no-drag;
@@ -3041,7 +3081,7 @@ textarea,
 .pb-island.sheet-open {
   width: var(--pb-sheet-w);
   height: var(--pb-sheet-h);
-  border-radius: 36px;
+  border-radius: 36px 36px 0 0;
 }
 .player-dock.priming .pb-island,
 .player-dock.collapsed .pb-island {
@@ -4166,9 +4206,6 @@ textarea,
 }
 .tbl thead tr {
   height: 30px;
-  overflow: hidden;
-  border-radius: 10px;
-  background: var(--gl-header-fill);
   -webkit-backdrop-filter: var(--gl-header-filter);
   backdrop-filter: var(--gl-header-filter);
   box-shadow: var(--gl-header-shadow);
@@ -4196,13 +4233,9 @@ textarea,
   transition: background-color 140ms ease;
 }
 .tbl tbody tr:hover { background-color: var(--gl-hover); }
-/* Now playing: tinted glass overlay from the playing artwork. The tint var
-   stays exported for views that still paint their own playing rows. */
-.tbl tbody tr.playing {
-  --track-playing-tint: var(--gl-nt);
-  background-image: var(--gl-current-fill);
-  box-shadow: var(--gl-current-shadow);
-}
+/* Now playing: just an outline tinted from the playing artwork, no fill, in
+   every listing (the artist page's album sections included). */
+.tbl tbody tr.playing { box-shadow: var(--gl-current-shadow); }
 .tbl tbody tr.playing td.title .title-main { font-weight: 600; }
 /* Compact rows for art-less track listings (album / artist views) so they stay
    tight instead of reading like the full-height library/playlist rows. Fixed
@@ -5847,10 +5880,12 @@ button:disabled { cursor: not-allowed; }
   padding: 14px var(--artist-inline) 34px;
 }
 
-/* Artist page — per-album block */
+/* Artist page — per-album block. Every block is tinted by what's playing
+   (the artwork color before vivify), like the window wash behind the page,
+   not by its own cover. */
 .artist-album {
   --artist-album-pad-top: 18px;
-  --artist-album-tint: var(--accent);
+  --artist-album-tint: var(--gl-nw);
   padding: var(--artist-album-pad-top) var(--artist-inline) 10px;
   border-bottom: 0.5px solid color-mix(in oklab, var(--artist-album-tint) 22%, var(--divider));
   background:
@@ -5877,18 +5912,14 @@ button:disabled { cursor: not-allowed; }
   padding-right: var(--artist-inline);
   color: color-mix(in oklab, var(--artist-album-tint) 68%, var(--text-secondary));
 }
-.artist-album > .tbl thead th,
-.artist-album > .disc-track-groups .tbl thead th {
-  background:
-    linear-gradient(
-      color-mix(in oklab, var(--artist-album-tint) 28%, transparent),
-      color-mix(in oklab, var(--artist-album-tint) 28%, transparent)
-    ),
-    color-mix(in oklab, var(--bg-content), black 12%);
-  border-bottom-color: color-mix(in oklab, var(--artist-album-tint) 22%, var(--divider));
-}
-.artist-album > .tbl tbody tr,
-.artist-album > .disc-track-groups .tbl tbody tr {
+/* The darker track well is painted once on the body, not per row: the rows
+   are rounded now, so per-row fills left notches between them. Rows only
+   paint their (rounded) hover. It reaches up over the header's 4px gap so
+   it starts at the header line. */
+.artist-album > .tbl tbody,
+.artist-album > .disc-track-groups .tbl tbody {
+  margin-top: -4px;
+  padding-top: 4px;
   background:
     linear-gradient(
       color-mix(in oklab, var(--artist-album-tint) 8%, transparent),
@@ -5908,32 +5939,6 @@ button:disabled { cursor: not-allowed; }
 .artist-album > .tbl tbody td,
 .artist-album > .disc-track-groups .tbl tbody td {
   border-bottom-color: color-mix(in oklab, var(--artist-album-tint) 12%, var(--border-subtle));
-}
-.artist-album > .tbl tbody tr.playing,
-.artist-album > .disc-track-groups .tbl tbody tr.playing {
-  background:
-    linear-gradient(
-      90deg,
-      color-mix(in oklab, var(--track-playing-tint) 26%, transparent),
-      color-mix(in oklab, var(--track-playing-tint) 14%, transparent) 38%,
-      color-mix(in oklab, var(--track-playing-tint) 9%, transparent)
-    ),
-    var(--bg-content);
-}
-.artist-album > .tbl tbody tr.playing:hover,
-.artist-album > .disc-track-groups .tbl tbody tr.playing:hover {
-  background:
-    linear-gradient(
-      90deg,
-      color-mix(in oklab, var(--track-playing-tint) 32%, transparent),
-      color-mix(in oklab, var(--track-playing-tint) 18%, transparent) 38%,
-      color-mix(in oklab, var(--track-playing-tint) 11%, transparent)
-    ),
-    var(--bg-hover);
-}
-.artist-album > .tbl tbody tr.playing td,
-.artist-album > .disc-track-groups .tbl tbody tr.playing td {
-  border-bottom-color: color-mix(in oklab, var(--track-playing-tint) 24%, var(--border-subtle));
 }
 .aa-head {
   display: flex; align-items: flex-end; gap: 18px;
@@ -6296,17 +6301,17 @@ button:disabled { cursor: not-allowed; }
   z-index: 1;
 }
 
-/* Right dock: floats over the content's right edge (8px from the window edges)
-   and holds the glass cards right-to-left — the player card flush right, the
-   lyrics card 8px to its left (positioned at --gl-lyrics-r). The dock itself
-   is transparent and click-through; only its cards take pointer events. */
+/* Right dock: pinned to the window's right edge, full height, like the
+   sidebar on the left. Holds the glass cards right-to-left — the player card
+   flush right, the lyrics card flush against its left (positioned at
+   --gl-lyrics-r). The dock itself is transparent and click-through; only its
+   cards take pointer events. */
 .np-dock-lateral {
   position: absolute;
-  top: 8px; right: 8px; bottom: 8px;
+  top: 0; right: 0; bottom: 0;
   z-index: 30;
   display: flex;
   flex-direction: row-reverse;
-  gap: 8px;
   min-height: 0;
   pointer-events: none;
 }

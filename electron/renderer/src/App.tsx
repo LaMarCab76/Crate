@@ -80,8 +80,9 @@ const LYRICS_SIDE_PANE_EXIT_MS = 340
 // the "Liquid Glass shell" rules in globals.css) so every floating surface —
 // content, toolbar, island, popovers — clears the sidebar and the right dock.
 const SIDEBAR_CONTENT_GAP = 4   // sidebar card → content
-const DOCK_INSET = 8            // right dock → window edges
-const DOCK_GAP = 8              // between dock cards, and dock → content
+// The right dock is pinned to the window's right edge like the sidebar to the
+// left one; its cards sit flush against each other.
+const DOCK_CONTENT_GAP = 4      // dock → content
 const PLAYER_CARD_WIDTH = 340
 // Quiet period after the last window 'resize' event before layout transitions
 // come back.
@@ -379,8 +380,12 @@ export default function App() {
   const [bottomPlayerPriming, setBottomPlayerPriming] = useState(false)   // primer frame del crecimiento: arranca colapsado
   const isBottomPlayerClosing = bottomPlayerVisible && !showBottomPlayer
   const [playingTint, setPlayingTint] = useState<string | null>(null)
+  // The artwork's dominant color as extracted, before vivify: the window
+  // backdrop uses it so the background matches the album itself.
+  const [playingWash, setPlayingWash] = useState<string | null>(null)
   const [playingPalette, setPlayingPalette] = useState<string[] | null>(null)
   const [albumTint, setAlbumTint] = useState<string | null>(null)
+  const [albumWash, setAlbumWash] = useState<string | null>(null)
   const [albumPalette, setAlbumPalette] = useState<string[] | null>(null)
   const [connectTarget, setConnectTarget] = useState<DeviceConnectTarget | null>(null)
   const [setupWizardOpen, setSetupWizardOpen] = useState(false)
@@ -396,6 +401,9 @@ export default function App() {
     : (tweak.playerTintSource === 'preset' || tweak.playerTintSource === 'custom') ? tweak.playerTintColor
     : null
   ), [tweak.playerTintSource, tweak.playerTintColor, playingTint])
+  // Same source, but the artwork color as extracted (no vivify): for surfaces
+  // that sit beside the album-tinted sections, like the now-playing row.
+  const playerCurrentWash = tweak.playerTintSource === 'artwork' ? playingWash : playerCurrentTint
   const activityActiveCount = activityItems.filter(item => isActiveActivityStatus(item.status)).length
   const activityUnreadCount = activityItems.filter(item => !item.read).length
 
@@ -785,11 +793,13 @@ export default function App() {
   // track artwork as fallback). Vivified so quiet covers still produce a
   // visibly saturated tint.
   useEffect(() => {
-    if (!playingArtworkPath) { setPlayingTint(null); setPlayingPalette(null); return }
+    if (!playingArtworkPath) { setPlayingTint(null); setPlayingWash(null); setPlayingPalette(null); return }
     let cancelled = false
     const src = `crate://artwork/${encodeURIComponent(playingArtworkPath)}`
     void extractDominantColor(src).then(hex => {
-      if (!cancelled) setPlayingTint(vivify(hex))
+      if (cancelled) return
+      setPlayingTint(vivify(hex))
+      setPlayingWash(hex)
     })
     void extractPalette(src, 3).then(palette => {
       if (!cancelled) setPlayingPalette(palette)
@@ -825,7 +835,7 @@ export default function App() {
   // priority mirrors --bg-tint (viewed album → playing track), and each var
   // falls back to --bg-tint in CSS, so when this is cleared the surfaces that
   // read it degrade to the single-color look. The same palette drives the glass
-  // shell's --gl-p0/1/2 (window wash, tinted controls).
+  // shell's --gl-p1/2; the window wash (--gl-p0) has its own effect below.
   useEffect(() => {
     const root = document.documentElement
     const palette =
@@ -841,15 +851,29 @@ export default function App() {
       root.style.setProperty('--bg-pal-0', p0)
       root.style.setProperty('--bg-pal-1', p1)
       root.style.setProperty('--bg-pal-2', p2)
-      root.style.setProperty('--gl-p0', p0)
       root.style.setProperty('--gl-p1', p1)
       root.style.setProperty('--gl-p2', p2)
     } else {
-      for (const prop of ['--bg-pal-0', '--bg-pal-1', '--bg-pal-2', '--gl-p0', '--gl-p1', '--gl-p2']) {
+      for (const prop of ['--bg-pal-0', '--bg-pal-1', '--bg-pal-2', '--gl-p1', '--gl-p2']) {
         root.style.removeProperty(prop)
       }
     }
   }, [viewAlbum, albumPalette, nowTrack, tweak.playerTintSource, playingPalette, playerCurrentTint])
+
+  // Window backdrop wash (--gl-p0, behind the sidebar, the content and the
+  // dock): the artwork's dominant color as extracted, so the background
+  // matches the album instead of the vivified accent tint (the artist page's
+  // album sections use the same color via --gl-nw). Source priority mirrors
+  // the palette above.
+  useEffect(() => {
+    const root = document.documentElement
+    const wash =
+      viewAlbum ? albumWash
+      : (nowTrack && tweak.playerTintSource === 'artwork' && playingWash) ? playingWash
+      : playerCurrentTint
+    if (wash) root.style.setProperty('--gl-p0', wash)
+    else root.style.removeProperty('--gl-p0')
+  }, [viewAlbum, albumWash, nowTrack, tweak.playerTintSource, playingWash, playerCurrentTint])
 
   // Propagate --np-tint to :root so both the player pane and the lyrics side
   // pane share the same artwork-based tint. PlayerPane's own inline style
@@ -866,6 +890,13 @@ export default function App() {
       root.style.removeProperty('--gl-nt')
     }
   }, [playerCurrentTint])
+
+  // --gl-nw: the unvivified twin of --gl-nt, for the now-playing row outline.
+  useEffect(() => {
+    const root = document.documentElement
+    if (playerCurrentWash) root.style.setProperty('--gl-nw', playerCurrentWash)
+    else root.style.removeProperty('--gl-nw')
+  }, [playerCurrentWash])
 
   // Propagate the artwork palette (--np-pal-0/1/2) to :root so the immersive
   // player pane and lyrics side pane render the same animated color blobs as
@@ -917,6 +948,7 @@ export default function App() {
   useEffect(() => {
     if (!viewAlbum) {
       setAlbumTint(null)
+      setAlbumWash(null)
       setAlbumPalette(null)
       return
     }
@@ -930,6 +962,9 @@ export default function App() {
       ? vivify(viewAlbumFallbackTint)
       : ((nowTrack ? playerCurrentTint : null) ?? vivify(viewAlbumFallbackTint))
     setAlbumTint(fallback)
+    setAlbumWash(viewAlbumArtworkPath
+      ? viewAlbumFallbackTint
+      : ((nowTrack ? playerCurrentTint : null) ?? viewAlbumFallbackTint))
     // Synthetic palette placeholder (final value when there's no artwork); the
     // extracted palette overwrites it below once it resolves.
     setAlbumPalette(viewAlbum.palette.map(c => vivify(c) ?? c))
@@ -940,7 +975,9 @@ export default function App() {
     const src = `crate://artwork/${encodeURIComponent(viewAlbumArtworkPath)}`
     void extractDominantColor(src).then(hex => {
       const tint = vivify(hex)
-      if (!cancelled && tint) setAlbumTint(tint)
+      if (cancelled || !tint) return
+      setAlbumTint(tint)
+      setAlbumWash(hex)
     })
     void extractPalette(src, 3).then(pal => {
       if (!cancelled && pal) setAlbumPalette(pal.map(c => vivify(c) ?? c))
@@ -1139,15 +1176,14 @@ export default function App() {
   const dockWidth =
     (playerCardShown ? PLAYER_CARD_WIDTH : 0)
     + (lyricsCardShown ? lyricsSideWidth : 0)
-    + (playerCardShown && lyricsCardShown ? DOCK_GAP : 0)
   // The lyrics card sits left of the player card (or at the dock edge alone).
-  const lyricsCardRight = playerCardShown ? PLAYER_CARD_WIDTH + DOCK_GAP : 0
+  const lyricsCardRight = playerCardShown ? PLAYER_CARD_WIDTH : 0
   const shellStyle = {
     // The user's sidebar width. globals.css derives the effective --sb-w from
     // it, capped on narrow windows so the toolbar pill keeps its minimum width.
     '--gl-sb-pref': `${sidebarWidth}px`,
     '--gl-content-l': sidebarOpen ? `calc(var(--sb-w) + ${SIDEBAR_CONTENT_GAP}px)` : '0px',
-    '--gl-content-r': dockWidth > 0 ? `${dockWidth + DOCK_INSET + DOCK_GAP}px` : '0px',
+    '--gl-content-r': dockWidth > 0 ? `${dockWidth + DOCK_CONTENT_GAP}px` : '0px',
     '--gl-lyrics-r': `${lyricsCardRight}px`,
   } as CSSProperties
   const shellClassName = [

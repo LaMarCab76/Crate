@@ -351,9 +351,10 @@ function LyricsPanelContent({
   const showPlain = !showSynced && !!plainLines && (status === 'found_plain' || status === 'low_confidence')
   // The intro wait bar visually occupies the "active verse" slot, so when it's
   // visible we render one fewer upcoming line to keep the total count constant.
-  // The preview window only ever shows a single upcoming line, so it gets its
-  // own base instead of the flow default (which would otherwise expand to 28).
-  const baseLinesAfter = syncedWindow === 'preview' ? 1 : (focusLinesAfter ?? FLOW_LINES_AFTER)
+  // The preview window shows a single upcoming line unless the host asks for
+  // more (the player card does when it has room), so it gets its own base
+  // instead of the flow default (which would otherwise expand to 28).
+  const baseLinesAfter = syncedWindow === 'preview' ? (focusLinesAfter ?? 1) : (focusLinesAfter ?? FLOW_LINES_AFTER)
   const effectiveLinesAfter = waitRange != null ? Math.max(0, baseLinesAfter - 1) : baseLinesAfter
   const visibleLines = useMemo(
     () => showSynced && parsed ? visibleSyncedLines(parsed.lines, displayLineIndex, syncedWindow, effectiveLinesAfter) : [],

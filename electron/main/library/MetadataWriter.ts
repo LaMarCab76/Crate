@@ -1,5 +1,5 @@
 import { accessSync, constants as fsConstants, copyFileSync, existsSync } from 'node:fs'
-import { ByteVector, File, Picture, PictureType, type IPicture } from 'node-taglib-sharp'
+import { ByteVector, File, Picture, PictureType, TagTypes, XiphComment, type IPicture, type Tag } from 'node-taglib-sharp'
 import type { TrackMetadataUpdatePayload } from '@shared/types/ipc-contract'
 
 export interface MetadataArtworkPayload {
@@ -7,9 +7,29 @@ export interface MetadataArtworkPayload {
   mimeType: string
 }
 
+// Release-level identity of the album a track belongs to. Moving a track out of
+// a compilation must not drag the compilation along: its COMPILATION flag,
+// MusicBrainz release ids and album ReplayGain all describe the OLD album, and
+// the importer would copy them onto the new album row. For each id, a string
+// sets it, null clears it and undefined leaves the file untouched.
+export interface MetadataReleaseTags {
+  isCompilation: boolean
+  musicBrainzReleaseId?: string | null
+  musicBrainzReleaseGroupId?: string | null
+  musicBrainzReleaseArtistId?: string | null
+  musicBrainzReleaseType?: string | null
+  musicBrainzReleaseStatus?: string | null
+  musicBrainzReleaseCountry?: string | null
+  // The disc id is a CD TOC fingerprint of the old release; always stale.
+  clearMusicBrainzDiscId?: boolean
+  // Album gain/peak were measured over the old album.
+  clearAlbumReplayGain?: boolean
+}
+
 export interface MetadataWriteOptions {
   artwork?: MetadataArtworkPayload | null
   createBackup?: boolean
+  release?: MetadataReleaseTags | null
 }
 
 export interface MetadataWriteResult {
@@ -84,6 +104,47 @@ function hasTextPayload(payload: TrackMetadataUpdatePayload): boolean {
   return Object.values(payload).some(value => value !== undefined)
 }
 
+// taglib removes the frame/field when given undefined (its typings say string).
+function releaseText(value: string | null): string {
+  return (value?.trim() || undefined) as unknown as string
+}
+
+function xiphComments(file: File): XiphComment[] {
+  const tag: unknown = file.getTag(TagTypes.Xiph, false)
+  if (tag instanceof XiphComment) return [tag]
+  // Ogg containers group one comment per stream.
+  const grouped = (tag as { comments?: unknown } | null | undefined)?.comments
+  return Array.isArray(grouped) ? grouped.filter((comment): comment is XiphComment => comment instanceof XiphComment) : []
+}
+
+function applyReleaseTags(file: File, tag: Tag, release: MetadataReleaseTags): void {
+  tag.isCompilation = release.isCompilation
+  if (release.musicBrainzReleaseId !== undefined) tag.musicBrainzReleaseId = releaseText(release.musicBrainzReleaseId)
+  if (release.musicBrainzReleaseGroupId !== undefined) tag.musicBrainzReleaseGroupId = releaseText(release.musicBrainzReleaseGroupId)
+  if (release.musicBrainzReleaseArtistId !== undefined) tag.musicBrainzReleaseArtistId = releaseText(release.musicBrainzReleaseArtistId)
+  if (release.musicBrainzReleaseType !== undefined) tag.musicBrainzReleaseType = releaseText(release.musicBrainzReleaseType)
+  if (release.musicBrainzReleaseStatus !== undefined) tag.musicBrainzReleaseStatus = releaseText(release.musicBrainzReleaseStatus)
+  if (release.musicBrainzReleaseCountry !== undefined) tag.musicBrainzReleaseCountry = releaseText(release.musicBrainzReleaseCountry)
+  if (release.clearMusicBrainzDiscId) tag.musicBrainzDiscId = releaseText(null)
+  if (release.clearAlbumReplayGain) {
+    tag.replayGainAlbumGain = Number.NaN
+    tag.replayGainAlbumPeak = Number.NaN
+  }
+  // taglib writes Vorbis release type/status under the legacy
+  // MUSICBRAINZ_ALBUM* names, while Picard and our reader (music-metadata) use
+  // RELEASETYPE/RELEASESTATUS. Keep both in sync so a stale "compilation" type
+  // can't survive. The release-track id is per-release, so it always goes.
+  for (const comment of xiphComments(file)) {
+    if (release.musicBrainzReleaseType !== undefined) {
+      comment.setFieldAsStrings('RELEASETYPE', ...(release.musicBrainzReleaseType?.trim() ? [release.musicBrainzReleaseType.trim()] : []))
+    }
+    if (release.musicBrainzReleaseStatus !== undefined) {
+      comment.setFieldAsStrings('RELEASESTATUS', ...(release.musicBrainzReleaseStatus?.trim() ? [release.musicBrainzReleaseStatus.trim()] : []))
+    }
+    comment.removeField('MUSICBRAINZ_RELEASETRACKID')
+  }
+}
+
 export function writeTrackMetadata(
   filePath: string,
   payload: TrackMetadataUpdatePayload,
@@ -91,7 +152,7 @@ export function writeTrackMetadata(
 ): MetadataWriteResult {
   if (options.createBackup) ensureWritable(filePath)
 
-  const shouldMutate = hasTextPayload(payload) || options.artwork != null
+  const shouldMutate = hasTextPayload(payload) || options.artwork != null || options.release != null
   const backupPath = shouldMutate && options.createBackup ? backupOnce(filePath) : null
   const file = File.createFromPath(filePath)
   try {
@@ -134,6 +195,7 @@ export function writeTrackMetadata(
         ...existing.filter(picture => picture.type !== PictureType.FrontCover),
       ]
     }
+    if (options.release) applyReleaseTags(file, tag, options.release)
 
     if (shouldMutate) file.save()
   } finally {
