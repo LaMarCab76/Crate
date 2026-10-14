@@ -30,8 +30,8 @@ runtime. If a native module ever drifts after an Electron upgrade,
 Packaged builds check GitHub Releases for updates through `electron-updater`.
 The release workflow uploads installer artifacts plus `latest*.yml` metadata.
 Stable releases can be checked, downloaded, and installed from Preferences →
-Actualizaciones. Prereleases in this private repository are installed manually
-and are not offered by the in-app updater. Tag-triggered macOS prereleases use
+Actualizaciones. Prereleases are installed manually and are not offered by the in-app
+updater. Tag-triggered macOS prereleases use
 ad hoc signing; those builds require a Gatekeeper override and do not support
 automatic installation of updates. A manual workflow dispatch can still use
 Developer ID signing, notarization, stapling, and Gatekeeper validation when
@@ -261,15 +261,27 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
 
 ## License
 
-GPL-3.0-or-later. See `LICENSE`.
+Crate's source code is licensed under **GPL-3.0-or-later** (see `LICENSE`)
+with an additional permission, under GPL section 7, to combine and distribute
+it with the proprietary BASS audio library (see `LICENSE-BASS-EXCEPTION.md`).
+
+BASS itself is not open source and is not part of this repository: it is
+downloaded from un4seen.com by `npm run fetch:native` and is free for
+non-commercial use only. Distributing Crate, or a fork, as part of a
+commercial product requires a BASS license from un4seen developments. Other
+third-party components are listed in `THIRD_PARTY_NOTICES.md`.
 
 ## Acknowledgements
 
-Crate is a **rewrite of the original macOS-only SwiftUI app** of the same name,
-which was feature-rich (gapless, hi-res, hog mode, R128, FTS5 search) but slow
-to iterate on and locked to Apple platforms. The Electron rewrite keeps the
-same audiophile-grade BASS engine (previously bridged through CBass in Swift,
-now through koffi FFI in Node) while unlocking cross-platform builds, Vite
-HMR-driven UI iteration, and modern TypeScript tooling. Feature specs salvaged
-from the Swift codebase — like [`docs/lyrics-feature.md`](docs/lyrics-feature.md)
-— guide the parity work as Crate moves through its remaining phases.
+Crate started as a cross-platform rewrite of
+[HiFidelity](https://github.com/rvarunrathod/HiFidelity), the macOS-only
+SwiftUI audiophile player by Varun Rathod (published under Apache-2.0 at the
+time this project forked from it). HiFidelity was feature-rich (gapless,
+hi-res, hog mode, R128, FTS5 search) but locked to Apple platforms. Crate's
+Electron code base was written from scratch and this repository contains no
+Swift sources; what it keeps is the idea of an audiophile-grade BASS engine
+(previously bridged through CBass in Swift, now through koffi FFI in Node),
+unlocking cross-platform builds, Vite HMR-driven UI iteration, and modern
+TypeScript tooling. Feature notes like
+[`docs/lyrics-feature.md`](docs/lyrics-feature.md) guide the parity work as
+Crate moves through its remaining phases.
