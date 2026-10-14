@@ -58,7 +58,7 @@ function asRaw(value: unknown): LrclibRaw | null {
 
 // Privacy: only title/artist/album/duration are ever sent — never file paths.
 export class LrclibProvider {
-  private readonly userAgent = `Crate/${safeVersion()} (https://github.com/lautarocaballero/HiFidelity2)`
+  private readonly userAgent = `Crate/${safeVersion()} (https://github.com/LaMarCab76/Crate)`
   private active = 0
   private waiters: Array<() => void> = []
   private lastRequestAt = 0

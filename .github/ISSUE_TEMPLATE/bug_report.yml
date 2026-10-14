@@ -51,34 +51,33 @@ body:
     id: version
     attributes:
       label: Crate Version
-      description: Find this in Crate → About
-      placeholder: "e.g., 1.0.0"
+      description: The release you installed (for example from the installer name or the About window)
+      placeholder: "e.g., 0.6.6"
     validations:
       required: true
 
   - type: dropdown
-    id: macos
+    id: os
     attributes:
-      label: macOS Version
-      description: Crate requires macOS 14.0+
+      label: Operating System
       options:
-        - macOS 15 (Sequoia)
-        - macOS 14 (Sonoma)
+        - macOS
+        - Windows
+        - Linux
     validations:
       required: true
 
   - type: input
-    id: mac_model
+    id: os_version
     attributes:
-      label: Mac Model
-      description: What Mac are you using?
-      placeholder: "e.g., MacBook Pro M1 2021, Mac Studio M2 Max"
+      label: OS version and hardware
+      placeholder: "e.g., macOS 15.1 on MacBook Pro M1, Windows 11 23H2, Ubuntu 24.04"
 
   - type: textarea
     id: additional
     attributes:
       label: Additional Context
-      description: Any other relevant information (library size, file formats, etc.)
+      description: Any other relevant information (library size, file formats, audio device, etc.)
       placeholder: "Library has ~50,000 FLAC files, mostly 24-bit/96kHz"
 
   - type: textarea
@@ -86,13 +85,7 @@ body:
     attributes:
       label: Logs & Crash Reports
       description: |
-        **App Logs:**
-        - While running: Settings → About → Open App Data → Logs folder
-        - If crashed: `~/Library/Application Support/Crate/Logs/`
-
-        **Crash Reports (if app crashed):**
-        - Console.app → Crash Reports → Search for "Crate"
-        - Or: `~/Library/Logs/DiagnosticReports/Crate-*.crash`
-
-        Drag and drop log files here or paste relevant excerpts.
+        Paste any error shown by the app, the terminal output when running
+        `npm run dev`, or crash reports from your OS (macOS: Console.app →
+        Crash Reports; Windows: Event Viewer; Linux: `~/.config/Crate/`).
       render: shell

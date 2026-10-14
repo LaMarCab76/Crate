@@ -1029,7 +1029,7 @@ export class MetadataCompletionService {
   private userAgent(): string {
     let version = '0.0.0'
     try { version = app.getVersion() } catch { /* app may be unavailable in tests */ }
-    return `Crate/${version} (https://github.com/LaMarCab76/LocalLibrary)`
+    return `Crate/${version} (https://github.com/LaMarCab76/Crate)`
   }
 }
 

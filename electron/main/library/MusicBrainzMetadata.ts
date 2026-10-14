@@ -339,7 +339,7 @@ export function parseReleaseDetail(releaseJson: unknown): MusicBrainzReleaseDeta
 
 function userAgent(): string {
   const version = appVersion()
-  return `Crate/${version} (https://github.com/LaMarCab76/LocalLibrary)`
+  return `Crate/${version} (https://github.com/LaMarCab76/Crate)`
 }
 
 function appVersion(): string {

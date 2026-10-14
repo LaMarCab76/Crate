@@ -4,6 +4,14 @@
   "description": "Audiophile music library and player",
   "main": "out/main/index.js",
   "author": "Lautaro Caballero",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LaMarCab76/Crate.git"
+  },
+  "homepage": "https://github.com/LaMarCab76/Crate#readme",
+  "bugs": {
+    "url": "https://github.com/LaMarCab76/Crate/issues"
+  },
   "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {

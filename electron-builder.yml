@@ -11,7 +11,7 @@ electronUpdaterCompatibility: ">=2.16"
 publish:
   provider: github
   owner: LaMarCab76
-  repo: LocalLibrary
+  repo: Crate
 
 files:
   - out/**/*

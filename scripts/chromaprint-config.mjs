@@ -9,7 +9,7 @@ export const LGPL_2_1_SHA256 = 'f2f118b9029ec1871b953639ecc46651b2fc7b62e295e6cf
 // the toolchain revision in the tag lets us rebuild the same upstream version
 // without silently replacing an artifact that has already shipped.
 export const CHROMAPRINT_NATIVE_RELEASE = `chromaprint-native-v${CHROMAPRINT_VERSION}-1`
-export const CHROMAPRINT_NATIVE_REPOSITORY = 'LaMarCab76/LocalLibrary'
+export const CHROMAPRINT_NATIVE_REPOSITORY = 'LaMarCab76/Crate'
 
 export const CHROMAPRINT_MANIFEST = 'chromaprint-manifest.json'
 // This is also part of the portable ZIP layout, so keep it POSIX-normalized.
