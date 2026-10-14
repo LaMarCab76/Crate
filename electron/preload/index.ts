@@ -93,20 +93,6 @@ import type {
   LyricsView,
 } from '@shared/types/lyrics'
 import type {
-  DownloadJob,
-  DownloadJobsChangedEvent,
-  DownloadProvider,
-  DownloadProgressEvent,
-  DownloadSearchRequest,
-  DownloadSettings,
-  EnqueueDownloadRequest,
-  HarImportPreview,
-  OnlineTrackResult,
-  ProviderAuthState,
-  ProviderCredentialsPayload,
-  ServiceTutorialState,
-} from '@shared/types/downloads'
-import type {
   CloudAccountStatus,
   CloudFolderRef,
   CloudMoveProgressEvent,
@@ -447,48 +433,6 @@ const api: Api = {
     onVolumesChanged: (h) => subscribe<DeviceVolumeSnapshot>('devices:volumes-changed', h),
     onArtworkAnalyzeProgress: (h) =>
       subscribe<DeviceArtworkAnalysisProgressEvent>('devices:artwork-analyze:progress', h),
-  },
-  downloads: {
-    getSettings: () =>
-      ipcRenderer.invoke('downloads:settings:get') as Promise<DownloadSettings>,
-    setSettings: (patch: Partial<DownloadSettings>) =>
-      ipcRenderer.invoke('downloads:settings:set', patch) as Promise<DownloadSettings>,
-    getAuthState: (provider: DownloadProvider) =>
-      ipcRenderer.invoke('downloads:auth:get', provider) as Promise<ProviderAuthState>,
-    saveCredentials: (payload: ProviderCredentialsPayload) =>
-      ipcRenderer.invoke('downloads:credentials:save', payload) as Promise<void>,
-    clearCredentials: (provider: DownloadProvider) =>
-      ipcRenderer.invoke('downloads:credentials:clear', provider) as Promise<void>,
-    inspectHar: (provider: DownloadProvider, files: unknown[]) => {
-      const paths = files
-        .map(file => {
-          try {
-            return webUtils.getPathForFile(file as Parameters<typeof webUtils.getPathForFile>[0])
-          } catch {
-            return ''
-          }
-        })
-        .filter(path => path.trim().length > 0)
-      return ipcRenderer.invoke('downloads:har:inspect', provider, paths) as Promise<HarImportPreview>
-    },
-    applyHarImport: (provider: DownloadProvider, previewId: string) =>
-      ipcRenderer.invoke('downloads:har:apply', provider, previewId) as Promise<void>,
-    getTutorialState: () =>
-      ipcRenderer.invoke('downloads:tutorial:get') as Promise<ServiceTutorialState>,
-    setTutorialState: (patch: Partial<ServiceTutorialState>) =>
-      ipcRenderer.invoke('downloads:tutorial:set', patch) as Promise<ServiceTutorialState>,
-    search: (payload: DownloadSearchRequest) =>
-      ipcRenderer.invoke('downloads:search', payload) as Promise<OnlineTrackResult[]>,
-    enqueue: (payload: EnqueueDownloadRequest) =>
-      ipcRenderer.invoke('downloads:enqueue', payload) as Promise<DownloadJob[]>,
-    jobs: () =>
-      ipcRenderer.invoke('downloads:jobs') as Promise<DownloadJob[]>,
-    cancel: (jobId: string) =>
-      ipcRenderer.invoke('downloads:cancel', jobId) as Promise<void>,
-    retry: (jobId: string) =>
-      ipcRenderer.invoke('downloads:retry', jobId) as Promise<DownloadJob | null>,
-    onProgress: (h) => subscribe<DownloadProgressEvent>('downloads:progress', h),
-    onJobsChanged: (h) => subscribe<DownloadJobsChangedEvent>('downloads:jobs-changed', h),
   },
   cloud: {
     accountStatus: () =>

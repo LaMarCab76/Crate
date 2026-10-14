@@ -23,7 +23,6 @@ import { SearchView } from './views/SearchView'
 import { SettingsView, type PlaybackSubTab, type SettingsMainTab } from './views/SettingsView'
 import { ImportView } from './views/ImportView'
 import { GenresView } from './views/GenresView'
-import { DownloadsView } from './views/DownloadsView'
 import { DevicesView, type DeviceDashboardTab } from './views/DevicesView'
 import { DeviceSyncView, type DeviceSyncTab } from './views/DeviceSyncView'
 import { DeviceLibraryView, type DeviceLibrarySection } from './views/DeviceLibraryView'
@@ -55,7 +54,6 @@ export type View =
   | { kind: 'search' }
   | { kind: 'settings' }
   | { kind: 'import' }
-  | { kind: 'downloads' }
   | { kind: 'devices' }
   | { kind: 'device'; deviceId: string; section: 'dashboard' | 'sync' | DeviceLibrarySection }
   | { kind: 'album'; album: Album }
@@ -700,10 +698,6 @@ export default function App() {
       case 'open-lyrics-settings':
         openSettingsFromActivity('reproduccion', 'letras')
         break
-      case 'open-downloads':
-        navigate({ kind: 'downloads' })
-        finishActivityNavigation()
-        break
       case 'open-import':
         navigate({ kind: 'import' })
         finishActivityNavigation()
@@ -1139,8 +1133,6 @@ export default function App() {
         )
       case 'import':
         return <ImportView />
-      case 'downloads':
-        return <DownloadsView />
       case 'devices':
         return (
           <DevicesView

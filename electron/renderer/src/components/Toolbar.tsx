@@ -60,7 +60,6 @@ const titleMap: Record<View['kind'], string> = {
   search: 'Search',
   settings: 'Preferences',
   import: 'Library Sources',
-  downloads: 'Downloads',
   devices: 'Devices',
   device: 'Device',
   metadataFix: 'Completar metadatos',

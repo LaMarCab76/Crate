@@ -44,20 +44,6 @@ import type {
   RockboxThemeLibraryResult,
 } from './device-sync'
 import type {
-  DownloadJob,
-  DownloadJobsChangedEvent,
-  DownloadProvider,
-  DownloadProgressEvent,
-  DownloadSearchRequest,
-  DownloadSettings,
-  EnqueueDownloadRequest,
-  HarImportPreview,
-  OnlineTrackResult,
-  ProviderAuthState,
-  ProviderCredentialsPayload,
-  ServiceTutorialState,
-} from './downloads'
-import type {
   CloudAccountStatus,
   CloudFolderRef,
   CloudMoveProgressEvent,
@@ -898,26 +884,6 @@ export interface DevicesApi {
   onArtworkAnalyzeProgress(h: (e: DeviceArtworkAnalysisProgressEvent) => void): EventOff
 }
 
-export interface DownloadsApi {
-  getSettings(): Promise<DownloadSettings>
-  setSettings(patch: Partial<DownloadSettings>): Promise<DownloadSettings>
-  getAuthState(provider: DownloadProvider): Promise<ProviderAuthState>
-  saveCredentials(payload: ProviderCredentialsPayload): Promise<void>
-  clearCredentials(provider: DownloadProvider): Promise<void>
-  inspectHar(provider: DownloadProvider, files: unknown[]): Promise<HarImportPreview>
-  applyHarImport(provider: DownloadProvider, previewId: string): Promise<void>
-  getTutorialState(): Promise<ServiceTutorialState>
-  setTutorialState(patch: Partial<ServiceTutorialState>): Promise<ServiceTutorialState>
-  search(payload: DownloadSearchRequest): Promise<OnlineTrackResult[]>
-  enqueue(payload: EnqueueDownloadRequest): Promise<DownloadJob[]>
-  jobs(): Promise<DownloadJob[]>
-  cancel(jobId: string): Promise<void>
-  retry(jobId: string): Promise<DownloadJob | null>
-
-  onProgress(h: (e: DownloadProgressEvent) => void): EventOff
-  onJobsChanged(h: (e: DownloadJobsChangedEvent) => void): EventOff
-}
-
 export interface CloudApi {
   accountStatus(): Promise<CloudAccountStatus>
   connect(): Promise<CloudAccountStatus>
@@ -1056,7 +1022,6 @@ export interface Api {
   settings: SettingsApi
   lyrics: LyricsApi
   devices: DevicesApi
-  downloads: DownloadsApi
   cloud: CloudApi
   libraryLocations: LibraryLocationsApi
   libraryBackups: LibraryBackupsApi

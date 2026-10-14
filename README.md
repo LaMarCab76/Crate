@@ -51,17 +51,16 @@ the operating system's secure storage.
 
 ```
 electron/
-  main/         Electron main process (Node) — DB, audio, devices, downloads, IPC
+  main/         Electron main process (Node) — DB, audio, devices, IPC
     audio/        BASS FFI bindings, AudioEngine, GaplessController, EQ, CoreAudio hog mode
     db/           better-sqlite3 connection, migrator + 30 SQL migrations, repositories
     cloud/        OneDrive auth, Graph client, delta index, portable manifests
     library-mirror/ persistent local/cloud backup plans and journals
     library-migration/ relocate/merge planning, execution and recovery
     devices/      DAP detection, sync planner/journal, Rockbox theme scanner, artwork optimizer
-    downloads/    Qobuz + Tidal providers, HAR credential extractor, job manager
     library/      Folder watchers, reconciler, metadata extractor/writer, artwork cache
     lyrics/       LRClib + sidecar + embedded providers, .lrc sidecar writer
-    ipc/          typed channels for library, audio, lyrics, devices, downloads and updates
+    ipc/          typed channels for library, audio, lyrics, devices and updates
     services/     LibraryBackup (portable JSON mirror of the SQLite library)
   preload/      contextBridge that exposes the typed `window.api` to the renderer
   renderer/     React UI
@@ -70,9 +69,9 @@ electron/
                     FullScreenQueue, LyricsPanel, SpectrumVisualizer, EQBars,
                     TrackTable, ContextMenu, ModalShell, DeviceConnectModal…
       views/        Library, Albums, Album, Artists, Artist, Genres, Playlist,
-                    Search, Devices, DeviceLibrary, Downloads, Import, Settings
+                    Search, Devices, DeviceLibrary, Import, Settings
       stores/       Zustand stores: library, playback, queue, settings, EQ,
-                    devices, downloads, lyrics
+                    devices, lyrics
       utils/        FFT, levels, color extract, virtual rows, audio math
       styles/       globals.css
 shared/         Cross-process TypeScript: IPC contract, library/db/device types,
@@ -127,7 +126,7 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
 - **SQLite** schema (30 migrations) with **FTS5** search and triggers that keep
   the index fresh as tracks change, plus repositories per entity
   (tracks, albums, artists, genres, playlists, queues, folders, scan log,
-  playback analysis, download jobs, lyrics).
+  playback analysis, lyrics).
 - Optional **portable JSON backup** (`LibraryBackup`) that mirrors the SQLite
   library to disk and flushes before quit, so the library survives a wipe of
   the user-data directory.
@@ -138,7 +137,7 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
 - Dark + light themes, three densities (compact / regular / comfy), three list
   layouts (classic / editorial / dense).
 - Top-level views: **Library, Albums, Album, Artists, Artist, Genres, Playlist,
-  Search (FTS5), Devices, Device library, Downloads, Import, Settings**, with
+  Search (FTS5), Devices, Device library, Import, Settings**, with
   per-view list sort + filter prefs persisted via `ListPrefsMenu`.
 - Procedural SVG album artwork as a fallback (palette + seed + pattern), and a
   per-frame color extractor that tints the player from the current cover.
@@ -199,18 +198,6 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
   bidirectional sync, become a delete of the old device path plus a copy or
   replace at the new album path. Device-to-PC plans warn about pending local
   moves instead of forcing them from the device side.
-
-### Downloads
-- `DownloadManager` with provider plugins: **Qobuz** and **TIDAL**.
-- Search → enqueue → resolve → download → verify → tag → import pipeline,
-  with statuses surfaced per job (queued / authenticating / resolving /
-  downloading / verifying / tagging / importing / completed / failed /
-  cancelled / unavailable / already-exists) and retry / cancel actions.
-- Quality presets: **Best / Hi-Res / Lossless / MP3 320**.
-- **HAR credential extractor** (`HarCredentialExtractor`) plus a
-  `CredentialStore` — paste a browser HAR export, the extractor finds the
-  auth payload, and credentials live in the OS keychain instead of plain JSON.
-- `ServiceSetup` wizard + tutorial state for first-time provider linking.
 
 ### Settings
 - Library: folders, manual + scheduled scans, scan-log retention, portable

@@ -12,7 +12,6 @@ import type {
   DeviceVolumeSnapshot,
 } from '@shared/types/device-sync'
 import type { LyricsSelectionProgress } from '@shared/types/lyrics'
-import type { DownloadJob } from '@shared/types/downloads'
 import type { DuplicateAnalysisProgress, DuplicateSummary } from '@shared/types/duplicates'
 import type {
   FolderCleanupEvent,
@@ -20,7 +19,7 @@ import type {
   FolderCleanupProposalFolder,
 } from '@shared/types/folder-cleanup'
 
-export type ActivityCategory = 'devices' | 'lyrics' | 'library' | 'duplicates' | 'downloads' | 'updates'
+export type ActivityCategory = 'devices' | 'lyrics' | 'library' | 'duplicates' | 'updates'
 export type ActivityStatus = 'queued' | 'running' | 'waiting' | 'success' | 'warning' | 'error' | 'info'
 
 export type ActivityActionId =
@@ -31,7 +30,6 @@ export type ActivityActionId =
   | 'add-library'
   | 'ignore-volume'
   | 'open-lyrics-settings'
-  | 'open-downloads'
   | 'open-import'
   | 'open-updates'
   | 'open-duplicates'
@@ -53,7 +51,6 @@ export interface ActivityMetadata {
   rootPath?: string
   volumeName?: string
   folderId?: number
-  downloadJobId?: string
   updateStatus?: string
   folderCleanupId?: string
 }
@@ -147,21 +144,6 @@ const ARTWORK_PHASE_LABELS: Record<DeviceArtworkAnalysisProgressEvent['phase'], 
   complete: 'Artwork analizado',
 }
 
-const DOWNLOAD_STATUS_LABELS: Record<DownloadJob['status'], string> = {
-  queued: 'En cola',
-  authenticating: 'Autenticando',
-  resolving: 'Resolviendo',
-  downloading: 'Descargando',
-  verifying: 'Verificando',
-  tagging: 'Etiquetando',
-  importing: 'Importando',
-  completed: 'Completada',
-  failed: 'Fallida',
-  cancelled: 'Cancelada',
-  unavailable: 'No disponible',
-  already_exists: 'Ya existe',
-}
-
 function storageAvailable(): boolean {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined'
 }
@@ -241,8 +223,6 @@ export function primaryActivityActionIdFor(item: ActivityItem): ActivityActionId
       return 'open-lyrics-settings'
     case 'library-import':
       return 'open-import'
-    case 'download':
-      return 'open-downloads'
     case 'app-update':
       return 'open-updates'
     case 'duplicate-analysis':
@@ -656,33 +636,6 @@ export function activityFromUnknownVolume(volume: DeviceUnknownVolume): Activity
   }
 }
 
-export function activityFromDownloadJob(job: DownloadJob): ActivityUpsert {
-  const status: ActivityStatus =
-    job.status === 'queued' ? 'queued'
-      : job.status === 'completed' || job.status === 'already_exists' ? 'success'
-        : job.status === 'failed' ? 'error'
-          : job.status === 'cancelled' ? 'info'
-            : job.status === 'unavailable' ? 'warning'
-              : 'running'
-  const progress = job.bytesTotal && job.bytesTotal > 0
-    ? activityProgress(job.bytesReceived, job.bytesTotal)
-    : null
-  return {
-    id: `download:${job.id}`,
-    category: 'downloads',
-    status,
-    title: `Descarga: ${job.title}`,
-    detail: job.error || `${job.artist} · ${DOWNLOAD_STATUS_LABELS[job.status]}`,
-    progress,
-    metadata: {
-      activityKind: 'download',
-      downloadJobId: job.id,
-      provider: job.provider,
-    },
-    actionIds: ['open-downloads'],
-  }
-}
-
 export function activityFromAppUpdateState(state: AppUpdateState): ActivityUpsert | null {
   if (isNonActionableUpdateStatus(state.status)) return null
   const status: ActivityStatus =
@@ -1038,12 +991,6 @@ function initializeActivityCenterListeners(): void {
     useActivityCenterStore.getState().upsert(activityFromArtworkAnalysisProgress(event))
   })
   const offVolumes = window.api.devices.onVolumesChanged(recordVolumeSnapshot)
-  const offDownloadProgress = window.api.downloads.onProgress(({ job }) => {
-    useActivityCenterStore.getState().upsert(activityFromDownloadJob(job))
-  })
-  const offDownloadJobs = window.api.downloads.onJobsChanged(({ jobs }) => {
-    for (const job of jobs) useActivityCenterStore.getState().upsert(activityFromDownloadJob(job))
-  })
   const offUpdates = window.api.updates.onStateChanged(state => {
     recordUpdateState(state)
   })
@@ -1058,9 +1005,6 @@ function initializeActivityCenterListeners(): void {
   })
 
   void window.api.devices.volumes().then(recordVolumeSnapshot).catch(() => undefined)
-  void window.api.downloads.jobs().then(jobs => {
-    for (const job of jobs) useActivityCenterStore.getState().upsert(activityFromDownloadJob(job))
-  }).catch(() => undefined)
   void window.api.updates.getState().then(state => {
     recordUpdateState(state)
   }).catch(() => undefined)
@@ -1075,8 +1019,6 @@ function initializeActivityCenterListeners(): void {
     offSync,
     offArtwork,
     offVolumes,
-    offDownloadProgress,
-    offDownloadJobs,
     offUpdates,
     offDuplicatesChanged,
     offDuplicatesProgress,

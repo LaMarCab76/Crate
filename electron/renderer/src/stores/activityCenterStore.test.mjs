@@ -3,7 +3,6 @@ import { test } from 'node:test'
 import {
   ACTIVITY_MAX_ITEMS,
   activityActionIdsFor,
-  activityFromDownloadJob,
   activityFromAppUpdateState,
   activityFromDuplicateProgress,
   activityFromDuplicateSummary,
@@ -38,30 +37,6 @@ function baseActivity(id, status = 'running', updatedAt = 1000) {
     updatedAt,
     metadata: {},
     actionIds: [],
-  }
-}
-
-function downloadJob(status, overrides = {}) {
-  return {
-    id: 'job-1',
-    provider: 'qobuz',
-    providerTrackId: 'remote-1',
-    status,
-    quality: 'lossless',
-    folderId: null,
-    title: 'Track',
-    artist: 'Artist',
-    album: 'Album',
-    artworkUrl: null,
-    sourceUrl: null,
-    path: null,
-    error: null,
-    bytesReceived: 25,
-    bytesTotal: 100,
-    createdAt: 100,
-    updatedAt: 200,
-    completedAt: null,
-    ...overrides,
   }
 }
 
@@ -167,12 +142,6 @@ test('background duplicate summaries do not re-notify routine changes', () => {
     title: 'No se completó el análisis de duplicados',
     detail: '1 tema requiere un nuevo intento.',
   }), undefined, 'a new error remains unread and actionable')
-})
-
-test('maps download statuses to success, warning and error activity states', () => {
-  assert.equal(activityFromDownloadJob(downloadJob('completed')).status, 'success')
-  assert.equal(activityFromDownloadJob(downloadJob('unavailable')).status, 'warning')
-  assert.equal(activityFromDownloadJob(downloadJob('failed', { error: 'boom' })).status, 'error')
 })
 
 test('ignores non-actionable update states that would create constant GitHub activity', () => {
@@ -376,7 +345,6 @@ test('hydration removes legacy short-lived volume tokens', () => {
 
 test('primary activity actions navigate to the matching app section', () => {
   const unknownVolume = upsertActivityItem([], activityFromUnknownVolume({ rootPath: '/Volumes/DAP', name: 'DAP' }), 100)[0]
-  const download = upsertActivityItem([], activityFromDownloadJob(downloadJob('downloading')), 100)[0]
   const fallback = {
     ...baseActivity('custom', 'info', 100),
     category: 'library',
@@ -384,7 +352,6 @@ test('primary activity actions navigate to the matching app section', () => {
   }
 
   assert.equal(primaryActivityActionIdFor(unknownVolume), 'open-libraries')
-  assert.equal(primaryActivityActionIdFor(download), 'open-downloads')
   assert.equal(primaryActivityActionIdFor(fallback), 'open-import')
 })
 

@@ -29,7 +29,6 @@ const CATEGORY_LABELS: Record<ActivityCategory, string> = {
   lyrics: 'Letras',
   library: 'Biblioteca',
   duplicates: 'Duplicados',
-  downloads: 'Descargas',
   updates: 'Updates',
 }
 
@@ -38,7 +37,6 @@ const CATEGORY_ICONS: Record<ActivityCategory, IconName> = {
   lyrics: 'lyrics',
   library: 'folder',
   duplicates: 'duplicate',
-  downloads: 'download',
   updates: 'sync',
 }
 
@@ -60,7 +58,6 @@ const ACTION_LABELS: Record<ActivityActionId, { label: string; icon: IconName }>
   'add-library': { label: 'Biblioteca', icon: 'folder' },
   'ignore-volume': { label: 'Ignorar', icon: 'close' },
   'open-lyrics-settings': { label: 'Letras', icon: 'lyrics' },
-  'open-downloads': { label: 'Descargas', icon: 'download' },
   'open-import': { label: 'Fuentes', icon: 'folder' },
   'open-updates': { label: 'Updates', icon: 'sync' },
   'open-duplicates': { label: 'Revisar', icon: 'duplicate' },

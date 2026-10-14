@@ -1,5 +1,5 @@
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
-import { sanitizePathPart } from '../downloads/DownloadPaths.ts'
+import { sanitizePathPart } from './pathParts.ts'
 import { albumMoveFilename, type AlbumMoveDestinationPlan } from './trackAlbumMovePlanner.ts'
 
 // Destination planning for moving a track into an album that does NOT exist in

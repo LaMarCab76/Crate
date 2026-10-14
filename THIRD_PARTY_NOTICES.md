@@ -43,7 +43,6 @@ package ships its own license text under `node_modules/`.
 ## Online services
 
 Crate talks to MusicBrainz and the Cover Art Archive (metadata and artwork),
-LRCLIB (lyrics), Microsoft Graph (optional OneDrive libraries), GitHub
-Releases (updates and native assets) and, only with credentials you provide
-yourself, the Qobuz and TIDAL APIs (optional downloads). Use of those services
-is subject to their own terms.
+LRCLIB (lyrics), Microsoft Graph (optional OneDrive libraries) and GitHub
+Releases (updates and native assets). Use of those services is subject to
+their own terms.

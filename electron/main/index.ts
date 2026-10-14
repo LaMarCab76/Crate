@@ -7,7 +7,6 @@ import { registerLibraryChannel } from './ipc/library-channel'
 import { disposeGapless, registerAudioChannel } from './ipc/audio-channel'
 import { registerLyricsChannel } from './ipc/lyrics-channel'
 import { registerDevicesChannel } from './ipc/devices-channel'
-import { registerDownloadsChannel } from './ipc/downloads-channel'
 import { registerUpdatesChannel } from './ipc/updates-channel'
 import { registerCloudChannel } from './ipc/cloud-channel'
 import { disposeLibraryLocationsChannel, registerLibraryLocationsChannel } from './ipc/library-locations-channel'
@@ -26,7 +25,6 @@ import { getExclusiveModeManager } from './audio/ExclusiveModeManager'
 import { getLibraryBackup } from './services/LibraryBackup'
 import { getLibraryWorkerClient } from './workers/LibraryWorkerClient'
 import { getAppUpdateService } from './updates/AppUpdateService'
-import { getDownloadManager } from './downloads/DownloadManager'
 import { trustIpcWindow } from './ipc/secureIpc'
 import { getOneDriveLibraryService } from './cloud/OneDriveLibraryService'
 import { getCloudManifestService } from './cloud/CloudManifestService'
@@ -189,7 +187,6 @@ app.whenReady().then(async () => {
   registerAudioChannel()
   registerLyricsChannel()
   registerDevicesChannel()
-  registerDownloadsChannel()
   registerCloudChannel()
   registerLibraryLocationsChannel()
   registerLibraryMigrationsChannel()
@@ -206,9 +203,6 @@ app.whenReady().then(async () => {
   // interpret the now-missing file as an unrelated external removal.
   await getDuplicateResolutionService().recover()
   getAppUpdateService().startAutoCheck()
-  void getDownloadManager().start().catch(err => {
-    console.error('[downloads] startup recovery failed:', err)
-  })
 
   const cloud = getOneDriveLibraryService()
   unsubscribeCloudMirror = cloud.onSyncComplete(result => {
@@ -255,7 +249,6 @@ async function shutdownApplication(exitCode: number): Promise<void> {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.destroy()
   }
-  try { await getDownloadManager().dispose() } catch (err) { console.error('[downloads] dispose failed:', err) }
   try { await getOneDriveLibraryService().stopPolling() } catch { /* cloud service may not have initialized */ }
   try { unsubscribeCloudMirror?.() } catch { /* listener may not have initialized */ }
   unsubscribeCloudMirror = null
