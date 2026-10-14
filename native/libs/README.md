@@ -10,7 +10,10 @@ npm run verify:native -- --load
 
 The binaries are intentionally ignored by Git because of their size and
 license. The release workflow downloads the current platform set before
-`electron-builder` copies it into `Resources/native/libs`.
+`electron-builder` copies it into `Resources/native/libs`. `fetch:bass` also
+saves the license and readme texts of every BASS package under
+`licenses/bass/<name>/`; they ship with the binaries, and `verify:bass` fails
+without them.
 
 Crate requires BASS core, BASS_FX, and its complete decoder plugin set. Names
 are platform-specific:

@@ -11,6 +11,8 @@ export const EQ_BAND_LABELS = [
   '25', '40', '63', '100', '160', '250', '400', '630', '1k', '1.6k', '2.5k', '4k', '6.3k', '10k', '16k',
 ] as const
 
+// The legacy 10-band layout is derived from HiFidelity by Varun Rathod
+// (AudioEffectsManager.swift, Apache-2.0, see licenses/HiFidelity-Apache-2.0.txt).
 export const LEGACY_EQ_BAND_FREQUENCIES = [
   32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000,
 ] as const

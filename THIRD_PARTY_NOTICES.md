@@ -4,17 +4,55 @@ Crate is released under GPL-3.0-or-later with an additional permission for
 BASS (see `LICENSE` and `LICENSE-BASS-EXCEPTION.md`). It depends on the
 following third-party components, which keep their own licenses.
 
-## BASS audio library (proprietary)
+## HiFidelity (Apache-2.0)
 
-Playback, decoding and the equalizer use BASS, BASS_FX and the BASS decoder
-add-ons (FLAC, Opus, WebM, WavPack, APE, DSD, MIDI, HLS, Musepack, Speex, TTA)
-from un4seen developments: <https://www.un4seen.com/>.
+Crate began as a rewrite of [HiFidelity](https://github.com/rvarunrathod/HiFidelity),
+the macOS player by Varun Rathod. A few parts of Crate are derived from
+HiFidelity's code as it was published under the Apache License 2.0 (up to
+commit `8c6a8e1`, 2025-12-22), and were modified for Crate:
 
-BASS is **not** open source and is **not** included in this repository.
-`npm run fetch:native` downloads the binaries from un4seen.com into
-`native/libs/`, and release packages bundle them. Under the un4seen license
-BASS is free for non-commercial use only; shipping Crate, or a derivative, as
-part of a commercial product requires a BASS license from un4seen developments.
+- the database schema and FTS5 search triggers
+  (`electron/main/db/migrations/0001_initial.sql`, `0002_fts5.sql`), from
+  `DatabaseMigrator.swift` and `DatabaseInit.swift`;
+- the legacy 10-band equalizer layout (`shared/constants/equalizer.ts`), from
+  `AudioEffectsManager.swift`;
+- the set and order of BASS decoder plugins
+  (`electron/main/audio/PluginLoader.ts`), from `BASSAudioEngine.swift`.
+
+The Apache-2.0 text is in `licenses/HiFidelity-Apache-2.0.txt`. HiFidelity
+moved away from that license on 2025-12-25; nothing in Crate is based on its
+later versions. The README lists these inherited elements as work to redo.
+
+## BASS audio library and add-ons (proprietary)
+
+Playback, decoding and the equalizer use BASS and the add-ons below. None of
+them is open source, none is included in this repository, and each keeps the
+terms stated in its own package:
+
+| Component | Author | Terms |
+|---|---|---|
+| BASS | un4seen developments | Free for non-commercial use; commercial products need a BASS license |
+| BASSFLAC, BASSOPUS, BASSWEBM, BASSWV, BASSAPE, BASSDSD, BASSMIDI, BASSHLS | un4seen developments | Free to use with BASS |
+| BASS_FX | JOBnik! (Arthur Aminov) | Free; redistributable at no charge with its files unmodified; usable in commercial software with credit |
+| BASS_MPC | Sebastian Andersson | Free to use and distribute |
+| BASS_SPX | Sebastian Andersson | Free to use and distribute following the Speex (BSD) license |
+| BASS_TTA | Sebastian Andersson | Free to use and distribute following the LGPL |
+
+These binaries also contain code from other projects, credited in their texts:
+minimp3 and libogg/libvorbis (Xiph.Org Foundation) in BASS; libFLAC, libopus,
+nestegg (Mozilla Foundation), WavPack and the Monkey's Audio SDK in the
+official add-ons; SoundTouch (LGPL, Olli Parviainen), Freeverb and
+smbPitchShift in BASS_FX; Musepack, Speex and The True Audio library (LGPL)
+in the Sebastian Andersson add-ons. The LGPL sources are published upstream:
+SoundTouch at <https://www.surina.net/soundtouch> and TTA at
+<http://www.true-audio.com>.
+
+`npm run fetch:native` downloads the binaries from <https://www.un4seen.com/>
+into `native/libs/`, together with each package's license and readme text
+under `native/libs/licenses/bass/`. Release packages bundle both, and
+`npm run verify:native` fails if a text is missing. Shipping Crate, or a
+derivative, as part of a commercial product requires a BASS license from
+un4seen developments.
 
 ## Chromaprint (LGPL-2.1)
 

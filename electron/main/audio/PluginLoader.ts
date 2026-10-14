@@ -6,6 +6,8 @@ import { bassLibExtension, bassLibFileName, nativeLibsDir } from './bass-paths'
 
 // All BASS decoder plugins we want to enable. Bass core itself handles MP3,
 // MP4/AAC, WAV, AIFF, OGG Vorbis natively. The plugins below add the rest.
+// The set and its order are derived from HiFidelity by Varun Rathod
+// (BASSAudioEngine.swift, Apache-2.0, see licenses/HiFidelity-Apache-2.0.txt).
 const KNOWN_PLUGIN_BASES = [
   'bassflac',
   'bassopus',

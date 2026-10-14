@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -19,14 +19,20 @@ const TARGETS = {
   win32: { name: (base) => `${base}.dll`, magic: Buffer.from('MZ') },
 }
 
-async function fixture(platform, omitBase) {
+async function fixture(platform, { omitBase, omitNotice } = {}) {
   const directory = await mkdtemp(join(tmpdir(), `crate-bass-${platform}-`))
   const target = TARGETS[platform]
   for (const base of BASES) {
-    if (base === omitBase) continue
-    const bytes = Buffer.alloc(4096)
-    target.magic.copy(bytes)
-    await writeFile(join(directory, target.name(base)), bytes)
+    if (base !== omitBase) {
+      const bytes = Buffer.alloc(4096)
+      target.magic.copy(bytes)
+      await writeFile(join(directory, target.name(base)), bytes)
+    }
+    if (base !== omitNotice) {
+      const noticeDirectory = join(directory, 'licenses', 'bass', base)
+      await mkdir(noticeDirectory, { recursive: true })
+      await writeFile(join(noticeDirectory, `${base}.txt`), `${base} license\n`)
+    }
   }
   return directory
 }
@@ -51,11 +57,22 @@ for (const platform of Object.keys(TARGETS)) {
 }
 
 test('fails when a required decoder plugin is missing', async () => {
-  const directory = await fixture('linux', 'bassflac')
+  const directory = await fixture('linux', { omitBase: 'bassflac' })
   try {
     const result = verify('linux', directory)
     assert.equal(result.status, 1)
     assert.match(result.stderr, /libbassflac\.so/)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('fails when a BASS license text is missing', async () => {
+  const directory = await fixture('darwin', { omitNotice: 'bass_tta' })
+  try {
+    const result = verify('darwin', directory)
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, /licenses\/bass\/bass_tta has no license text/)
   } finally {
     await rm(directory, { recursive: true, force: true })
   }

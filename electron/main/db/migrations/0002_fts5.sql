@@ -1,5 +1,7 @@
 -- FTS5 virtual tables and sync triggers, mirroring the Swift implementation
 -- (DatabaseInit.swift:65-252).
+-- Derived from HiFidelity by Varun Rathod (Apache-2.0, see
+-- licenses/HiFidelity-Apache-2.0.txt) and modified for Crate.
 
 -- =============================================================================
 -- tracks_fts

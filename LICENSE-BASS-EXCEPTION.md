@@ -1,11 +1,13 @@
 # Additional permission under GNU GPL version 3 section 7
 
 Crate is licensed under the GNU General Public License, version 3 or (at your
-option) any later version (see `LICENSE`). Crate plays audio through BASS,
-BASS_FX and the BASS decoder add-ons published by un4seen developments
-("BASS"), which are proprietary libraries distributed under the terms at
-<https://www.un4seen.com/bass.html#license>. BASS is not part of this
-repository; `npm run fetch:native` downloads it separately.
+option) any later version (see `LICENSE`). Crate plays audio through the BASS
+audio library by un4seen developments together with BASS_FX and the BASS
+decoder add-ons distributed through <https://www.un4seen.com/>, including the
+add-ons written by third parties (BASS_FX, BASS_MPC, BASS_SPX and BASS_TTA).
+Together they are called "BASS" here. They are not open source and each is
+distributed under its own terms (see `THIRD_PARTY_NOTICES.md`). BASS is not
+part of this repository; `npm run fetch:native` downloads it separately.
 
 As a special exception, the copyright holders of Crate grant you additional
 permission under section 7 of the GNU GPL version 3:
@@ -22,5 +24,7 @@ the Program, but you are not obligated to do so. If you do not wish to do so,
 delete this exception statement from your version.
 
 This permission applies only to Crate's own code. It does not grant you any
-rights to BASS: BASS is free for non-commercial use only, and any commercial
-use or distribution requires a license from un4seen developments.
+rights to BASS, which you must get under BASS's own terms: the BASS core is
+free for non-commercial use, and using it in a commercial product requires a
+license from un4seen developments; each add-on has its own conditions, listed
+in `THIRD_PARTY_NOTICES.md`.

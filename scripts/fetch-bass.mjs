@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Download BASS core, BASS_FX, and the decoder plugins shipped by Crate from
-// un4seen.com, then extract the current platform binaries into native/libs.
-// Binaries are intentionally not committed; CI runs this before packaging.
+// un4seen.com, then extract the current platform binaries into native/libs and
+// each package's license/readme texts into native/libs/licenses/bass/<base>/.
+// Neither is committed; CI runs this before packaging, and the texts ship with
+// the binaries so installers carry the terms and credits of every add-on.
 
 import { existsSync } from 'node:fs'
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
@@ -12,9 +14,11 @@ import { inflateRawSync } from 'node:zlib'
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
 const OUT_DIR = join(SCRIPT_DIR, '..', 'native', 'libs')
+const NOTICES_DIR = join(OUT_DIR, 'licenses', 'bass')
 const BASE_URL = 'https://www.un4seen.com/files/'
 const MAX_ARCHIVE_BYTES = 128 * 1024 * 1024
 const MAX_LIBRARY_BYTES = 64 * 1024 * 1024
+const MAX_NOTICE_BYTES = 1024 * 1024
 
 function flag(name) {
   const hit = process.argv.slice(2).find((arg) => arg.startsWith(`${name}=`))
@@ -87,9 +91,9 @@ function readCentralDirectory(buffer) {
   return entries
 }
 
-function extractEntry(buffer, entry) {
-  if (entry.uncompressedSize > MAX_LIBRARY_BYTES) {
-    throw new Error(`Library is too large (${entry.uncompressedSize} bytes)`)
+function extractEntry(buffer, entry, maxBytes = MAX_LIBRARY_BYTES) {
+  if (entry.uncompressedSize > maxBytes) {
+    throw new Error(`Archive entry is too large (${entry.uncompressedSize} bytes)`)
   }
   const offset = entry.localOffset
   if (offset + 30 > buffer.length || buffer.readUInt32LE(offset) !== 0x04034b50) {
@@ -105,7 +109,7 @@ function extractEntry(buffer, entry) {
   const extracted = entry.method === 0
     ? Buffer.from(raw)
     : entry.method === 8
-      ? inflateRawSync(raw, { maxOutputLength: MAX_LIBRARY_BYTES })
+      ? inflateRawSync(raw, { maxOutputLength: maxBytes })
       : null
   if (!extracted) throw new Error(`Unsupported ZIP compression method ${entry.method}`)
   if (extracted.length !== entry.uncompressedSize) throw new Error('ZIP entry size mismatch')
@@ -138,6 +142,36 @@ function selectWindows(names, base) {
   }))
 }
 
+// Every un4seen package keeps its license, credits and history as .txt files at
+// the archive root (bass.txt, bass_fx.txt, readme.txt + lgpl.txt for BASS_TTA).
+function selectNotices(names) {
+  return names.filter((name) => /^[\w-][\w.-]*\.txt$/i.test(name))
+}
+
+async function writeFileAtomically(path, bytes) {
+  const temporaryPath = `${path}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporaryPath, bytes, { mode: 0o644, flag: 'wx' })
+    await rename(temporaryPath, path)
+  } finally {
+    await rm(temporaryPath, { force: true })
+  }
+}
+
+async function writeNotices(directory, files) {
+  const temporaryDirectory = `${directory}.${randomUUID()}.tmp`
+  try {
+    await mkdir(temporaryDirectory, { recursive: true })
+    for (const [name, bytes] of files) {
+      await writeFile(join(temporaryDirectory, name), bytes, { mode: 0o644, flag: 'wx' })
+    }
+    await rm(directory, { recursive: true, force: true })
+    await rename(temporaryDirectory, directory)
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true })
+  }
+}
+
 async function download(product) {
   const failures = []
   for (const prefix of product.prefixes) {
@@ -163,25 +197,33 @@ async function download(product) {
 async function fetchProduct(product) {
   const outputName = platformConfig.outputName(product.base)
   const outputPath = join(OUT_DIR, outputName)
-  if (!FORCE && existsSync(outputPath)) {
+  const noticesPath = join(NOTICES_DIR, product.base)
+  const keepLibrary = !FORCE && existsSync(outputPath)
+  const keepNotices = !FORCE && existsSync(noticesPath)
+  if (keepLibrary && keepNotices) {
     console.log(`[fetch-bass] skip ${outputName} (already present)`)
     return
   }
 
   const { url, bytes } = await download(product)
   const entries = readCentralDirectory(bytes)
-  const member = platformConfig.select([...entries.keys()], product.base)
-  if (!member) throw new Error(`No ${PLATFORM}/${ARCH} binary found in ${basename(url)}`)
+  const names = [...entries.keys()]
+  const notices = selectNotices(names)
+  if (notices.length === 0) throw new Error(`No license text found in ${basename(url)}`)
 
-  const library = extractEntry(bytes, entries.get(member))
-  const temporaryPath = `${outputPath}.${randomUUID()}.tmp`
-  try {
-    await writeFile(temporaryPath, library, { mode: 0o644, flag: 'wx' })
-    await rename(temporaryPath, outputPath)
-  } finally {
-    await rm(temporaryPath, { force: true })
+  if (!keepLibrary) {
+    const member = platformConfig.select(names, product.base)
+    if (!member) throw new Error(`No ${PLATFORM}/${ARCH} binary found in ${basename(url)}`)
+    const library = extractEntry(bytes, entries.get(member))
+    await writeFileAtomically(outputPath, library)
+    console.log(`[fetch-bass] wrote ${outputName} (${member}, ${library.length} bytes)`)
   }
-  console.log(`[fetch-bass] wrote ${outputName} (${member}, ${library.length} bytes)`)
+
+  if (!keepNotices) {
+    await mkdir(NOTICES_DIR, { recursive: true })
+    await writeNotices(noticesPath, notices.map((name) => [name, extractEntry(bytes, entries.get(name), MAX_NOTICE_BYTES)]))
+    console.log(`[fetch-bass] wrote licenses/bass/${product.base}/ (${notices.join(', ')})`)
+  }
 }
 
 async function main() {

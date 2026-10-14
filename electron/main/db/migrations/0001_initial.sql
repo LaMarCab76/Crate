@@ -1,5 +1,7 @@
 -- Initial Crate schema, mirroring the GRDB schema from the legacy Swift app.
 -- Squashes v1..v6 of the GRDB migrator into a single SQL file (clean slate).
+-- Derived from HiFidelity by Varun Rathod (DatabaseMigrator.swift, Apache-2.0,
+-- see licenses/HiFidelity-Apache-2.0.txt) and modified for Crate.
 
 -- =============================================================================
 -- 1. folders

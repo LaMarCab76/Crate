@@ -144,11 +144,12 @@ release/
 *.swp
 *.swo
 
-# BASS native libraries — fetched via scripts/fetch-bass.mjs or copied from
-# old_swift's Xcode build cache. Not committed because of size + license.
+# BASS native libraries and their license texts — fetched via
+# scripts/fetch-bass.mjs. Not committed because of size + license.
 native/libs/*.dylib
 native/libs/*.dll
 native/libs/*.so
+native/libs/licenses/bass/
 native/libs/chromaprint-manifest.json
 native/libs/licenses/chromaprint/chromaprint-*.tar.gz
 

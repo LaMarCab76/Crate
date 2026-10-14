@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Verify that every BASS binary Crate promises to ship exists, has the native
-// format expected for the target platform, and (with --load) can be opened and
+// format expected for the target platform, comes with the license text from its
+// un4seen package (licenses/bass/<base>/), and (with --load) can be opened and
 // queried through koffi without requiring an audio device.
 
 import { createRequire } from 'node:module'
@@ -97,18 +98,36 @@ async function verifyFile(path) {
   }
 }
 
+async function verifyNotices(directory, base) {
+  const noticeDirectory = join(directory, 'licenses', 'bass', base)
+  let names = []
+  try {
+    names = await readdir(noticeDirectory)
+  } catch {
+    // Reported below like an empty directory.
+  }
+  for (const name of names) {
+    if (!name.toLowerCase().endsWith('.txt')) continue
+    const stats = await lstat(join(noticeDirectory, name))
+    if (stats.isFile() && stats.size > 0) return
+  }
+  throw new Error(`${noticeDirectory} has no license text (run npm run fetch:bass)`)
+}
+
 async function verifyDirectory(directory) {
   const missing = []
   for (const base of REQUIRED_BASES) {
     const path = join(directory, platformConfig.fileName(base))
-    try {
-      await verifyFile(path)
-    } catch (error) {
-      missing.push(error instanceof Error ? error.message : String(error))
+    for (const check of [() => verifyFile(path), () => verifyNotices(directory, base)]) {
+      try {
+        await check()
+      } catch (error) {
+        missing.push(error instanceof Error ? error.message : String(error))
+      }
     }
   }
   if (missing.length > 0) throw new Error(missing.join('\n'))
-  console.log(`[verify-bass] ${directory}: ${REQUIRED_BASES.length} binaries present and valid`)
+  console.log(`[verify-bass] ${directory}: ${REQUIRED_BASES.length} binaries present and valid, with license texts`)
 }
 
 function formatVersion(value) {

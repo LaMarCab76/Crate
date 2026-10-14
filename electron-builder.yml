@@ -21,6 +21,12 @@ extraResources:
   - from: native/libs
     to: native/libs
     filter: ["**/*"]
+  - from: .
+    to: licenses
+    filter: [LICENSE, LICENSE-BASS-EXCEPTION.md, THIRD_PARTY_NOTICES.md]
+  - from: licenses
+    to: licenses
+    filter: ["**/*"]
 
 asarUnpack:
   - native/libs/**

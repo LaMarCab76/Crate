@@ -76,7 +76,9 @@ electron/
       styles/       globals.css
 shared/         Cross-process TypeScript: IPC contract, library/db/device types,
                 LRC parser, equalizer + device-sync constants
-native/libs/    BASS codecs plus the pinned Chromaprint duplicate-fingerprint library
+native/libs/    BASS codecs plus the pinned Chromaprint duplicate-fingerprint library,
+                with their license texts under native/libs/licenses/
+licenses/       Apache-2.0 text for the parts derived from HiFidelity
 electron-build/ App icon, entitlements, Electron rebuild scripts
 docs/           Release notes + feature specs (e.g. lyrics-feature.md)
 ```
@@ -216,9 +218,12 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
 - `electron-builder` targets: **DMG (x64 + arm64), NSIS (x64), AppImage, .deb**,
   with `native/libs/` shipped via `extraResources` + `asarUnpack` so BASS and
   Chromaprint load at runtime.
-- `fetch:native` downloads the platform-specific BASS set and the verified
-  Chromaprint package; `verify:native -- --load` validates formats,
-  architectures, provenance, dependencies and frozen native fingerprints.
+- `fetch:native` downloads the platform-specific BASS set, with each
+  package's license text, and the verified Chromaprint package;
+  `verify:native -- --load` validates formats, license texts, architectures,
+  provenance, dependencies and frozen native fingerprints.
+- Installers ship `LICENSE`, `LICENSE-BASS-EXCEPTION.md`,
+  `THIRD_PARTY_NOTICES.md` and `licenses/` under `Resources/licenses/`.
 - GitHub Releases publish configuration emits updater metadata
   (`latest-mac.yml`, `latest.yml`, `latest-linux.yml`) and macOS zip artifacts
   required by the updater.
@@ -255,20 +260,45 @@ it with the proprietary BASS audio library (see `LICENSE-BASS-EXCEPTION.md`).
 BASS itself is not open source and is not part of this repository: it is
 downloaded from un4seen.com by `npm run fetch:native` and is free for
 non-commercial use only. Distributing Crate, or a fork, as part of a
-commercial product requires a BASS license from un4seen developments. Other
-third-party components are listed in `THIRD_PARTY_NOTICES.md`.
+commercial product requires a BASS license from un4seen developments. The
+BASS add-ons have their own terms, and some of them are written by third
+parties. `THIRD_PARTY_NOTICES.md` lists them with every other third-party
+component.
+
+A few parts are derived from HiFidelity under the Apache License 2.0 (see
+`licenses/HiFidelity-Apache-2.0.txt` and the section below). Installers carry
+all of these texts under `Resources/licenses/` and
+`Resources/native/libs/licenses/`.
 
 ## Acknowledgements
 
 Crate started as a cross-platform rewrite of
 [HiFidelity](https://github.com/rvarunrathod/HiFidelity), the macOS-only
-SwiftUI audiophile player by Varun Rathod (published under Apache-2.0 at the
-time this project forked from it). HiFidelity was feature-rich (gapless,
-hi-res, hog mode, R128, FTS5 search) but locked to Apple platforms. Crate's
-Electron code base was written from scratch and this repository contains no
-Swift sources; what it keeps is the idea of an audiophile-grade BASS engine
-(previously bridged through CBass in Swift, now through koffi FFI in Node),
-unlocking cross-platform builds, Vite HMR-driven UI iteration, and modern
-TypeScript tooling. Feature notes like
-[`docs/lyrics-feature.md`](docs/lyrics-feature.md) guide the parity work as
-Crate moves through its remaining phases.
+SwiftUI audiophile player by Varun Rathod. HiFidelity was feature-rich
+(gapless, hi-res, hog mode, R128, FTS5 search) but locked to Apple platforms.
+Most of Crate's Electron code base was written anew, and this repository
+contains no Swift sources. Some parts, though, were taken from HiFidelity's
+code while it was published under Apache-2.0, and are listed below. HiFidelity
+moved to "all rights reserved" on 2025-12-25. Its audio and database code last
+changed on 2025-12-22, and nothing in Crate is based on its later versions.
+Feature notes like [`docs/lyrics-feature.md`](docs/lyrics-feature.md) guide
+the parity work as Crate moves through its remaining phases.
+
+### Inherited from HiFidelity — to be corrected
+
+The base of Crate's audio engine comes from HiFidelity. HiFidelity bridged
+BASS through CBass in Swift; Crate does it through koffi FFI in Node. The
+table lists what was carried over, how close it stays to the original, and
+what is left to rework. "Derived" parts come from HiFidelity's Apache-2.0
+code and carry an attribution notice in the file. "Idea only" parts reuse a
+design, not the code.
+
+| Area | Crate files | HiFidelity origin | Relation | To correct |
+|---|---|---|---|---|
+| Engine base: BASS + decoder plugin set | `electron/main/audio/PluginLoader.ts`, `scripts/fetch-bass.mjs` | `BASSAudioEngine.swift` (`loadPlugins`) | Derived: same 11 plugins in the same order. The first BASS binaries were copied from HiFidelity's build | Build Crate's own plugin list. Longer term, evaluate an open-source engine to replace proprietary BASS |
+| BASS add-ons with LGPL code inside | `native/libs/` (BASS_FX → SoundTouch, BASS_TTA → TTA) | Same add-on set | Inherited dependency | Closed binaries embedding LGPL code. Replace them, or drop TTA support, to remove the dependency |
+| 10-band equalizer layout | `shared/constants/equalizer.ts` (`LEGACY_EQ_BAND_FREQUENCIES`), presets in `electron/main/audio/EQManager.ts` | `AudioEffectsManager.swift` | Derived: same 10 centre frequencies, originally with the same 1-octave bandwidth. Filters and presets are Crate's own | Replace with Crate's own layout and re-define the presets on it |
+| Output-device switching | `AudioEngine.setOutputDevice`, `GaplessController.movePreloadedToOutputDevice` | `BASSAudioEngine.swift` | Idea only: same sequence of BASS calls, which is also the standard BASS recipe | Review and document as Crate's own design |
+| Exclusive (hog) mode and gapless playback | `electron/main/audio/ExclusiveModeManager.ts`, `GaplessController.ts` | `DACManager.swift`, `PlaybackController+Gapless.swift` | Idea only: different implementation, triggers and thresholds | None needed for the code. Only the design lineage is noted |
+| Database schema and FTS5 search | `electron/main/db/migrations/0001_initial.sql`, `0002_fts5.sql` | `DatabaseMigrator.swift`, `DatabaseInit.swift` | Derived: ported from HiFidelity's GRDB schema | Supersede the inherited tables and triggers with Crate's own migrations |
+| Playback queue | `electron/renderer/src/stores/queueStore.ts` | `PlaybackController+Queue.swift` | Idea only: the header still names the Swift file, but the implementation is independent | Remove the reference to the Swift code |
