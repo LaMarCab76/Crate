@@ -876,6 +876,9 @@ function TrackAlbumMoveModal({ track, onClose }: { track: Track; onClose: () => 
                   <Field label="Total discos" value={manualDraft.totalDiscs} onChange={setManualField('totalDiscs')} type="number" />
                 </div>
                 <div className="album-move-manual-actions">
+                  {(!manualDraft.title.trim() || !manualDraft.albumArtist.trim()) && (
+                    <span className="modal-muted">Completá el álbum y el album artist para calcular.</span>
+                  )}
                   <button type="submit" className="btn" disabled={!manualDraft.title.trim() || !manualDraft.albumArtist.trim()}>
                     {manualAlbum ? 'Recalcular' : 'Calcular'}
                   </button>

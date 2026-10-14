@@ -14,6 +14,11 @@ import type {
 import type { LyricsSelectionProgress } from '@shared/types/lyrics'
 import type { DownloadJob } from '@shared/types/downloads'
 import type { DuplicateAnalysisProgress, DuplicateSummary } from '@shared/types/duplicates'
+import type {
+  FolderCleanupEvent,
+  FolderCleanupProposal,
+  FolderCleanupProposalFolder,
+} from '@shared/types/folder-cleanup'
 
 export type ActivityCategory = 'devices' | 'lyrics' | 'library' | 'duplicates' | 'downloads' | 'updates'
 export type ActivityStatus = 'queued' | 'running' | 'waiting' | 'success' | 'warning' | 'error' | 'info'
@@ -30,6 +35,8 @@ export type ActivityActionId =
   | 'open-import'
   | 'open-updates'
   | 'open-duplicates'
+  | 'confirm-folder-cleanup'
+  | 'keep-folder-cleanup'
 
 export interface ActivityProgress {
   completed: number
@@ -48,6 +55,7 @@ export interface ActivityMetadata {
   folderId?: number
   downloadJobId?: string
   updateStatus?: string
+  folderCleanupId?: string
 }
 
 export interface ActivityItem {
@@ -240,6 +248,11 @@ export function primaryActivityActionIdFor(item: ActivityItem): ActivityActionId
     case 'duplicate-analysis':
     case 'duplicate-candidates':
       return 'open-duplicates'
+    case 'folder-cleanup-proposal':
+    case 'folder-cleanup-removed':
+    case 'device-trash-purge':
+      // Deleting must be an explicit button press, never a row click.
+      return null
     default:
       return item.actionIds.find(actionId => actionId.startsWith('open-')) ?? item.actionIds[0] ?? null
   }
@@ -697,6 +710,153 @@ export function activityFromAppUpdateState(state: AppUpdateState): ActivityUpser
   }
 }
 
+const FOLDER_CLEANUP_DETAIL_LIMIT = 3
+
+function folderList(paths: readonly string[]): string {
+  const shown = paths.slice(0, FOLDER_CLEANUP_DETAIL_LIMIT).join(', ')
+  const extra = paths.length - FOLDER_CLEANUP_DETAIL_LIMIT
+  return extra > 0 ? `${shown} y ${extra} más` : shown
+}
+
+function countLabel(count: number, one: string, many: string): string {
+  return `${count.toLocaleString()} ${count === 1 ? one : many}`
+}
+
+function remainingFilesLabel(folder: FolderCleanupProposalFolder): string {
+  const parts: string[] = []
+  if (folder.images.length > 0) parts.push(countLabel(folder.images.length, 'imagen', 'imágenes'))
+  if (folder.playlists.length > 0) parts.push(countLabel(folder.playlists.length, 'playlist', 'playlists'))
+  if (folder.lyrics.length > 0) parts.push(countLabel(folder.lyrics.length, 'letra', 'letras'))
+  if (folder.otherCount > 0) parts.push(countLabel(folder.otherCount, 'archivo más', 'archivos más'))
+  return parts.join(', ')
+}
+
+function formatTrashBytes(bytes: number): string {
+  const mb = bytes / 1024 / 1024
+  if (mb < 1) return `${Math.max(1, Math.round(bytes / 1024))} KB`
+  if (mb < 1024) return `${mb >= 10 ? Math.round(mb) : mb.toFixed(1)} MB`
+  const gb = mb / 1024
+  return `${gb >= 10 ? Math.round(gb) : gb.toFixed(1)} GB`
+}
+
+export function folderCleanupActivityId(proposalId: string): string {
+  return `folder-cleanup:${proposalId}`
+}
+
+export function activityFromFolderCleanupProposal(proposal: FolderCleanupProposal): ActivityUpsert {
+  const folders = proposal.folders
+  const where = proposal.scope === 'device' ? `En ${proposal.rootLabel}` : proposal.rootLabel
+  const detail = folders.length === 1
+    ? `${where} · ${folders[0].relativePath} ya no tiene canciones, pero quedan ${remainingFilesLabel(folders[0])}. ¿Borrar la carpeta?`
+    : `${where} · ${folderList(folders.map(folder => folder.relativePath))} ya no tienen canciones, pero quedan imágenes, playlists o letras. ¿Borrar las carpetas?`
+  return {
+    id: folderCleanupActivityId(proposal.id),
+    category: proposal.scope === 'device' ? 'devices' : 'library',
+    status: 'warning',
+    title: folders.length === 1 ? 'Carpeta sin canciones' : `${folders.length} carpetas sin canciones`,
+    detail,
+    progress: null,
+    metadata: {
+      activityKind: 'folder-cleanup-proposal',
+      folderCleanupId: proposal.id,
+      deviceId: proposal.deviceId ?? undefined,
+      folderId: proposal.folderId ?? undefined,
+    },
+    actionIds: ['confirm-folder-cleanup', 'keep-folder-cleanup'],
+  }
+}
+
+export function activityFromFolderCleanupEvent(event: FolderCleanupEvent): ActivityUpsert {
+  switch (event.kind) {
+    case 'proposed':
+      return activityFromFolderCleanupProposal(event.proposal)
+    case 'removed': {
+      const where = event.scope === 'device' ? `En ${event.rootLabel}` : event.rootLabel
+      return {
+        id: `folder-cleanup-removed:${event.id}`,
+        category: event.scope === 'device' ? 'devices' : 'library',
+        status: 'success',
+        title: event.folders.length === 1
+          ? 'Carpeta vacía borrada'
+          : `${event.folders.length} carpetas vacías borradas`,
+        detail: `${where} · ${folderList(event.folders)}`,
+        progress: null,
+        metadata: {
+          activityKind: 'folder-cleanup-removed',
+          deviceId: event.deviceId ?? undefined,
+          folderId: event.folderId ?? undefined,
+        },
+        actionIds: [],
+      }
+    }
+    case 'resolved':
+      return {
+        id: folderCleanupActivityId(event.proposalId),
+        category: event.scope === 'device' ? 'devices' : 'library',
+        status: event.resolution === 'deleted' ? 'success' : event.resolution === 'partial' ? 'warning' : 'info',
+        title: event.resolution === 'deleted'
+          ? 'Carpetas borradas'
+          : event.resolution === 'partial'
+            ? 'Carpetas borradas en parte'
+            : event.resolution === 'expired' ? 'Consulta vencida' : 'Carpetas conservadas',
+        detail: event.message,
+        progress: null,
+        metadata: { activityKind: 'folder-cleanup-proposal', folderCleanupId: event.proposalId },
+        actionIds: [],
+      }
+    case 'device-trash-purged':
+      return {
+        id: `device-trash-purge:${event.id}`,
+        category: 'devices',
+        status: 'success',
+        title: 'Papelera del dispositivo vaciada',
+        detail: `${event.deviceName} · Se borraron definitivamente ${countLabel(event.files, 'archivo', 'archivos')} (${formatTrashBytes(event.bytes)}) que llevaban más de ${event.retentionDays} días en la papelera.`,
+        progress: null,
+        metadata: { activityKind: 'device-trash-purge', deviceId: event.deviceId },
+        actionIds: [],
+      }
+  }
+}
+
+/**
+ * Aligns persisted proposal activities with the proposals main still holds:
+ * questions answered or expired while the app was closed lose their buttons,
+ * and pending ones missing from the history are added back.
+ */
+export function reconcileFolderCleanupActivities(
+  items: ActivityItem[],
+  pending: readonly FolderCleanupProposal[],
+  now = Date.now(),
+): ActivityItem[] {
+  const pendingIds = new Set(pending.map(proposal => proposal.id))
+  let next = items.map(item => {
+    if (item.metadata.activityKind !== 'folder-cleanup-proposal' || item.actionIds.length === 0) return item
+    const id = item.metadata.folderCleanupId
+    if (typeof id === 'string' && pendingIds.has(id)) return item
+    return {
+      ...item,
+      status: 'info' as ActivityStatus,
+      title: 'Consulta vencida',
+      detail: 'Esta consulta ya no está disponible; no se borró nada.',
+      actionIds: [],
+      updatedAt: now,
+    }
+  })
+  for (const proposal of pending) {
+    if (next.some(item => item.id === folderCleanupActivityId(proposal.id))) continue
+    next = upsertActivityItem(next, activityFromFolderCleanupProposal(proposal), Date.parse(proposal.createdAt) || now)
+  }
+  return pruneActivityItems(next)
+}
+
+function recordFolderCleanupPending(pending: FolderCleanupProposal[]): void {
+  useActivityCenterStore.setState(state => {
+    const items = reconcileFolderCleanupActivities(state.items, pending)
+    persistActivityCenterState({ items, pinned: state.pinned })
+    return { items }
+  })
+}
+
 function recordUpdateState(state: AppUpdateState): void {
   const activity = activityFromAppUpdateState(state)
   if (activity) {
@@ -893,6 +1053,9 @@ function initializeActivityCenterListeners(): void {
       useActivityCenterStore.getState().upsert(activityFromDuplicateProgress(event))
     }
   })
+  const offFolderCleanup = window.api.folderCleanup.onEvent(event => {
+    useActivityCenterStore.getState().upsert(activityFromFolderCleanupEvent(event))
+  })
 
   void window.api.devices.volumes().then(recordVolumeSnapshot).catch(() => undefined)
   void window.api.downloads.jobs().then(jobs => {
@@ -902,6 +1065,7 @@ function initializeActivityCenterListeners(): void {
     recordUpdateState(state)
   }).catch(() => undefined)
   refreshDuplicateActivity()
+  void window.api.folderCleanup.pending().then(recordFolderCleanupPending).catch(() => undefined)
 
   activityListenerCleanups = [
     offImportProgress,
@@ -916,6 +1080,7 @@ function initializeActivityCenterListeners(): void {
     offUpdates,
     offDuplicatesChanged,
     offDuplicatesProgress,
+    offFolderCleanup,
   ]
 }
 

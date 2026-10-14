@@ -12,6 +12,7 @@ import { getMetadataCompletionService } from '../library/MetadataCompletionServi
 import { getTrackAlbumMoveService } from '../library/TrackAlbumMoveService'
 import { resolveAlbumFromFolderHints } from '../library/albumFolderHints'
 import { trashTrackBatch } from '../library/TrackTrashBatch'
+import { getFolderCleanupService } from '../folder-cleanup/FolderCleanupService'
 import { writeTrackMetadata } from '../library/MetadataWriter'
 import { getLibraryBackup } from '../services/LibraryBackup'
 import { getCloudManifestService } from '../cloud/CloudManifestService'
@@ -440,6 +441,14 @@ export function registerLibraryChannel(): void {
       sidecarExists: existsSync,
       onSidecarError: (path, error) => {
         console.warn(`[track-trash] failed to trash sidecar ${path}:`, error instanceof Error ? error.message : String(error))
+      },
+      cleanupEmptyFolders: (rootPath, deletedPaths) => getFolderCleanupService().cleanupLocalAfterDeletion({
+        rootPath,
+        deletedPaths,
+        origin: 'track-trash',
+      }),
+      onCleanupError: (rootPath, error) => {
+        console.warn(`[track-trash] empty folder cleanup failed in ${rootPath}:`, error instanceof Error ? error.message : String(error))
       },
     })
 

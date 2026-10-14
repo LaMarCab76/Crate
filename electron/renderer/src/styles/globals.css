@@ -5692,7 +5692,9 @@ button:disabled { cursor: not-allowed; }
 }
 .album-move-manual-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 10px;
 }
 .album-move-newalbum {
   display: grid;

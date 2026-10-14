@@ -22,6 +22,7 @@ import {
 import { broadcast } from '../ipc/events'
 import { getLyricsIndexService } from '../lyrics/LyricsIndexService'
 import { getLocalFileAccessService } from '../security/localFileAccessRuntime'
+import { getFolderCleanupService } from '../folder-cleanup/FolderCleanupService'
 import { getLibraryBackup } from '../services/LibraryBackup'
 import { getDuplicateDecisionPortableService } from './DuplicateDecisionPortableService'
 import { sourceSignature } from './fingerprint'
@@ -372,6 +373,11 @@ export class DuplicateResolutionService {
             sidecarWarning = `El audio se envió a la Papelera, pero no se pudo mover ${lrc}: ${errorMessage(error)}`
           }
         }
+        await getFolderCleanupService().cleanupLocalAfterDeletion({
+          rootPath: snapshot.folder.path,
+          deletedPaths: [path],
+          origin: 'duplicates',
+        })
         return { provider: 'local', locator: path, completedAt: new Date().toISOString(), sidecarWarning }
       },
       { owner, retryOnce: false },

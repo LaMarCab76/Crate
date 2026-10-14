@@ -147,3 +147,41 @@ test('DeviceSyncService never deletes or deindexes OneDrive sources', () => {
   assert.ok(deletePath.indexOf("provider === 'onedrive'") < deletePath.indexOf('shell.trashItem'))
   assert.ok(deletePath.indexOf("provider === 'onedrive'") < deletePath.indexOf('repos.tracks.deleteByPath'))
 })
+
+test('DeviceSyncService cleans up emptied folders after the whole action loop', () => {
+  const execute = serviceSource.slice(
+    serviceSource.indexOf('private async executeJournal('),
+    serviceSource.indexOf('private async executeSyncJournalActions('),
+  )
+  const actions = execute.indexOf('await this.executeSyncJournalActions(')
+  const cleanup = execute.indexOf('await this.cleanupFoldersAfterSyncDeletes(')
+  const state = execute.indexOf('await this.writeSuccessfulState(')
+  assert.ok(actions >= 0 && cleanup > actions, 'cleanup must run after every action, not per action')
+  assert.ok(state > cleanup, 'the device state is written after the folders are cleaned up')
+
+  const cleanupBody = serviceSource.slice(
+    serviceSource.indexOf('private async cleanupFoldersAfterSyncDeletes('),
+    serviceSource.indexOf('private async purgeExpiredTrash('),
+  )
+  assert.match(cleanupBody, /step\.status === 'completed'/, 'uses completed journal steps so resumed syncs clean up too')
+  assert.match(cleanupBody, /step\.kind === 'delete_device'/)
+  assert.match(cleanupBody, /step\.kind !== 'delete_pc'/)
+})
+
+test('DeviceSyncService purges the expired device trash before checking capacity', () => {
+  for (const marker of ['async applySync(', 'async resumeJournal(']) {
+    const body = serviceSource.slice(serviceSource.indexOf(marker), serviceSource.indexOf(marker) + 2500)
+    const purge = body.indexOf('await this.purgeExpiredTrash(row)')
+    const capacity = body.indexOf('await this.assertPlanCapacity(')
+    assert.ok(purge >= 0 && capacity > purge, `${marker} must purge before the capacity check`)
+  }
+})
+
+test('DeviceSyncService records every device trash move in the batch log', () => {
+  const move = serviceSource.slice(
+    serviceSource.indexOf('private async moveDeviceFileToTrash('),
+    serviceSource.indexOf('private deviceTrashRoot('),
+  )
+  assert.match(move, /await rename\(source, destination\)\s+await trash\.record\(relPath, 'sync-delete'\)/)
+  assert.match(move, /await rename\(sourceSidecar, destinationSidecar\)\s+await trash\.record\(/)
+})

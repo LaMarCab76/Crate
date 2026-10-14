@@ -74,6 +74,7 @@ import { sanitizeLegacyDeviceSyncJournal } from './deviceSyncJournalSanitizer'
 import {
   canJoinActiveDeviceScan,
   collectDeviceAudioFiles,
+  DEVICE_AUDIO_EXTENSIONS,
   DEVICE_SCAN_METADATA_CONCURRENCY,
   scanDeviceAudioTree,
   type DeviceScanRequestIdentity,
@@ -86,6 +87,17 @@ import { resolveCloudLoadOptions } from '../cloud/cloudTrackRef'
 import { cloudDeviceRelativePath } from './cloudDeviceRelativePath'
 import { withCloudSourceTempFile } from './cloudSourceTempFile'
 import { requireRegisteredLocalLibraryPath } from './pcTargetLibrary'
+import { DEVICE_TRASH_RETENTION_DAYS, DeviceTrashBatch, purgeExpiredDeviceTrash } from './deviceTrash'
+import {
+  confirmFolderRemoval,
+  folderRecoverableFiles,
+  pruneEmptyFolders,
+  removeJunkAndEmptyDirectories,
+  type ConfirmFolderRemovalResult,
+  type FolderRemover,
+} from '../folder-cleanup/emptyFolders'
+import { getFolderCleanupService } from '../folder-cleanup/FolderCleanupService'
+import type { FolderCleanupProposal } from '@shared/types/folder-cleanup'
 import { computerTerms, desktopPlatform } from '@shared/utils/computerTerms'
 import type { DbTrack } from '@shared/types/db'
 import type { PickFolderResult } from '@shared/types/ipc-contract'
@@ -1779,6 +1791,7 @@ export class DeviceSyncService {
       if (resolve(cached.deviceRoot) !== resolve(row.root_path)) {
         throw new Error('Device mount path changed after planning. Create a new sync plan.')
       }
+      await this.purgeExpiredTrash(row)
       const executablePlan = this.planForSelection(validatedPlan, selection, deviceMusicRoot)
       await this.assertPlanCapacity(row, executablePlan)
       const writeCompleteState = this.selectionCoversPlan(plan, selection)
@@ -1829,6 +1842,7 @@ export class DeviceSyncService {
       const row = await this.requireDevice(deviceId)
       await this.assertDeviceIdentity(row)
       const deviceMusicRoot = this.deviceMusicRoot(row)
+      await this.purgeExpiredTrash(row)
       const journal = await this.rebuildJournalForResume(found.journal, row)
       await this.assertPlanCapacity(row, journal.plan)
       journal.status = 'running'
@@ -2169,6 +2183,7 @@ export class DeviceSyncService {
     deviceFilesHint?: string[],
   ): Promise<DeviceSyncApplyResult> {
     const affectedPcFolderIds = new Set<number>()
+    const trash = new DeviceTrashBatch(this.deviceTrashRoot(deviceRoot), journal.runId)
     try {
       const copiedIntoPcTarget = await this.executeSyncJournalActions(
         plan,
@@ -2181,8 +2196,13 @@ export class DeviceSyncService {
           runId: journal.runId,
           affectedPcFolderIds,
           artworkMaxEdge: row.artwork_max_edge,
+          trash,
         },
       )
+      await this.cleanupFoldersAfterSyncDeletes(row, journal, deviceMusicRoot, trash)
+      await trash.flush().catch(err => {
+        console.warn('[devices] could not write the device trash log:', errorMessage(err))
+      })
 
       let failed = this.failedSteps(journal)
       if (failed.length === 0) {
@@ -2262,6 +2282,7 @@ export class DeviceSyncService {
       journal.updatedAt = completedAt
       journal.result = result
       await writeYamlFile(journalPath, journal).catch(() => undefined)
+      await trash.flush().catch(() => undefined)
       return result
     }
   }
@@ -2277,6 +2298,7 @@ export class DeviceSyncService {
       runId: string
       affectedPcFolderIds: Set<number>
       artworkMaxEdge: number
+      trash: DeviceTrashBatch
     },
   ): Promise<boolean> {
     const actionById = new Map(plan.actions.map(action => [action.id, action]))
@@ -3858,6 +3880,7 @@ export class DeviceSyncService {
       runId: string
       affectedPcFolderIds: Set<number>
       artworkMaxEdge: number
+      trash: DeviceTrashBatch
     },
   ): Promise<ApplyActionResult> {
     switch (action.kind) {
@@ -3895,7 +3918,7 @@ export class DeviceSyncService {
           await assertNoSymlinkTraversal(ctx.deviceMusicRoot, action.devicePath)
           await this.revalidatePlannedFile(action.devicePath, action.deviceFingerprint, action.deviceBytes, 'device delete target')
         }
-        await this.moveDeviceFileToTrash(ctx.deviceRoot, ctx.deviceMusicRoot, action.relativePath, ctx.runId)
+        await this.moveDeviceFileToTrash(ctx.deviceMusicRoot, action.relativePath, ctx.trash)
         return {}
       case 'delete_pc':
         if (!action.sourcePath) throw new Error('Invalid delete action')
@@ -4118,16 +4141,17 @@ export class DeviceSyncService {
     return track
   }
 
-  private async moveDeviceFileToTrash(deviceRoot: string, deviceMusicRoot: string, relPath: string, runId: string): Promise<void> {
+  private async moveDeviceFileToTrash(deviceMusicRoot: string, relPath: string, trash: DeviceTrashBatch): Promise<void> {
     const source = fromPosix(deviceMusicRoot, relPath)
     await assertNoSymlinkTraversal(deviceMusicRoot, source)
-    const trashRoot = join(deviceRoot, APP_STATE_DIR, 'trash', runId)
+    const trashRoot = trash.dir
     await mkdir(trashRoot, { recursive: true })
-    const destination = fromPosix(trashRoot, relPath)
+    const destination = trash.destinationFor(relPath)
     await assertNoSymlinkTraversal(trashRoot, destination)
     if (existsSync(source)) {
       await mkdir(dirname(destination), { recursive: true })
       await rename(source, destination)
+      await trash.record(relPath, 'sync-delete')
     }
 
     const sourceSidecar = sidecarPathFor(source)
@@ -4138,9 +4162,138 @@ export class DeviceSyncService {
     try {
       await mkdir(dirname(destinationSidecar), { recursive: true })
       await rename(sourceSidecar, destinationSidecar)
+      await trash.record(toPosixRelative(deviceMusicRoot, sourceSidecar), 'sync-delete')
     } catch (err) {
       console.warn(`[devices] could not move lyrics sidecar to trash for ${relPath}:`, (err as Error).message)
     }
+  }
+
+  private deviceTrashRoot(deviceRoot: string): string {
+    return join(deviceRoot, APP_STATE_DIR, 'trash')
+  }
+
+  // Device folders are removed into the device trash (recoverable for the
+  // retention period); only OS junk is deleted outright.
+  private deviceFolderRemover(deviceMusicRoot: string, trash: DeviceTrashBatch): FolderRemover {
+    return async (dir, contents) => {
+      await assertNoSymlinkTraversal(deviceMusicRoot, dir)
+      for (const rel of folderRecoverableFiles(contents)) {
+        const source = join(dir, ...rel.split('/'))
+        await trash.moveInto(source, toPosixRelative(deviceMusicRoot, source), 'folder-cleanup')
+      }
+      await removeJunkAndEmptyDirectories(dir, contents)
+    }
+  }
+
+  // Runs after the action loop (not per action) so a folder that loses one
+  // track and receives another in the same sync is never removed. Uses every
+  // completed delete of the journal, so a resumed sync cleans up too.
+  private async cleanupFoldersAfterSyncDeletes(
+    row: DeviceRow,
+    journal: SyncJournalYaml,
+    deviceMusicRoot: string,
+    trash: DeviceTrashBatch,
+  ): Promise<void> {
+    const completed = journal.actions.filter(step => step.status === 'completed')
+    const deviceDirs = completed
+      .filter(step => step.kind === 'delete_device')
+      .map(step => dirname(fromPosix(deviceMusicRoot, step.relativePath)))
+    if (deviceDirs.length > 0) {
+      try {
+        const result = await pruneEmptyFolders({
+          root: deviceMusicRoot,
+          startDirs: deviceDirs,
+          playableExtensions: DEVICE_AUDIO_EXTENSIONS,
+          removeFolder: this.deviceFolderRemover(deviceMusicRoot, trash),
+          onError: (dir, err) => console.warn(`[devices] could not remove empty folder ${dir}:`, errorMessage(err)),
+        })
+        await getFolderCleanupService().report({
+          scope: 'device',
+          origin: 'device-sync',
+          root: deviceMusicRoot,
+          rootLabel: row.name,
+          folderId: null,
+          deviceId: row.id,
+          result,
+        })
+      } catch (err) {
+        console.warn('[devices] empty folder cleanup failed on device:', errorMessage(err))
+      }
+    }
+
+    const pcPathsByRoot = new Map<string, string[]>()
+    for (const step of completed) {
+      if (step.kind !== 'delete_pc' || !step.sourcePath || isCloudSourcePath(step.sourcePath)) continue
+      const path = resolve(step.sourcePath)
+      const folder = getRepos().folders.list().find(item =>
+        item.provider === 'local' && item.role === 'library' && isInside(resolve(item.path), path),
+      )
+      if (!folder) continue
+      const root = resolve(folder.path)
+      pcPathsByRoot.set(root, [...(pcPathsByRoot.get(root) ?? []), path])
+    }
+    for (const [rootPath, deletedPaths] of pcPathsByRoot) {
+      await getFolderCleanupService().cleanupLocalAfterDeletion({ rootPath, deletedPaths, origin: 'device-sync' })
+    }
+  }
+
+  // Permanently deletes device trash batches older than the retention period.
+  // Runs at the start of every sync, before the capacity check, so the freed
+  // space counts. Never blocks the sync.
+  private async purgeExpiredTrash(row: DeviceRow): Promise<void> {
+    try {
+      const lookupRun = getDatabase().prepare(
+        'SELECT COALESCE(finished_at, started_at) AS at FROM device_sync_runs WHERE id = ?',
+      )
+      const result = await purgeExpiredDeviceTrash({
+        trashRoot: this.deviceTrashRoot(row.root_path),
+        batchTimestamp: batchId => (lookupRun.get(batchId) as { at: string | null } | undefined)?.at ?? null,
+      })
+      if (result.purgedBatches.length === 0) return
+      console.info(
+        `[devices] purged ${result.purgedBatches.length} trash batches (${result.files} files) from ${row.name}`,
+      )
+      getFolderCleanupService().emitDeviceTrashPurged({
+        deviceId: row.id,
+        deviceName: row.name,
+        files: result.files,
+        bytes: result.bytes,
+        retentionDays: DEVICE_TRASH_RETENTION_DAYS,
+      })
+    } catch (err) {
+      console.warn(`[devices] could not purge the device trash of ${row.name}:`, errorMessage(err))
+    }
+  }
+
+  /** Deletes the device folders of a confirmed cleanup proposal. */
+  async confirmFolderCleanup(proposal: FolderCleanupProposal): Promise<ConfirmFolderRemovalResult & { root: string }> {
+    const deviceId = proposal.deviceId
+    if (!deviceId) throw new Error('La consulta no pertenece a un dispositivo.')
+    if (!this.getDeviceRow(deviceId)) throw new Error(`El dispositivo ${proposal.rootLabel} ya no está vinculado.`)
+    return this.withDeviceMutation(deviceId, 'folder-cleanup', async () => {
+      const row = this.getDeviceRow(deviceId)
+      if (!row || !(await pathExists(row.root_path))) {
+        throw new Error(`Conectá ${proposal.rootLabel} para borrar estas carpetas.`)
+      }
+      await this.assertDeviceIdentity(row)
+      await this.assertPortableStateWritable(row)
+      const deviceMusicRoot = this.deviceMusicRoot(row)
+      const trash = new DeviceTrashBatch(this.deviceTrashRoot(row.root_path), `cleanup-${Date.now()}-${randomUUID().slice(0, 8)}`)
+      try {
+        const outcome = await confirmFolderRemoval({
+          root: deviceMusicRoot,
+          relativePaths: proposal.folders.map(item => item.relativePath),
+          playableExtensions: DEVICE_AUDIO_EXTENSIONS,
+          removeFolder: this.deviceFolderRemover(deviceMusicRoot, trash),
+          onError: (dir, err) => console.warn(`[devices] could not remove empty folder ${dir}:`, errorMessage(err)),
+        })
+        return { ...outcome, root: deviceMusicRoot }
+      } finally {
+        await trash.flush().catch(err => {
+          console.warn('[devices] could not write the device trash log:', errorMessage(err))
+        })
+      }
+    })
   }
 
   private async trashPcFile(sourcePath: string, affectedFolderIds: Set<number>): Promise<void> {

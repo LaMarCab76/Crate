@@ -131,6 +131,9 @@ export interface TrackAlbumMoveServiceDeps {
   // Stores downloaded cover art in the artwork cache so the preview can show
   // it; returns the cache filename, or null if it couldn't be stored.
   cacheArtwork: (artwork: MetadataArtworkPayload) => string | null
+  // Removes the source folders left without playable files after the move.
+  // Lazily loaded for the same reason as trashItem.
+  cleanupEmptyFolders: (rootPath: string, movedPaths: string[]) => Promise<void>
 }
 
 function nowIso(): string {
@@ -241,6 +244,14 @@ export class TrackAlbumMoveService {
           return null
         }
       }),
+      cleanupEmptyFolders: deps?.cleanupEmptyFolders ?? (async (rootPath, movedPaths) => {
+        const { getFolderCleanupService } = await import('../folder-cleanup/FolderCleanupService')
+        await getFolderCleanupService().cleanupLocalAfterDeletion({
+          rootPath,
+          deletedPaths: movedPaths,
+          origin: 'album-move',
+        })
+      }),
     }
   }
 
@@ -323,9 +334,10 @@ export class TrackAlbumMoveService {
     if (localErrors.length > 0) throw new Error(localErrors[0])
 
     const proposal = stored.preview.proposal
+    const sourceFolder = this.deps.repos.folders.getById(track.folder_id)
     const sourcePath = requireLocalLibraryTrackPath({
       track,
-      folder: this.deps.repos.folders.getById(track.folder_id),
+      folder: sourceFolder,
       expectedPath: stored.sourcePath,
       label: 'La pista original',
     })
@@ -399,6 +411,11 @@ export class TrackAlbumMoveService {
       })
     }
     this.previews.delete(previewId)
+    if (sourceFolder) {
+      await this.deps.cleanupEmptyFolders(sourceFolder.path, [sourcePath]).catch(err => {
+        console.warn('[album-move] empty folder cleanup failed:', moveErrorMessage(err))
+      })
+    }
     return {
       trackId: movedTrack.id,
       previousPath: sourcePath,

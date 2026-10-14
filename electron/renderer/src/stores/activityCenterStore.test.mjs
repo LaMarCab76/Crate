@@ -7,12 +7,15 @@ import {
   activityFromAppUpdateState,
   activityFromDuplicateProgress,
   activityFromDuplicateSummary,
+  activityFromFolderCleanupEvent,
+  folderCleanupActivityId,
   activityFromUnknownVolume,
   activityProgress,
   duplicateSummaryReadState,
   hydrateActivityItems,
   isActiveActivityStatus,
   primaryActivityActionIdFor,
+  reconcileFolderCleanupActivities,
   resolveDeviceArtworkOptimizationActivity,
   resolveDeviceSyncActivityDiscarded,
   shouldShowDuplicateProgressActivity,
@@ -540,4 +543,87 @@ test('unknown volume adapter keeps action metadata stable', () => {
   assert.equal(item.category, 'devices')
   assert.equal(item.status, 'warning')
   assert.deepEqual(item.actionIds, ['connect-device', 'add-library', 'ignore-volume', 'open-libraries'])
+})
+
+function folderCleanupProposal(id, overrides = {}) {
+  return {
+    id,
+    scope: 'device',
+    origin: 'device-sync',
+    rootLabel: 'iPod',
+    folderId: null,
+    deviceId: 'dev-1',
+    folders: [{ relativePath: 'Artist/Album', images: ['cover.jpg'], playlists: [], lyrics: ['01.lrc'], otherCount: 0 }],
+    createdAt: '2026-10-14T10:00:00.000Z',
+    ...overrides,
+  }
+}
+
+test('folder cleanup proposals ask with explicit buttons and never delete on row click', () => {
+  const item = upsertActivityItem([], activityFromFolderCleanupEvent({ kind: 'proposed', proposal: folderCleanupProposal('p1') }), 100)[0]
+
+  assert.equal(item.id, folderCleanupActivityId('p1'))
+  assert.equal(item.category, 'devices')
+  assert.equal(item.status, 'warning')
+  assert.deepEqual(item.actionIds, ['confirm-folder-cleanup', 'keep-folder-cleanup'])
+  assert.equal(item.metadata.folderCleanupId, 'p1')
+  assert.match(item.detail, /Artist\/Album/)
+  assert.match(item.detail, /1 imagen, 1 letra/)
+  assert.equal(primaryActivityActionIdFor(item), null)
+})
+
+test('resolving a folder cleanup proposal removes its buttons', () => {
+  let items = upsertActivityItem([], activityFromFolderCleanupEvent({ kind: 'proposed', proposal: folderCleanupProposal('p1') }), 100)
+  items = upsertActivityItem(items, activityFromFolderCleanupEvent({
+    kind: 'resolved',
+    proposalId: 'p1',
+    scope: 'device',
+    resolution: 'deleted',
+    message: 'Se borró Artist/Album.',
+  }), 200)
+
+  assert.equal(items.length, 1)
+  assert.equal(items[0].status, 'success')
+  assert.deepEqual(items[0].actionIds, [])
+  assert.equal(items[0].detail, 'Se borró Artist/Album.')
+})
+
+test('removed folders and device trash purges are announced as resolved activities', () => {
+  const removed = activityFromFolderCleanupEvent({
+    kind: 'removed',
+    id: 'r1',
+    scope: 'library',
+    origin: 'track-trash',
+    rootLabel: 'Música',
+    deviceId: null,
+    folderId: 3,
+    folders: ['A', 'B', 'C', 'D'],
+  })
+  assert.equal(removed.category, 'library')
+  assert.equal(removed.status, 'success')
+  assert.equal(removed.title, '4 carpetas vacías borradas')
+  assert.equal(removed.detail, 'Música · A, B, C y 1 más')
+
+  const purge = activityFromFolderCleanupEvent({
+    kind: 'device-trash-purged',
+    id: 't1',
+    deviceId: 'dev-1',
+    deviceName: 'iPod',
+    files: 12,
+    bytes: 50 * 1024 * 1024,
+    retentionDays: 15,
+  })
+  assert.equal(purge.category, 'devices')
+  assert.match(purge.detail, /12 archivos \(50 MB\).*15 días/)
+})
+
+test('reconciling folder cleanup activities expires answered questions and restores pending ones', () => {
+  let items = upsertActivityItem([], activityFromFolderCleanupEvent({ kind: 'proposed', proposal: folderCleanupProposal('gone') }), 100)
+  items = reconcileFolderCleanupActivities(items, [folderCleanupProposal('pending')], 500)
+
+  const gone = items.find(item => item.id === folderCleanupActivityId('gone'))
+  const pending = items.find(item => item.id === folderCleanupActivityId('pending'))
+  assert.equal(gone.status, 'info')
+  assert.deepEqual(gone.actionIds, [])
+  assert.deepEqual(pending.actionIds, ['confirm-folder-cleanup', 'keep-folder-cleanup'])
 })

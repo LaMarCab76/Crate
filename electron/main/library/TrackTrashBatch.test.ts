@@ -60,3 +60,45 @@ test('a partial batch deletes and reports only the items actually processed', as
   assert.equal(value.tracks.has(2), true)
   assert.deepEqual(result.affectedFolderIds, [7])
 })
+
+test('cleans up folders once per library, only with the tracks that reached the Trash', async () => {
+  const value = fixture([TWO_PATH])
+  const calls: Array<{ rootPath: string; deletedPaths: string[] }> = []
+  const result = await trashTrackBatch([1, 2], {
+    ...value.deps,
+    cleanupEmptyFolders: async (rootPath, deletedPaths) => {
+      calls.push({ rootPath, deletedPaths })
+    },
+  })
+
+  assert.deepEqual(result.trashedTrackIds, [1])
+  assert.deepEqual(calls, [{ rootPath: MUSIC_ROOT, deletedPaths: [ONE_PATH] }])
+})
+
+test('a folder cleanup failure does not change the batch result', async () => {
+  const value = fixture()
+  const errors: string[] = []
+  const result = await trashTrackBatch([1, 2], {
+    ...value.deps,
+    cleanupEmptyFolders: async () => {
+      throw new Error('cleanup exploded')
+    },
+    onCleanupError: (rootPath, error) => errors.push(`${rootPath}: ${(error as Error).message}`),
+  })
+
+  assert.deepEqual(result.trashedTrackIds, [1, 2])
+  assert.deepEqual(result.failed, [])
+  assert.deepEqual(errors, [`${MUSIC_ROOT}: cleanup exploded`])
+})
+
+test('skips folder cleanup when nothing reached the Trash', async () => {
+  const value = fixture([ONE_PATH])
+  let called = false
+  await trashTrackBatch([1], {
+    ...value.deps,
+    cleanupEmptyFolders: async () => {
+      called = true
+    },
+  })
+  assert.equal(called, false)
+})

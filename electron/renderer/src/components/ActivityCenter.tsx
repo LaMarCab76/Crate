@@ -64,6 +64,8 @@ const ACTION_LABELS: Record<ActivityActionId, { label: string; icon: IconName }>
   'open-import': { label: 'Fuentes', icon: 'folder' },
   'open-updates': { label: 'Updates', icon: 'sync' },
   'open-duplicates': { label: 'Revisar', icon: 'duplicate' },
+  'confirm-folder-cleanup': { label: 'Borrar', icon: 'trash' },
+  'keep-folder-cleanup': { label: 'Conservar', icon: 'check' },
 }
 
 function formatActivityTime(value: number): string {

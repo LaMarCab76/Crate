@@ -3,6 +3,11 @@
 
 import type { DbAlbum, DbArtist, DbFolder, DbGenre, DbPlaylist, DbTrack } from './db'
 import type {
+  FolderCleanupConfirmResult,
+  FolderCleanupEvent,
+  FolderCleanupProposal,
+} from './folder-cleanup'
+import type {
   LyricsCandidate,
   LyricsLibraryOverview,
   LyricsLibraryProgress,
@@ -1031,6 +1036,13 @@ export interface DuplicatesApi {
   onAuditionState(h: (e: DuplicateAuditionState) => void): EventOff
 }
 
+export interface FolderCleanupApi {
+  pending(): Promise<FolderCleanupProposal[]>
+  confirm(proposalId: string): Promise<FolderCleanupConfirmResult>
+  dismiss(proposalId: string): Promise<void>
+  onEvent(h: (e: FolderCleanupEvent) => void): EventOff
+}
+
 export interface Api {
   meta: MetaApi
   library: LibraryApi
@@ -1050,6 +1062,7 @@ export interface Api {
   libraryBackups: LibraryBackupsApi
   libraryMigrations: LibraryMigrationsApi
   duplicates: DuplicatesApi
+  folderCleanup: FolderCleanupApi
   updates: UpdatesApi
 }
 

@@ -13,6 +13,12 @@ export interface TrackTrashBatchDependencies {
   sidecarPath(path: string): string
   sidecarExists(path: string): boolean
   onSidecarError(path: string, error: unknown): void
+  /**
+   * Removes the folders left without playable files. Called once per library
+   * root after the whole batch, with the audio paths that reached the Trash.
+   */
+  cleanupEmptyFolders?(rootPath: string, deletedPaths: string[]): Promise<void>
+  onCleanupError?(rootPath: string, error: unknown): void
 }
 
 export interface TrackTrashBatchResult extends TrashTracksResult {
@@ -27,6 +33,7 @@ export async function trashTrackBatch(
   const trashedTrackIds: number[] = []
   const failed: TrashTracksResult['failed'] = []
   const affectedFolderIds = new Set<number>()
+  const trashedPathsByRoot = new Map<string, string[]>()
 
   for (const trackId of uniqueIds) {
     const track = deps.getTrack(trackId)
@@ -55,6 +62,7 @@ export async function trashTrackBatch(
       deps.deleteTrack(track.id)
       trashedTrackIds.push(track.id)
       affectedFolderIds.add(track.folder_id)
+      trashedPathsByRoot.set(rootPath, [...(trashedPathsByRoot.get(rootPath) ?? []), audioPath])
 
       const lrcPath = deps.sidecarPath(audioPath)
       if (deps.sidecarExists(lrcPath)) {
@@ -71,6 +79,16 @@ export async function trashTrackBatch(
         path: track.path,
         error: error instanceof Error ? error.message : String(error),
       })
+    }
+  }
+
+  if (deps.cleanupEmptyFolders) {
+    for (const [rootPath, deletedPaths] of trashedPathsByRoot) {
+      try {
+        await deps.runWithWriteAccess(rootPath, () => deps.cleanupEmptyFolders!(rootPath, deletedPaths))
+      } catch (error) {
+        deps.onCleanupError?.(rootPath, error)
+      }
     }
   }
 

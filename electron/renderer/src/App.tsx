@@ -754,6 +754,20 @@ export default function App() {
           activityError(item, err)
         }
         break
+      // The main process answers both with a folder-cleanup event that updates
+      // this activity; only failures (kept retryable) are handled here.
+      case 'confirm-folder-cleanup':
+      case 'keep-folder-cleanup': {
+        const proposalId = item.metadata.folderCleanupId
+        if (typeof proposalId !== 'string') break
+        try {
+          if (actionId === 'confirm-folder-cleanup') await window.api.folderCleanup.confirm(proposalId)
+          else await window.api.folderCleanup.dismiss(proposalId)
+        } catch (err) {
+          activityError(item, err)
+        }
+        break
+      }
     }
   }
 

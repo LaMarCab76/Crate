@@ -13,6 +13,7 @@ import { registerCloudChannel } from './ipc/cloud-channel'
 import { disposeLibraryLocationsChannel, registerLibraryLocationsChannel } from './ipc/library-locations-channel'
 import { disposeLibraryMigrationsChannel, registerLibraryMigrationsChannel } from './ipc/library-migrations-channel'
 import { disposeDuplicateChannel, registerDuplicateChannel } from './ipc/duplicate-channel'
+import { registerFolderCleanupChannel } from './ipc/folder-cleanup-channel'
 import { registerProtocolHandlers, registerProtocolSchemes } from './protocol'
 import { getDeviceSyncService } from './devices/DeviceSyncService'
 import { getFolderWatcher } from './library/FolderWatcher'
@@ -193,6 +194,7 @@ app.whenReady().then(async () => {
   registerLibraryLocationsChannel()
   registerLibraryMigrationsChannel()
   registerDuplicateChannel()
+  registerFolderCleanupChannel()
   registerUpdatesChannel()
   getDeviceSyncService().startVolumeMonitor()
 

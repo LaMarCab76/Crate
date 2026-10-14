@@ -136,6 +136,11 @@ import type {
   DuplicateResolutionResult,
   DuplicateSummary,
 } from '@shared/types/duplicates'
+import type {
+  FolderCleanupConfirmResult,
+  FolderCleanupEvent,
+  FolderCleanupProposal,
+} from '@shared/types/folder-cleanup'
 import { desktopPlatform } from '@shared/utils/computerTerms'
 
 function subscribe<T>(channel: string, handler: (payload: T) => void): EventOff {
@@ -573,6 +578,15 @@ const api: Api = {
     retryCleanup: (runId: string) =>
       ipcRenderer.invoke('library-migrations:retry-cleanup', runId) as Promise<LibraryMigrationState>,
     onProgress: h => subscribe<LibraryMigrationProgressEvent>('library-migrations:progress', h),
+  },
+  folderCleanup: {
+    pending: () =>
+      ipcRenderer.invoke('folder-cleanup:pending') as Promise<FolderCleanupProposal[]>,
+    confirm: (proposalId: string) =>
+      ipcRenderer.invoke('folder-cleanup:confirm', proposalId) as Promise<FolderCleanupConfirmResult>,
+    dismiss: (proposalId: string) =>
+      ipcRenderer.invoke('folder-cleanup:dismiss', proposalId) as Promise<void>,
+    onEvent: h => subscribe<FolderCleanupEvent>('folder-cleanup:event', h),
   },
   updates: {
     getState: () =>
