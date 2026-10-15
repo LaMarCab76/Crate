@@ -18,7 +18,7 @@ export const MINIAUDIO_LICENSE_SHA256 = '457f1b500e0adf6bc059edddfa78a2f62012e7c
 // Native assets are published independently from application releases, like
 // Chromaprint's. The revision suffix allows rebuilding the same versions.
 export const CRATE_AUDIO_NATIVE_RELEASE = `crate-audio-native-v${CRATE_AUDIO_VERSION}-1`
-export const CRATE_AUDIO_NATIVE_REPOSITORY = 'LaMarCab76/LocalLibrary'
+export const CRATE_AUDIO_NATIVE_REPOSITORY = 'LaMarCab76/Crate'
 
 export const CRATE_AUDIO_MANIFEST = 'crate-audio-manifest.json'
 // Also part of the portable ZIP layout, so keep it POSIX-normalized.

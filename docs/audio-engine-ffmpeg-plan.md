@@ -516,6 +516,6 @@ Pedido del usuario: bit-perfect es que el DAC reciba exactamente el formato del 
 ### F7 · Pendiente
 
 - **Validación manual** con el checklist de la §4 en la Mac del usuario (escucha real; el slice x64 solo si se instala Rosetta).
-- **CI en GitHub:** correr `crate-audio-native.yml` (Linux y Windows no se compilaron con sus toolchains reales; Windows sí se cross-compiló localmente con MinGW) y publicar el release `crate-audio-native-v1.0.0-1`. `fetch:native` depende de ese release.
-- **Repo público (Crate):** portar la rama, borrar `LICENSE-BASS-EXCEPTION.md` y su mención en el README, y decidir dónde viven los assets nativos (hoy `CRATE_AUDIO_NATIVE_REPOSITORY = LaMarCab76/LocalLibrary`, que es privado).
+- **CI en GitHub:** `crate-audio-native.yml` corre en el PR de Crate y compila por primera vez con los toolchains reales de Linux y Windows (Windows solo se había cross-compilado localmente con MinGW). Después del merge, correrlo con `publish` para crear el release `crate-audio-native-v1.0.0-1`; `fetch:native` depende de ese release.
+- **Repo público (Crate):** rama portada el 2026-10-15 (los 7 commits sobre `main` de Crate). Se borró `LICENSE-BASS-EXCEPTION.md`, el README y `THIRD_PARTY_NOTICES.md` ya no dependen de BASS, y los assets nativos se publican en Crate (`CRATE_AUDIO_NATIVE_REPOSITORY = LaMarCab76/Crate`). Falta publicar `crate-audio-native-v1.0.0-1` ahí, después del merge, porque `workflow_dispatch` necesita el workflow en `main`.
 - Merge a `main` y versión 0.7.0.
