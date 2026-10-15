@@ -23,6 +23,12 @@ set(CA_SOURCES
   src/ca_common.c
   src/ca_decoder.c
   src/ca_fft.c
+  src/ca_dsp.c
+  src/ca_thread.c
+  src/ca_format.c
+  src/ca_player.c
+  src/ca_engine.c
+  src/ca_hal_generic.c
   src/ca_miniaudio.c
 )
 
@@ -79,8 +85,8 @@ endif()
 
 if(CA_BUILD_TESTS)
   enable_testing()
-  add_executable(crate_audio_tests tests/test_main.c tests/test_decoder.c tests/test_golden.c tests/test_engine.c $<TARGET_OBJECTS:crate_audio_objects>)
-  target_include_directories(crate_audio_tests PRIVATE include src tests "${CA_FFMPEG_PREFIX}/include")
+  add_executable(crate_audio_tests tests/test_main.c tests/test_decoder.c tests/test_golden.c tests/test_format.c tests/test_engine.c $<TARGET_OBJECTS:crate_audio_objects>)
+  target_include_directories(crate_audio_tests PRIVATE include src tests "${CA_FFMPEG_PREFIX}/include" "${CA_MINIAUDIO_DIR}")
   target_compile_definitions(crate_audio_tests PRIVATE CA_BUILDING_LIBRARY)
   ca_link_dependencies(crate_audio_tests)
   add_test(NAME crate_audio_tests

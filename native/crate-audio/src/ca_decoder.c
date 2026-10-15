@@ -180,7 +180,15 @@ static int ensure_swr(ca_decoder *d, const AVFrame *frame) {
     av_opt_set_int(d->swr, "linear_interp", 1, 0);
     /* Normalise downmix matrices so 5.1 -> stereo can't clip. */
     av_opt_set_double(d->swr, "rematrix_maxval", 1.0, 0);
-    ret = swr_init(d->swr);
+    if (channels == 1 && d->out_channels >= 2) {
+      /* Mono plays at full level on both front channels (FFmpeg's default
+       * is -3 dB each), which keeps it bit-perfect. */
+      double matrix[CA_MAX_CHANNELS] = {0};
+      matrix[0] = 1.0;
+      matrix[1] = 1.0;
+      ret = swr_set_matrix(d->swr, matrix, 1);
+    }
+    if (ret >= 0) ret = swr_init(d->swr);
   }
   av_channel_layout_uninit(&in_layout);
   av_channel_layout_uninit(&out_layout);

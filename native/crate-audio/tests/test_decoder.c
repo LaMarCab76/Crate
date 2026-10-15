@@ -327,6 +327,17 @@ static void test_output_conversions(void) {
   CHECK(err < 0.002, "resampled RMS error %g", err);
   decoded_free(&audio);
 
+  /* Mono -> stereo duplicates the channel at unity gain (bit-perfect). */
+  ca_decode_opts upmix = {CA_SAMPLE_F32, 0, 2, 0};
+  CHECK(decode_file("pcm-22050-16-mono.wav", &upmix, &audio), "mono upmix decode");
+  int upmix_errors = 0;
+  for (long long i = 0; i < audio.frames; i++) {
+    double expected = tone_quantized(0, i, 22050, 16);
+    if (audio.samples[i * 2] != (float)expected || audio.samples[i * 2 + 1] != (float)expected) upmix_errors++;
+  }
+  CHECK(audio.channels == 2 && upmix_errors == 0, "mono upmix: %d samples differ from the mono source", upmix_errors);
+  decoded_free(&audio);
+
   /* 5.1 -> stereo downmix never clips. */
   ca_decode_opts downmix = {CA_SAMPLE_F32, 0, 2, 0};
   CHECK(decode_file("flac-48000-16-5.1.flac", &downmix, &audio), "downmix decode");

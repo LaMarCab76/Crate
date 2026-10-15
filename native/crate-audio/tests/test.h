@@ -34,5 +34,6 @@ float *read_f32(const char *name, long *count);
 void run_decoder_tests(void);
 void run_golden_tests(void);
 void run_engine_tests(void);
+void run_format_tests(void);
 
 #endif

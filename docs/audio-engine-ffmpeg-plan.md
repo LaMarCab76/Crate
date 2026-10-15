@@ -437,3 +437,19 @@ Hallazgos:
 
 - Al final del stream BASS no rellena con ceros la ventana de la FFT: estira la ventana Hann sobre las muestras que quedan y normaliza por esa cantidad. Se replica con una tabla de 2048 puntos (exacto en potencias de 2; en el resto difiere < 0,05 solo en los ~33 ms finales de cada tema).
 - BASS posicionaba las table bars en bytes de float (`floor(segundos × bytes por segundo)`); se replica para que cada frame empiece en la misma muestra.
+
+### F3 · Motor de reproducción — completa (nativo)
+
+- `ca_engine.c` (contexto y dispositivo miniaudio, callback, eventos, hilo de control, reconfiguración de formato), `ca_player.c` (cola de dos ítems, hilo de decodificación, ring SPSC con marcadores, consumo desde el callback), `ca_dsp.c` (EQ RBJ, medidores, dither TPDF, conversión entera exacta), `ca_format.c` (selector de formato), `ca_thread.c` y `ca_hal.h` (+ `ca_hal_generic.c` vacío hasta F5).
+- Sin callbacks de C a JS: los eventos se consultan con `ca_poll_events`. El callback solo usa `trylock` y atómicos.
+- La reconfiguración de dispositivo abre el dispositivo, reconstruye los players y **después** arranca (lo detectó ThreadSanitizer).
+
+Tests (788 verificaciones, también bajo ASan/UBSan y ThreadSanitizer sin reportes):
+
+- Reproducción bit-exacta; gapless exacto en WAV/FLAC y sin costura audible en MP3/AAC/Vorbis.
+- Cambio de formato 44,1 → 96 kHz en el borde de pista, con el tramo de 96 kHz bit-exacto.
+- Seek (incluso después de que el decoder pasó a la pista siguiente), rollback de la cola, skip, reemplazo de fuente sin corte.
+- Volumen, EQ (igual al filtro offline), FFT y medidores en vivo; remuestreo con bit-perfect apagado; dispositivo nulo de miniaudio.
+- EQ igual a BASS_FX BQF (respuesta al impulso a 5e-6) y RMS de los medidores igual a BASS.
+- Selector de formato: 21 casos con DAC simulados (USB 24/96 y 32/384, Bluetooth, AirPlay, familia 48k, Windows compartido, 5.1, DSD).
+- Mono → estéreo a ganancia unitaria (FFmpeg reparte a −3 dB por defecto).

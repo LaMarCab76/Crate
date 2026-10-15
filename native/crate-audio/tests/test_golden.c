@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "crate_audio.h"
+#include "ca_dsp.h"
 
 const char *golden_path(char *buffer, size_t size, const char *name) {
   snprintf(buffer, size, "%s/../golden/%s", g_fixtures_dir, name);
@@ -98,7 +99,74 @@ static void test_dsd_level_matches_bass(void) {
   fclose(file);
 }
 
+static void test_eq_matches_bass(void) {
+  char path[1024];
+  FILE *file = fopen(golden_path(path, sizeof path, "eq.txt"), "r");
+  CHECK(file != NULL, "eq.txt");
+  if (!file) return;
+  char line[256];
+  while (fgets(line, sizeof line, file)) {
+    if (line[0] == '#') continue;
+    char name[128];
+    double rate, center, gain, bandwidth;
+    if (sscanf(line, "%127s %lf %lf %lf %lf", name, &rate, &center, &gain, &bandwidth) != 5) continue;
+    char ir_name[192];
+    snprintf(ir_name, sizeof ir_name, "eq-%s.ir.f32", name);
+    long count = 0;
+    float *bass = read_f32(ir_name, &count);
+    CHECK(bass != NULL && count == 4096, "%s: golden impulse response", name);
+    if (!bass) continue;
+    ca_biquad_coeffs coeffs;
+    ca_biquad_state state = {0, 0};
+    ca_dsp_peaking_coeffs(&coeffs, rate, center, gain, bandwidth);
+    static float ours[4096];
+    memset(ours, 0, sizeof ours);
+    ours[0] = 1.0f;
+    ca_dsp_biquad_process(&coeffs, &state, ours, 4096, 1);
+    double worst = 0;
+    for (int i = 0; i < 4096; i++) worst = fmax(worst, fabs(ours[i] - bass[i]));
+    printf("  EQ %s: max impulse-response difference %g\n", name, worst);
+    CHECK(worst < 1e-4, "%s: EQ differs from BASS_FX by %g", name, worst);
+    free(bass);
+  }
+  fclose(file);
+}
+
+static void test_levels_match_bass(void) {
+  char path[1024];
+  FILE *file = fopen(golden_path(path, sizeof path, "levels.txt"), "r");
+  CHECK(file != NULL, "levels.txt");
+  if (!file) return;
+  char line[256];
+  while (fgets(line, sizeof line, file)) {
+    if (line[0] == '#') continue;
+    char name[64];
+    int window = 0;
+    float bass[4];
+    if (sscanf(line, "%63s %d %f %f %f %f", name, &window, &bass[0], &bass[1], &bass[2], &bass[3]) != 6) continue;
+    char in_name[128];
+    snprintf(in_name, sizeof in_name, "levels-%s.in.f32", name);
+    long count = 0;
+    float *input = read_f32(in_name, &count);
+    CHECK(input != NULL, "%s: golden input", name);
+    if (!input) continue;
+    float ours[4];
+    ca_dsp_levels(input, (uint32_t)window, 2, ours);
+    /* Crate's old bass-constants.ts swapped BASS_LEVEL_RMS and _STEREO, so
+     * both captured pairs are RMS values; compare them with our RMS. */
+    for (int side = 0; side < 2; side++) {
+      CHECK(fabs(ours[2 + side] - bass[2 + side]) < 1e-4, "%s: RMS side %d %g vs BASS %g", name, side, ours[2 + side], bass[2 + side]);
+      CHECK(fabs(ours[2 + side] - bass[side]) < 1e-4, "%s: RMS side %d %g vs BASS 'peak' %g", name, side, ours[2 + side], bass[side]);
+      CHECK(ours[side] >= ours[2 + side], "%s: peak below RMS", name);
+    }
+    free(input);
+  }
+  fclose(file);
+}
+
 void run_golden_tests(void) {
+  test_eq_matches_bass();
+  test_levels_match_bass();
   test_fft_matches_bass();
   test_dsd_level_matches_bass();
 }

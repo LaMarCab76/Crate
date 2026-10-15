@@ -136,6 +136,172 @@ CA_API ca_fft *ca_fft_create(void);
 CA_API int ca_fft_run(ca_fft *fft, const float *frames, int32_t frame_count, int32_t channels, float *out);
 CA_API void ca_fft_destroy(ca_fft *fft);
 
+
+/* ---------------------------------------------------------------- engine */
+
+/* Tests only: CA_INIT_NULL_BACKEND opens miniaudio's null device instead of
+ * real hardware; CA_INIT_NO_DEVICE runs without any device (see tests). */
+#define CA_INIT_NULL_BACKEND 0x1
+#define CA_INIT_NO_DEVICE    0x2
+
+CA_API int ca_init(int32_t flags);
+CA_API void ca_shutdown(void);
+
+/* --------------------------------------------------------------- devices */
+
+#define CA_MAX_RATES 32
+
+typedef struct ca_device_info {
+  char    id[256];             /* CoreAudio UID / WASAPI endpoint id / ALSA or Pulse name */
+  char    name[256];
+  int32_t is_default;
+  int32_t max_channels;
+  int32_t max_sample_rate;
+  int32_t max_bits;
+  int32_t supports_exclusive;
+  int32_t reserved;
+} ca_device_info;
+
+/* Refreshes the playback device list; returns the number of devices. */
+CA_API int ca_device_count(void);
+CA_API int ca_device_get(int32_t index, ca_device_info *out);
+
+typedef struct ca_device_caps {
+  int32_t count;               /* entries in rates/bits */
+  int32_t rates[CA_MAX_RATES]; /* supported rates, ascending */
+  int32_t bits[CA_MAX_RATES];  /* deepest integer format at rates[i]; 32 may be float */
+  int32_t max_channels;
+  int32_t current_rate;
+  int32_t current_bits;
+  int32_t can_set_rate;        /* the rate can follow the track in this mode */
+  int32_t exclusive;           /* these caps describe exclusive mode */
+} ca_device_caps;
+
+/* device_id NULL = system default. */
+CA_API int ca_device_get_caps(const char *device_id, int32_t exclusive, ca_device_caps *out);
+
+/* ---------------------------------------------------------------- output */
+
+typedef struct ca_output_policy {
+  int32_t exclusive;           /* hog mode (macOS) / WASAPI exclusive (Windows) */
+  int32_t bit_perfect;         /* follow each track's rate and depth */
+} ca_output_policy;
+
+/* Why the output differs from the track. */
+#define CA_LIMIT_DAC_RATE      0x01
+#define CA_LIMIT_DAC_BITS      0x02
+#define CA_LIMIT_DAC_CHANNELS  0x04
+#define CA_LIMIT_FIXED_RATE    0x08   /* the rate can't change in this mode (e.g. Windows shared) */
+#define CA_LIMIT_SETTING_OFF   0x10   /* bit-perfect is switched off */
+
+typedef struct ca_output_format {
+  int32_t sample_rate;
+  int32_t bits;                /* integer depth delivered to the device; 32 also covers float */
+  int32_t channels;
+  int32_t resampled;
+  int32_t dithered;
+  int32_t downmixed;
+  int32_t limited_by;          /* CA_LIMIT_* */
+  int32_t reserved;
+} ca_output_format;
+
+/* Pure function: the output format for a track on a device (see plan §2.4). */
+CA_API int ca_choose_output_format(const ca_stream_info *source, const ca_device_caps *caps,
+                                   const ca_output_policy *policy, ca_output_format *out);
+
+typedef struct ca_output_info {
+  int32_t open;
+  int32_t sample_rate;
+  int32_t bits;
+  int32_t channels;
+  int32_t exclusive;
+  int32_t bit_perfect;         /* policy */
+  int32_t original_rate;       /* device rate before Crate changed it, 0 if untouched */
+  int32_t reserved;
+  ca_output_format current;    /* decision for the main player's current track */
+  char    device_id[256];
+  char    device_name[256];
+} ca_output_info;
+
+/* device_id NULL = follow the system default device. */
+CA_API int ca_output_open(const char *device_id, const ca_output_policy *policy);
+CA_API int ca_output_set_policy(const ca_output_policy *policy);
+CA_API void ca_output_close(void);
+CA_API int ca_output_get_info(ca_output_info *out);
+
+/* --------------------------------------------------------------- players */
+
+typedef struct ca_player ca_player;
+
+#define CA_PLAYER_STOPPED 0
+#define CA_PLAYER_PLAYING 1
+#define CA_PLAYER_PAUSED  2
+
+typedef struct ca_player_status {
+  int32_t state;               /* CA_PLAYER_* */
+  int32_t ended;               /* the last queued track finished */
+  int64_t serial;              /* caller-supplied id of the track being heard */
+  double  position;            /* seconds into that track */
+  double  buffered_seconds;    /* decoded audio waiting in the ring */
+} ca_player_status;
+
+/* The main player drives the output format (bit-perfect); others (duplicate
+ * audition) adapt to whatever the device runs at. */
+CA_API ca_player *ca_player_create(int32_t is_main);
+CA_API void ca_player_destroy(ca_player *player);
+CA_API int ca_player_get_id(const ca_player *player);
+
+/* Decoders stay owned by the caller, who must not touch them until the
+ * player gives them back: synchronously for set_source / queue_next /
+ * clear_next / skip_to_next / replace_source / detach (the replaced decoders
+ * are free to close when the call returns), or through a
+ * CA_EVENT_DECODER_RETIRED event after a gapless transition. */
+CA_API int ca_player_set_source(ca_player *player, ca_decoder *decoder, float gain, int64_t serial);
+CA_API int ca_player_queue_next(ca_player *player, ca_decoder *decoder, float gain, int64_t serial);
+CA_API int ca_player_clear_next(ca_player *player);
+CA_API int ca_player_skip_to_next(ca_player *player);
+/* Swaps the current track's decoder for another one of the same file (e.g. a
+ * RAM copy) at the exact decode position: no audible change. */
+CA_API int ca_player_replace_source(ca_player *player, ca_decoder *decoder);
+CA_API int ca_player_detach(ca_player *player);
+
+CA_API int ca_player_play(ca_player *player);
+CA_API int ca_player_pause(ca_player *player);
+CA_API int ca_player_seek(ca_player *player, double seconds);
+CA_API int ca_player_get_status(ca_player *player, ca_player_status *out);
+
+CA_API int ca_player_set_volume(ca_player *player, float volume);
+/* Loudness-leveler gain of the track being heard (queued tracks carry their own). */
+CA_API int ca_player_set_gain(ca_player *player, float gain);
+CA_API int ca_player_set_eq(ca_player *player, int32_t enabled, int32_t count, const float *freqs_hz,
+                            const float *gains_db, float bandwidth_octaves);
+
+/* Live analysis of what is being played (post-EQ, pre-volume, like BASS). */
+CA_API int ca_player_get_fft(ca_player *player, float *out /* CA_FFT_BINS */);
+CA_API int ca_player_get_levels(ca_player *player, float window_seconds, float *out /* peakL peakR rmsL rmsR */);
+
+/* ---------------------------------------------------------------- events */
+
+#define CA_EVENT_TRACK_STARTED    1   /* serial is now audible (gapless transitions too) */
+#define CA_EVENT_TRACK_ENDED      2   /* serial finished and nothing was queued */
+#define CA_EVENT_DECODER_RETIRED  3   /* decoder may be closed now */
+#define CA_EVENT_OUTPUT_CHANGED   4   /* device format changed; read ca_output_get_info */
+#define CA_EVENT_DEVICE_LOST      5
+#define CA_EVENT_DEVICE_REROUTED  6
+#define CA_EVENT_DECODE_ERROR     7   /* serial stopped early; code = CA_ERR_* */
+
+typedef struct ca_event {
+  int32_t  type;
+  int32_t  player_id;
+  int64_t  serial;
+  uint64_t decoder;            /* ca_decoder address for DECODER_RETIRED */
+  int32_t  code;
+  int32_t  reserved;
+} ca_event;
+
+/* Drains up to max pending events; returns how many were written. */
+CA_API int ca_poll_events(ca_event *out, int32_t max);
+
 #ifdef __cplusplus
 }
 #endif

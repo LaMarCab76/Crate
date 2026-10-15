@@ -39,6 +39,10 @@ int main(int argc, char **argv) {
     printf("golden (BASS reference) tests\n");
     run_golden_tests();
   }
+  if (!only || strcmp(only, "format") == 0) {
+    printf("output format tests\n");
+    run_format_tests();
+  }
   if (!only || strcmp(only, "engine") == 0) {
     printf("engine tests\n");
     run_engine_tests();
