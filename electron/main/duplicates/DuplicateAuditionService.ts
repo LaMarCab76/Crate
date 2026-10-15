@@ -10,18 +10,8 @@ import type {
   DuplicateCandidateDetail,
   DuplicateTrackView,
 } from '@shared/types/duplicates'
-import {
-  BASS_ACTIVE_PLAYING,
-  BASS_ATTRIB_VOL,
-  BASS_FILE_NAME,
-  BASS_POS_BYTE,
-  BASS_SAMPLE_FLOAT,
-  BASS_STREAM_PRESCAN,
-  BASS_UNICODE,
-  bassErrorName,
-} from '../audio/bass-constants'
 import { getAudioEngine } from '../audio/AudioEngine'
-import { loadBass, type HSTREAM } from '../audio/bass-ffi'
+import { CA_PLAYER_PLAYING, Decoder, NativePlayer } from '../audio/native/crateAudio'
 import { getOneDriveClient } from '../cloud/OneDriveClient'
 import { getRepos } from '../db/repositories'
 import { broadcast } from '../ipc/events'
@@ -39,10 +29,12 @@ import {
 const PROGRESS_INTERVAL_MS = 150
 const MAX_TEMP_SOURCE_BYTES = 2 * 1024 * 1024 * 1024
 
+// Each side is its own native player, mixed at whatever format the device
+// runs (the main deck is paused for the whole session).
 interface AuditionStream {
-  handle: HSTREAM
+  player: NativePlayer
+  decoder: Decoder
   duration: number
-  lengthBytes: bigint
   localPath: string
 }
 
@@ -141,10 +133,10 @@ export class DuplicateAuditionService {
       getAudioEngine().ensureInit()
       const leftPath = await this.materialize(detail.left, 'left', session, owner)
       if (generation !== this.generation) throw abortError()
-      this.streams.left = this.createStream(leftPath, detail.left.duration)
+      this.streams.left = await this.createStream(leftPath, detail.left.duration)
       const rightPath = await this.materialize(detail.right, 'right', session, owner)
       if (generation !== this.generation) throw abortError()
-      this.streams.right = this.createStream(rightPath, detail.right.duration)
+      this.streams.right = await this.createStream(rightPath, detail.right.duration)
       if (generation !== this.generation) throw abortError()
       if (session.tempRoot) {
         this.tempRoot = session.tempRoot
@@ -190,7 +182,7 @@ export class DuplicateAuditionService {
       const previous = this.streams[previousSide]
       if (previous) {
         this.updatePositions()
-        loadBass().ChannelPause(previous.handle)
+        previous.player.pause()
         const previousPosition = previousSide === 'left'
           ? this.state.leftPositionSec
           : this.state.rightPositionSec
@@ -200,9 +192,10 @@ export class DuplicateAuditionService {
         this.seekStream(stream, equivalent)
       }
     }
-    if (!loadBass().ChannelPlay(stream.handle, 0)) {
-      const code = loadBass().ErrorGetCode()
-      throw new Error(`No se pudo iniciar la audición: ${bassErrorName(code)} (${code}).`)
+    try {
+      stream.player.play()
+    } catch (error) {
+      throw new Error(`No se pudo iniciar la audición: ${error instanceof Error ? error.message : String(error)}`)
     }
     this.state = {
       ...this.state,
@@ -218,7 +211,7 @@ export class DuplicateAuditionService {
   pause(): DuplicateAuditionState {
     this.cancelComparison()
     for (const stream of Object.values(this.streams)) {
-      if (stream) loadBass().ChannelPause(stream.handle)
+      if (stream) stream.player.pause()
     }
     this.updatePositions()
     if (this.state.status !== 'closed' && this.state.status !== 'loading') {
@@ -255,7 +248,7 @@ export class DuplicateAuditionService {
     const durationMs = Math.max(1, Math.round(playback.durationSec * 1000))
     this.seekStream(left, playback.leftStartSec)
     this.seekStream(right, playback.rightStartSec)
-    loadBass().ChannelPlay(left.handle, 0)
+    left.player.play()
     this.state = {
       ...this.state,
       activeSide: 'left',
@@ -264,12 +257,12 @@ export class DuplicateAuditionService {
     }
     this.publish()
     const first = setTimeout(() => {
-      loadBass().ChannelPause(left.handle)
-      loadBass().ChannelPlay(right.handle, 0)
+      left.player.pause()
+      right.player.play()
       this.state = { ...this.state, activeSide: 'right', status: 'playing' }
       this.publish()
       const second = setTimeout(() => {
-        loadBass().ChannelPause(right.handle)
+        right.player.pause()
         this.updatePositions()
         this.state = { ...this.state, status: 'paused', comparingSegmentIndex: null }
         this.publish()
@@ -316,48 +309,43 @@ export class DuplicateAuditionService {
     }
   }
 
-  private createStream(path: string, expectedDuration: number): AuditionStream {
-    const bass = loadBass()
-    const windowsUnicode = process.platform === 'win32'
-    const create = windowsUnicode ? bass.StreamCreateFileUnicode : bass.StreamCreateFile
-    const flags = (BASS_STREAM_PRESCAN | BASS_SAMPLE_FLOAT | (windowsUnicode ? BASS_UNICODE : 0)) >>> 0
-    const handle = create(
-      BASS_FILE_NAME,
-      path,
-      0n,
-      0n,
-      flags,
-    )
-    if (!handle) {
-      const code = bass.ErrorGetCode()
-      throw new Error(`No se pudo abrir ${path}: ${bassErrorName(code)} (${code}).`)
+  private async createStream(path: string, expectedDuration: number): Promise<AuditionStream> {
+    let decoder: Decoder
+    try {
+      // UTF-8 paths work on every platform, Windows included.
+      decoder = await Decoder.openFileAsync(path, { exactDuration: true })
+    } catch (error) {
+      throw new Error(`No se pudo abrir ${path}: ${error instanceof Error ? error.message : String(error)}.`)
     }
-    bass.ChannelSetAttribute(handle, BASS_ATTRIB_VOL, 1)
-    const lengthBytes = bass.ChannelGetLength(handle, BASS_POS_BYTE)
-    if (lengthBytes <= 0n) {
-      bass.StreamFree(handle)
+    const measuredDuration = decoder.info.duration
+    if (!(measuredDuration > 0) && !(expectedDuration > 0)) {
+      decoder.close()
       throw new Error(`La duración de ${path} no se pudo determinar.`)
     }
-    const measuredDuration = bass.ChannelBytes2Seconds(handle, lengthBytes)
+    const player = new NativePlayer(false)
+    try {
+      await player.setSource(decoder, 1, 1)
+    } catch (error) {
+      player.destroy()
+      decoder.close()
+      throw error
+    }
     return {
-      handle,
+      player,
+      decoder,
       duration: Number.isFinite(measuredDuration) && measuredDuration > 0
         ? measuredDuration
         : Math.max(0.01, expectedDuration),
-      lengthBytes,
       localPath: path,
     }
   }
 
   private position(stream: AuditionStream): number {
-    const bytes = loadBass().ChannelGetPosition(stream.handle, BASS_POS_BYTE)
-    return clamp(loadBass().ChannelBytes2Seconds(stream.handle, bytes), stream.duration)
+    return clamp(stream.player.status().position, stream.duration)
   }
 
   private seekStream(stream: AuditionStream, seconds: number): void {
-    const position = clamp(seconds, stream.duration)
-    const bytes = loadBass().ChannelSeconds2Bytes(stream.handle, position)
-    loadBass().ChannelSetPosition(stream.handle, bytes, BASS_POS_BYTE)
+    stream.player.seek(clamp(seconds, stream.duration))
   }
 
   private updatePositions(): void {
@@ -372,7 +360,7 @@ export class DuplicateAuditionService {
     if (
       active
       && this.state.status === 'playing'
-      && loadBass().ChannelIsActive(active.handle) !== BASS_ACTIVE_PLAYING
+      && active.player.status().state !== CA_PLAYER_PLAYING
       && this.state.comparingSegmentIndex == null
     ) this.state = { ...this.state, status: 'paused' }
   }
@@ -402,8 +390,9 @@ export class DuplicateAuditionService {
     this.stopProgress()
     for (const stream of Object.values(this.streams)) {
       if (!stream) continue
-      loadBass().ChannelStop(stream.handle)
-      loadBass().StreamFree(stream.handle)
+      stream.player.detach()
+      stream.player.destroy()
+      stream.decoder.close()
     }
     this.streams = {}
     if (this.tempRoot) await rm(this.tempRoot, { recursive: true, force: true }).catch(() => undefined)

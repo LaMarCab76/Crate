@@ -259,10 +259,13 @@ CA_API int ca_player_get_id(const ca_player *player);
 CA_API int ca_player_set_source(ca_player *player, ca_decoder *decoder, float gain, int64_t serial);
 CA_API int ca_player_queue_next(ca_player *player, ca_decoder *decoder, float gain, int64_t serial);
 CA_API int ca_player_clear_next(ca_player *player);
-CA_API int ca_player_skip_to_next(ca_player *player);
-/* Swaps the current track's decoder for another one of the same file (e.g. a
- * RAM copy) at the exact decode position: no audible change. */
-CA_API int ca_player_replace_source(ca_player *player, ca_decoder *decoder);
+/* Starts the queued track `serial` now. If a gapless transition already made
+ * it current, this is a no-op that returns CA_OK. */
+CA_API int ca_player_skip_to_next(ca_player *player, int64_t serial);
+/* Swaps the decoder of track `serial` for another one of the same file (e.g.
+ * a RAM copy) at the exact decode position: no audible change. Fails with
+ * CA_ERR_STATE when `serial` is no longer the current track. */
+CA_API int ca_player_replace_source(ca_player *player, ca_decoder *decoder, int64_t serial);
 CA_API int ca_player_detach(ca_player *player);
 
 CA_API int ca_player_play(ca_player *player);

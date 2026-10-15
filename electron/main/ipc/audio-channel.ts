@@ -12,12 +12,13 @@ import { getRepos } from '../db/repositories'
 import { getOneDriveClient } from '../cloud/OneDriveClient'
 import { resolveCloudLoadOptions } from '../cloud/cloudTrackRef'
 import { getLocalFileAccessService } from '../security/localFileAccessRuntime'
-import { estimateLufsFromAnalysis, type LevelerLoudness } from '@shared/constants/leveler'
+import { estimateLufsFromAnalysis, levelerGainLinear, type LevelerLoudness } from '@shared/constants/leveler'
 import type { DbTrack } from '@shared/types/db'
 import type {
   AudioOutputDevice,
   FftMode,
   LevelerConfig,
+  OutputPolicyPayload,
   PlaybackCacheStats,
   PlaybackSource,
   StreamLoadResult,
@@ -43,30 +44,24 @@ type StreamLoadResultLike = {
 let gapless: GaplessController | null = null
 let gaplessEnabled = true
 
-// Re-apply per-stream effects after a gapless swap (manual or native auto-
-// advance). EQ FX and the leveler gain are attached to a specific stream handle,
-// which the swap replaces, so both must be re-applied to the new stream.
+// After a gapless hand-over (manual or the native end-of-track advance) the
+// leveler state follows the new track. The EQ lives in the player and carries
+// over on its own.
 function afterGaplessSwap(): void {
-  const engine = getAudioEngine()
-  getEQManager().reapply(engine.getCurrentStream())
-  broadcastEqState()
   applyLevelerForCurrentTrack()
 }
 
-// Pre-seed the leveler gain for the track about to be adopted, so playback
-// starts at the correct gain instead of briefly inheriting the previous track's
-// (which can be audibly off when their loudness differs).
-function beforeGaplessSwap(path: string): void {
-  const leveler = getLevelerManager()
+// Leveler gain a queued track starts with, so its first sample already plays
+// at the right loudness (the hand-over happens natively, sample-accurately).
+function levelerGainForPath(path: string): number {
   const track = getRepos().tracks.getByPath(path)
-  leveler.setTrackLoudness(resolveTrackLoudness(track))
-  getAudioEngine().setNormalizationGain(leveler.currentGainLinear())
+  return levelerGainLinear(getLevelerManager().getConfig(), resolveTrackLoudness(track))
 }
 
 function getGapless(): GaplessController {
   if (!gapless) {
     gapless = new GaplessController(getAudioEngine())
-    gapless.setOnBeforeSwap(beforeGaplessSwap)
+    gapless.setGainResolver(levelerGainForPath)
     gapless.setOnAfterSwap(afterGaplessSwap)
   }
   return gapless
@@ -78,17 +73,15 @@ export function disposeGapless(): void {
   gapless = null
 }
 
-// Convert main-process StreamInfo into a plain JSON-safe payload (BigInt
-// can't cross the IPC boundary).
-function serializeStreamInfo(info: StreamInfo | StreamInfoPayload | null) {
+function serializeStreamInfo(info: StreamInfo | StreamInfoPayload | null): StreamInfoPayload | null {
   if (!info) return null
   return {
     freq: info.freq,
     chans: info.chans,
-    ctype: info.ctype,
+    codec: info.codec,
     duration: info.duration,
-    durationBytes: Number(info.durationBytes),
-    bytesPerSecond: info.bytesPerSecond,
+    sourceRate: info.sourceRate,
+    bitsPerSample: info.bitsPerSample,
   }
 }
 
@@ -165,6 +158,7 @@ function applyLevelerForCurrentTrack(): void {
   leveler.setTrackLoudness(resolveTrackLoudness(track))
   engine.setNormalizationGain(leveler.currentGainLinear())
   broadcastLevelerState()
+  engine.broadcastOutputInfo()
 
   const cfg = leveler.getConfig()
   if (!cfg.enabled || !track || track.provider === 'onedrive' || track.r128_integrated_loudness != null) return
@@ -192,12 +186,7 @@ function applyLevelerForCurrentTrack(): void {
 
 function promoteCurrentFileStreamToMemory(path: string, estimatedDurationSec: number | null): void {
   const engine = getAudioEngine()
-  void engine.promoteCurrentToMemory({ expectedPath: path, estimatedDurationSec }).then(result => {
-    if (result.source !== 'memory' || engine.getCurrentPath() !== path) return
-    getEQManager().reapply(engine.getCurrentStream())
-    broadcastEqState()
-    applyLevelerForCurrentTrack()
-  }).catch(err => {
+  void engine.promoteCurrentToMemory({ expectedPath: path, estimatedDurationSec }).catch(err => {
     console.warn('[audio] background memory promotion failed:', err instanceof Error ? err.message : err)
   })
 }
@@ -287,9 +276,6 @@ export function registerAudioChannel(): void {
         cloudRef: cloud?.cloudRef,
         cloudSizeBytes: cloud?.cloudSizeBytes ?? null,
       })
-      getGapless().bindCurrentTrackEnd()
-      eq.reapply(engine.getCurrentStream())
-      broadcastEqState()
       applyLevelerForCurrentTrack()
       if (loadResult.source === 'file') promoteCurrentFileStreamToMemory(source.path, source.duration)
       return serializeStreamLoadResult(loadResult)
@@ -300,7 +286,10 @@ export function registerAudioChannel(): void {
   ipcMain.handle('audio:pause', () => engine.pause())
   ipcMain.handle('audio:stop', () => engine.stop())
   ipcMain.handle('audio:seek', (_, payload: { positionSec: number }) => engine.seek(payload.positionSec))
-  ipcMain.handle('audio:setVolume', (_, payload: { value: number }) => engine.setVolume(payload.value))
+  ipcMain.handle('audio:setVolume', (_, payload: { value: number }) => {
+    engine.setVolume(payload.value)
+    engine.broadcastOutputInfo()
+  })
   ipcMain.handle('audio:setFftMode', (event, payload: { mode: FftMode }) => {
     const mode = normalizeFftMode(payload?.mode)
     engine.setFftMode(mode, mode === 'screen' ? getSenderDisplayHz(event.sender) : undefined)
@@ -381,22 +370,14 @@ export function registerAudioChannel(): void {
     if (!gaplessEnabled) getGapless().clearNext()
   })
   ipcMain.handle('audio:clearNext', () => getGapless().clearNext())
-  ipcMain.handle('audio:swapNow', () => {
-    // swapToNext() re-applies EQ + leveler via the onAfterSwap hook (shared with
+  ipcMain.handle('audio:swapNow', async () => {
+    // swapToNext() re-applies the leveler via the onAfterSwap hook (shared with
     // the native auto-advance path), so we don't repeat it here.
-    const result = gaplessEnabled ? getGapless().swapToNext() : null
-    getGapless().bindCurrentTrackEnd()
+    const result = gaplessEnabled ? await getGapless().swapToNext() : null
     return serializeStreamLoadResult(result)
   })
   ipcMain.handle('audio:promoteCurrentToMemory', async () => {
     const result = await engine.promoteCurrentToMemory()
-    if (result.source === 'memory') {
-      eq.reapply(engine.getCurrentStream())
-      broadcastEqState()
-      // Same track, so the gain is unchanged, but re-assert it (the in-memory
-      // re-adopt resets channel FX) and keep the renderer's readout in sync.
-      applyLevelerForCurrentTrack()
-    }
     return serializeStreamLoadResult(result)
   })
   ipcMain.handle('audio:getStatus', () => ({
@@ -422,16 +403,16 @@ export function registerAudioChannel(): void {
     const current = engine.getOutputDevice()
     return current ? decorate(current) : null
   })
-  ipcMain.handle('audio:devices:set', (_, payload: { deviceId: number }) => {
-    const selected = engine.setOutputDevice(payload.deviceId)
-    // Invalidate any cached CoreAudio mapping so the next exclusive-mode
-    // check sees a fresh device list.
-    getExclusiveModeManager().invalidateCache()
-    const movedPreload = getGapless().movePreloadedToOutputDevice(selected.id)
-    if (!movedPreload) {
-      console.warn(`[audio] cleared preloaded stream after output device switch to ${selected.name}`)
-    }
+  ipcMain.handle('audio:devices:set', async (_, payload: { deviceId: number }) => {
+    // The engine reopens the output and keeps the current and queued tracks.
+    const selected = await engine.setOutputDevice(payload.deviceId)
     return decorate(selected)
+  })
+
+  ipcMain.handle('audio:output:get', () => engine.getOutputInfoPayload())
+  ipcMain.handle('audio:output:setPolicy', async (_, payload: Partial<OutputPolicyPayload>) => {
+    if (typeof payload?.bitPerfect !== 'boolean') throw new Error('audio:output:setPolicy: bitPerfect must be a boolean')
+    return engine.setOutputPolicy({ bitPerfect: payload.bitPerfect })
   })
 
   ipcMain.handle('audio:exclusive:get', () => getExclusiveModeManager().getState())

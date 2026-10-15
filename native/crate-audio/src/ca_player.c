@@ -643,14 +643,16 @@ CA_API int ca_player_clear_next(ca_player *p) {
   return CA_OK;
 }
 
-CA_API int ca_player_skip_to_next(ca_player *p) {
+CA_API int ca_player_skip_to_next(ca_player *p, int64_t serial) {
   if (!p) return ca__fail(CA_ERR_INVALID_ARG, "ca_player_skip_to_next: NULL player");
   ca_mutex_lock(&g_engine.lock);
   begin_command(p);
-  if (p->count < 2) {
+  if (p->count < 2 || p->items[1].serial != serial) {
+    /* A gapless transition may have made it current already. */
+    int already = p->count >= 1 && p->items[0].serial == serial;
     end_command(p);
     ca_mutex_unlock(&g_engine.lock);
-    return ca__fail(CA_ERR_STATE, "nothing is queued");
+    return already ? CA_OK : ca__fail(CA_ERR_STATE, "track %lld is not queued", (long long)serial);
   }
   ca_item next = p->items[1];
   int reopen = g_engine.device_open && p->is_main && !ca__format_matches_output(&next.format);
@@ -673,12 +675,12 @@ CA_API int ca_player_skip_to_next(ca_player *p) {
   return CA_OK;
 }
 
-CA_API int ca_player_replace_source(ca_player *p, ca_decoder *decoder) {
+CA_API int ca_player_replace_source(ca_player *p, ca_decoder *decoder, int64_t serial) {
   if (!p || !decoder) return ca__fail(CA_ERR_INVALID_ARG, "ca_player_replace_source: NULL argument");
   begin_command(p);
   int status = CA_OK;
-  if (p->count == 0) {
-    status = ca__fail(CA_ERR_STATE, "nothing is loaded");
+  if (p->count == 0 || p->items[0].serial != serial) {
+    status = ca__fail(CA_ERR_STATE, "track %lld is no longer current", (long long)serial);
   } else {
     ca_item *current = &p->items[0];
     /* Continue exactly where the old decoder stopped feeding the ring. */

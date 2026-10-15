@@ -453,3 +453,17 @@ Tests (788 verificaciones, también bajo ASan/UBSan y ThreadSanitizer sin report
 - EQ igual a BASS_FX BQF (respuesta al impulso a 5e-6) y RMS de los medidores igual a BASS.
 - Selector de formato: 21 casos con DAC simulados (USB 24/96 y 32/384, Bluetooth, AirPlay, familia 48k, Windows compartido, 5.1, DSD).
 - Mono → estéreo a ganancia unitaria (FFmpeg reparte a −3 dB por defecto).
+
+### F4 · Integración TypeScript — completa
+
+- `AudioEngine.ts` reescrito sobre el player nativo: mantiene la política de RAM, OneDrive y la telemetría; la cola de dos pistas, el gapless y los cambios de formato los hace el motor y JS sigue sus eventos (sondeo cada 25 ms).
+- `GaplessController.ts`: decide qué precargar y le pasa al motor la ganancia del nivelador de la pista siguiente; el traspaso es nativo y exacto a la muestra.
+- `EQManager.ts`: el EQ vive en el player y persiste entre pistas (sin `reapply`).
+- `ExclusiveModeManager.ts`: pide la política exclusiva al motor, que reabre el dispositivo sin perder la posición (sin recargar el archivo).
+- `DuplicateAuditionService.ts`: cada lado es un player nativo secundario.
+- `ca_player_skip_to_next` y `ca_player_replace_source` verifican el serial esperado, para no actuar sobre la pista equivocada si una transición gapless se cruza con una acción del usuario.
+- Contrato IPC: `StreamInfoPayload` nuevo (`codec`, `sourceRate`, `bitsPerSample`), `OutputInfoPayload`, `audio:output:get`, `audio:output:setPolicy`, eventos `audio:output-changed` y `audio:devices-changed`.
+- Se eliminaron los bindings de BASS/BASS_FX, `PluginLoader`, el FFI de CoreAudio, `exclusivePlaybackSnapshot` y `endSyncOwnership`.
+- `CRATE_AUDIO_NULL_OUTPUT=1` (solo desarrollo) manda el audio al dispositivo nulo para pruebas automáticas.
+
+Validación: smoke test en la app real por CDP (perfil aislado, dispositivo nulo): carga, gapless natural, fin de pista, "siguiente" manual con cambio a 96 kHz, seek y DSD64 → PCM 352,8 kHz.

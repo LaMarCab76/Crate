@@ -80,6 +80,34 @@ interface Bindings {
   fftCreate: KoffiFunction
   fftRun: KoffiFunction
   fftDestroy: KoffiFunction
+  init: KoffiFunction
+  shutdown: KoffiFunction
+  deviceCount: KoffiFunction
+  deviceGet: KoffiFunction
+  deviceGetCaps: KoffiFunction
+  outputOpen: KoffiFunction
+  outputSetPolicy: KoffiFunction
+  outputClose: KoffiFunction
+  outputGetInfo: KoffiFunction
+  playerCreate: KoffiFunction
+  playerDestroy: KoffiFunction
+  playerGetId: KoffiFunction
+  playerSetSource: KoffiFunction
+  playerQueueNext: KoffiFunction
+  playerClearNext: KoffiFunction
+  playerSkipToNext: KoffiFunction
+  playerReplaceSource: KoffiFunction
+  playerDetach: KoffiFunction
+  playerPlay: KoffiFunction
+  playerPause: KoffiFunction
+  playerSeek: KoffiFunction
+  playerGetStatus: KoffiFunction
+  playerSetVolume: KoffiFunction
+  playerSetGain: KoffiFunction
+  playerSetEq: KoffiFunction
+  playerGetFft: KoffiFunction
+  playerGetLevels: KoffiFunction
+  pollEvent: KoffiFunction
 }
 
 let bindings: Bindings | null = null
@@ -116,6 +144,69 @@ function defineTypes(): void {
   })
   koffi.opaque('ca_decoder')
   koffi.opaque('ca_fft')
+  koffi.opaque('ca_player')
+  koffi.struct('ca_device_info', {
+    id: koffi.array('char', 256),
+    name: koffi.array('char', 256),
+    is_default: 'int32_t',
+    max_channels: 'int32_t',
+    max_sample_rate: 'int32_t',
+    max_bits: 'int32_t',
+    supports_exclusive: 'int32_t',
+    reserved: 'int32_t',
+  })
+  koffi.struct('ca_device_caps', {
+    count: 'int32_t',
+    rates: koffi.array('int32_t', 32),
+    bits: koffi.array('int32_t', 32),
+    max_channels: 'int32_t',
+    current_rate: 'int32_t',
+    current_bits: 'int32_t',
+    can_set_rate: 'int32_t',
+    exclusive: 'int32_t',
+  })
+  koffi.struct('ca_output_policy', {
+    exclusive: 'int32_t',
+    bit_perfect: 'int32_t',
+  })
+  koffi.struct('ca_output_format', {
+    sample_rate: 'int32_t',
+    bits: 'int32_t',
+    channels: 'int32_t',
+    resampled: 'int32_t',
+    dithered: 'int32_t',
+    downmixed: 'int32_t',
+    limited_by: 'int32_t',
+    reserved: 'int32_t',
+  })
+  koffi.struct('ca_output_info', {
+    open: 'int32_t',
+    sample_rate: 'int32_t',
+    bits: 'int32_t',
+    channels: 'int32_t',
+    exclusive: 'int32_t',
+    bit_perfect: 'int32_t',
+    original_rate: 'int32_t',
+    reserved: 'int32_t',
+    current: 'ca_output_format',
+    device_id: koffi.array('char', 256),
+    device_name: koffi.array('char', 256),
+  })
+  koffi.struct('ca_player_status', {
+    state: 'int32_t',
+    ended: 'int32_t',
+    serial: 'int64_t',
+    position: 'double',
+    buffered_seconds: 'double',
+  })
+  koffi.struct('ca_event', {
+    type: 'int32_t',
+    player_id: 'int32_t',
+    serial: 'int64_t',
+    decoder: 'uint64_t',
+    code: 'int32_t',
+    reserved: 'int32_t',
+  })
 }
 
 export function loadCrateAudio(): Bindings {
@@ -140,6 +231,34 @@ export function loadCrateAudio(): Bindings {
       fftCreate: lib.func('ca_fft *ca_fft_create(void)'),
       fftRun: lib.func('int ca_fft_run(ca_fft *fft, const float *frames, int32_t frame_count, int32_t channels, _Out_ float *out)'),
       fftDestroy: lib.func('void ca_fft_destroy(ca_fft *fft)'),
+      init: lib.func('int ca_init(int32_t flags)'),
+      shutdown: lib.func('void ca_shutdown(void)'),
+      deviceCount: lib.func('int ca_device_count(void)'),
+      deviceGet: lib.func('int ca_device_get(int32_t index, _Out_ ca_device_info *out)'),
+      deviceGetCaps: lib.func('int ca_device_get_caps(const char *id, int32_t exclusive, _Out_ ca_device_caps *out)'),
+      outputOpen: lib.func('int ca_output_open(const char *id, const ca_output_policy *policy)'),
+      outputSetPolicy: lib.func('int ca_output_set_policy(const ca_output_policy *policy)'),
+      outputClose: lib.func('void ca_output_close(void)'),
+      outputGetInfo: lib.func('int ca_output_get_info(_Out_ ca_output_info *out)'),
+      playerCreate: lib.func('ca_player *ca_player_create(int32_t is_main)'),
+      playerDestroy: lib.func('void ca_player_destroy(ca_player *player)'),
+      playerGetId: lib.func('int ca_player_get_id(const ca_player *player)'),
+      playerSetSource: lib.func('int ca_player_set_source(ca_player *player, ca_decoder *dec, float gain, int64_t serial)'),
+      playerQueueNext: lib.func('int ca_player_queue_next(ca_player *player, ca_decoder *dec, float gain, int64_t serial)'),
+      playerClearNext: lib.func('int ca_player_clear_next(ca_player *player)'),
+      playerSkipToNext: lib.func('int ca_player_skip_to_next(ca_player *player, int64_t serial)'),
+      playerReplaceSource: lib.func('int ca_player_replace_source(ca_player *player, ca_decoder *dec, int64_t serial)'),
+      playerDetach: lib.func('int ca_player_detach(ca_player *player)'),
+      playerPlay: lib.func('int ca_player_play(ca_player *player)'),
+      playerPause: lib.func('int ca_player_pause(ca_player *player)'),
+      playerSeek: lib.func('int ca_player_seek(ca_player *player, double seconds)'),
+      playerGetStatus: lib.func('int ca_player_get_status(ca_player *player, _Out_ ca_player_status *out)'),
+      playerSetVolume: lib.func('int ca_player_set_volume(ca_player *player, float volume)'),
+      playerSetGain: lib.func('int ca_player_set_gain(ca_player *player, float gain)'),
+      playerSetEq: lib.func('int ca_player_set_eq(ca_player *player, int32_t enabled, int32_t count, const float *freqs, const float *gains, float bandwidth)'),
+      playerGetFft: lib.func('int ca_player_get_fft(ca_player *player, _Out_ float *out)'),
+      playerGetLevels: lib.func('int ca_player_get_levels(ca_player *player, float window_seconds, _Out_ float *out)'),
+      pollEvent: lib.func('int ca_poll_events(_Out_ ca_event *out, int32_t max)'),
     }
     const info = readBuildInfo(loaded)
     if (info.apiVersion !== CRATE_AUDIO_API_VERSION) {
@@ -341,5 +460,312 @@ export class Spectrum {
     if (this.handle == null) return
     loadCrateAudio().fftDestroy(this.handle)
     this.handle = null
+  }
+}
+
+/* ------------------------------------------------------------- engine */
+
+export const CA_ERR_STATE = -8
+
+export const CA_INIT_NULL_BACKEND = 0x1
+
+export const CA_PLAYER_STOPPED = 0
+export const CA_PLAYER_PLAYING = 1
+export const CA_PLAYER_PAUSED = 2
+
+export const CA_EVENT_TRACK_STARTED = 1
+export const CA_EVENT_TRACK_ENDED = 2
+export const CA_EVENT_DECODER_RETIRED = 3
+export const CA_EVENT_OUTPUT_CHANGED = 4
+export const CA_EVENT_DEVICE_LOST = 5
+export const CA_EVENT_DEVICE_REROUTED = 6
+export const CA_EVENT_DECODE_ERROR = 7
+
+export const CA_LIMIT_DAC_RATE = 0x01
+export const CA_LIMIT_DAC_BITS = 0x02
+export const CA_LIMIT_DAC_CHANNELS = 0x04
+export const CA_LIMIT_FIXED_RATE = 0x08
+export const CA_LIMIT_SETTING_OFF = 0x10
+
+export interface NativeDeviceInfo {
+  id: string
+  name: string
+  isDefault: boolean
+  maxChannels: number
+  maxSampleRate: number
+  maxBits: number
+  supportsExclusive: boolean
+}
+
+export interface NativeOutputPolicy {
+  exclusive: boolean
+  bitPerfect: boolean
+}
+
+export interface NativeOutputFormat {
+  sampleRate: number
+  bits: number
+  channels: number
+  resampled: boolean
+  dithered: boolean
+  downmixed: boolean
+  limitedBy: number
+}
+
+export interface NativeOutputInfo {
+  open: boolean
+  sampleRate: number
+  bits: number
+  channels: number
+  exclusive: boolean
+  bitPerfect: boolean
+  originalRate: number
+  current: NativeOutputFormat
+  deviceId: string
+  deviceName: string
+}
+
+export interface NativePlayerStatus {
+  state: number
+  ended: boolean
+  serial: number
+  position: number
+  bufferedSeconds: number
+}
+
+export interface NativeEvent {
+  type: number
+  playerId: number
+  serial: number
+  decoder: bigint
+  code: number
+}
+
+function check(status: number, what: string): void {
+  if (status < 0) throw new CrateAudioError(`${what} failed: ${lastCrateAudioError() || `error ${status}`}`, status)
+}
+
+async function checkAsync(promise: Promise<number>, what: string): Promise<void> {
+  const status = Number(await promise)
+  // ca_last_error is per thread; the async call ran elsewhere.
+  if (status < 0) throw new CrateAudioError(`${what} failed (error ${status})`, status)
+}
+
+function nativePolicy(policy: NativeOutputPolicy) {
+  return { exclusive: policy.exclusive ? 1 : 0, bit_perfect: policy.bitPerfect ? 1 : 0 }
+}
+
+function toFormat(raw: Record<string, unknown>): NativeOutputFormat {
+  return {
+    sampleRate: Number(raw.sample_rate),
+    bits: Number(raw.bits),
+    channels: Number(raw.channels),
+    resampled: Boolean(raw.resampled),
+    dithered: Boolean(raw.dithered),
+    downmixed: Boolean(raw.downmixed),
+    limitedBy: Number(raw.limited_by),
+  }
+}
+
+let engineInitialised = false
+
+/** Initialises the engine once per process (real audio devices). */
+export function initEngine(flags = 0): void {
+  if (engineInitialised) return
+  check(Number(loadCrateAudio().init(flags)), 'Audio engine start')
+  engineInitialised = true
+}
+
+export function shutdownEngine(): void {
+  if (!engineInitialised) return
+  loadCrateAudio().shutdown()
+  engineInitialised = false
+}
+
+export function listNativeDevices(): NativeDeviceInfo[] {
+  const b = loadCrateAudio()
+  const count = Number(b.deviceCount())
+  check(count, 'Listing audio devices')
+  const devices: NativeDeviceInfo[] = []
+  for (let index = 0; index < count; index++) {
+    const raw: Record<string, unknown> = {}
+    if (Number(b.deviceGet(index, raw)) !== 0) continue
+    devices.push({
+      id: String(raw.id ?? ''),
+      name: String(raw.name ?? ''),
+      isDefault: Boolean(raw.is_default),
+      maxChannels: Number(raw.max_channels),
+      maxSampleRate: Number(raw.max_sample_rate),
+      maxBits: Number(raw.max_bits),
+      supportsExclusive: Boolean(raw.supports_exclusive),
+    })
+  }
+  return devices
+}
+
+export async function openOutput(deviceId: string | null, policy: NativeOutputPolicy): Promise<void> {
+  await checkAsync(callAsync<number>(loadCrateAudio().outputOpen, deviceId, nativePolicy(policy)), 'Opening the audio output')
+}
+
+export async function setOutputPolicy(policy: NativeOutputPolicy): Promise<void> {
+  await checkAsync(callAsync<number>(loadCrateAudio().outputSetPolicy, nativePolicy(policy)), 'Changing the output mode')
+}
+
+export function closeOutput(): void {
+  loadCrateAudio().outputClose()
+}
+
+export function getOutputInfo(): NativeOutputInfo {
+  const raw: Record<string, unknown> = {}
+  loadCrateAudio().outputGetInfo(raw)
+  return {
+    open: Boolean(raw.open),
+    sampleRate: Number(raw.sample_rate),
+    bits: Number(raw.bits),
+    channels: Number(raw.channels),
+    exclusive: Boolean(raw.exclusive),
+    bitPerfect: Boolean(raw.bit_perfect),
+    originalRate: Number(raw.original_rate),
+    current: toFormat((raw.current ?? {}) as Record<string, unknown>),
+    deviceId: String(raw.device_id ?? ''),
+    deviceName: String(raw.device_name ?? ''),
+  }
+}
+
+/** Drains pending engine events. */
+export function pollEvents(): NativeEvent[] {
+  const b = loadCrateAudio()
+  const events: NativeEvent[] = []
+  for (let guard = 0; guard < 256; guard++) {
+    const raw: Record<string, unknown> = {}
+    if (Number(b.pollEvent(raw, 1)) <= 0) break
+    events.push({
+      type: Number(raw.type),
+      playerId: Number(raw.player_id),
+      serial: Number(raw.serial),
+      decoder: BigInt(raw.decoder as number | bigint),
+      code: Number(raw.code),
+    })
+  }
+  return events
+}
+
+/**
+ * A native player: one output stream mixed into the device. Decoders handed
+ * to it stay owned by the caller, who closes them once the player gives them
+ * back (see crate_audio.h).
+ */
+export class NativePlayer {
+  private handle: NativeHandle | null
+  readonly id: number
+  private readonly fftOut = new Float32Array(CA_FFT_BINS)
+  private readonly levelsOut = new Float32Array(4)
+
+  constructor(isMain: boolean) {
+    const b = loadCrateAudio()
+    const handle = b.playerCreate(isMain ? 1 : 0) as NativeHandle | null
+    if (!handle) throw new CrateAudioError(`Cannot create a player: ${lastCrateAudioError()}`, -2)
+    this.handle = handle
+    this.id = Number(b.playerGetId(handle))
+  }
+
+  private get native(): NativeHandle {
+    if (this.handle == null) throw new CrateAudioError('Player is destroyed', -8)
+    return this.handle
+  }
+
+  setSource(decoder: Decoder, gain: number, serial: number): Promise<void> {
+    return checkAsync(callAsync<number>(loadCrateAudio().playerSetSource, this.native, decoder.nativeHandle, gain, serial), 'Loading the track')
+  }
+
+  queueNext(decoder: Decoder, gain: number, serial: number): Promise<void> {
+    return checkAsync(callAsync<number>(loadCrateAudio().playerQueueNext, this.native, decoder.nativeHandle, gain, serial), 'Queueing the next track')
+  }
+
+  clearNext(): void {
+    check(Number(loadCrateAudio().playerClearNext(this.native)), 'Clearing the queued track')
+  }
+
+  /** Resolves false when `serial` is no longer queued. */
+  async skipToNext(serial: number): Promise<boolean> {
+    const status = Number(await callAsync<number>(loadCrateAudio().playerSkipToNext, this.native, serial))
+    if (status === CA_ERR_STATE) return false
+    if (status < 0) throw new CrateAudioError(`Skipping to the next track failed (error ${status})`, status)
+    return true
+  }
+
+  /** Resolves false when `serial` is no longer the current track. */
+  async replaceSource(decoder: Decoder, serial: number): Promise<boolean> {
+    const status = Number(await callAsync<number>(loadCrateAudio().playerReplaceSource, this.native, decoder.nativeHandle, serial))
+    if (status === CA_ERR_STATE) return false
+    if (status < 0) throw new CrateAudioError(`Switching the track to memory failed (error ${status})`, status)
+    return true
+  }
+
+  detach(): void {
+    loadCrateAudio().playerDetach(this.native)
+  }
+
+  play(): void {
+    check(Number(loadCrateAudio().playerPlay(this.native)), 'Starting playback')
+  }
+
+  pause(): void {
+    loadCrateAudio().playerPause(this.native)
+  }
+
+  seek(seconds: number): void {
+    check(Number(loadCrateAudio().playerSeek(this.native, seconds)), 'Seeking')
+  }
+
+  status(): NativePlayerStatus {
+    const raw: Record<string, unknown> = {}
+    loadCrateAudio().playerGetStatus(this.native, raw)
+    return {
+      state: Number(raw.state),
+      ended: Boolean(raw.ended),
+      serial: Number(raw.serial),
+      position: Number(raw.position),
+      bufferedSeconds: Number(raw.buffered_seconds),
+    }
+  }
+
+  setVolume(volume: number): void {
+    loadCrateAudio().playerSetVolume(this.native, volume)
+  }
+
+  setGain(gain: number): void {
+    loadCrateAudio().playerSetGain(this.native, gain)
+  }
+
+  setEq(enabled: boolean, freqs: number[], gains: number[], bandwidthOctaves: number): void {
+    const count = Math.min(freqs.length, gains.length, 32)
+    loadCrateAudio().playerSetEq(
+      this.native,
+      enabled ? 1 : 0,
+      count,
+      Float32Array.from(freqs.slice(0, count)),
+      Float32Array.from(gains.slice(0, count)),
+      bandwidthOctaves,
+    )
+  }
+
+  /** BASS_DATA_FFT2048-compatible magnitudes of what is being heard. */
+  fft(): Float32Array {
+    loadCrateAudio().playerGetFft(this.native, this.fftOut)
+    return this.fftOut
+  }
+
+  /** [peakL, peakR, rmsL, rmsR] over the last `windowSeconds`. */
+  levels(windowSeconds: number): Float32Array {
+    loadCrateAudio().playerGetLevels(this.native, windowSeconds, this.levelsOut)
+    return this.levelsOut
+  }
+
+  destroy(): void {
+    if (this.handle == null) return
+    const handle = this.handle
+    this.handle = null
+    loadCrateAudio().playerDestroy(handle)
   }
 }

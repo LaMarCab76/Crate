@@ -343,7 +343,9 @@ static void test_skip_to_next(ca_player *p) {
   ca_player_play(p);
   capture c = {0};
   render_until(p, &c, 0, 0, 4096);
-  CHECK(ca_player_skip_to_next(p) == CA_OK, "skip_to_next");
+  CHECK(ca_player_skip_to_next(p, 99) == CA_ERR_STATE, "skip_to_next with a wrong serial must fail");
+  CHECK(ca_player_skip_to_next(p, 61) == CA_OK, "skip_to_next");
+  CHECK(ca_player_skip_to_next(p, 61) == CA_OK, "skip_to_next to the already current track is a no-op");
   capture after = {0};
   render_until(p, &after, CA_EVENT_TRACK_ENDED, 61, 100000);
   CHECK(has_event(&after, CA_EVENT_TRACK_STARTED, 61), "skip did not start B");
@@ -375,7 +377,8 @@ static void test_replace_source(ca_player *p) {
   ca_player_play(p);
   capture c = {0};
   render_until(p, &c, 0, 0, 8192);
-  CHECK(ca_player_replace_source(p, from_memory) == CA_OK, "replace_source: %s", ca_last_error());
+  CHECK(ca_player_replace_source(p, from_memory, 71) == CA_ERR_STATE, "replace_source with a stale serial must fail");
+  CHECK(ca_player_replace_source(p, from_memory, 70) == CA_OK, "replace_source: %s", ca_last_error());
   render_until(p, &c, CA_EVENT_TRACK_ENDED, 70, 100000);
   double err = segment_error(&c.segments[0], 0, 44100, 0, 16);
   CHECK(err < 1e-6, "swapping to the RAM copy was audible (error %g)", err);

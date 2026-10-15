@@ -24,9 +24,9 @@ test('opening, closing, and invalidating cancel in-flight materialization', () =
   assert.match(source, /await pending\.settled/)
 })
 
-test('audition uses the UTF-16 BASS entry point and flag on Windows', () => {
-  assert.match(source, /windowsUnicode \? bass\.StreamCreateFileUnicode : bass\.StreamCreateFile/)
-  assert.match(source, /windowsUnicode \? BASS_UNICODE : 0/)
+test('audition opens files through the FFmpeg engine, which takes UTF-8 paths on every platform', () => {
+  assert.match(source, /Decoder\.openFileAsync\(path/)
+  assert.doesNotMatch(source, /bass/i)
 })
 
 test('duplicate review begins one idempotent main-player session before listing candidates', () => {
