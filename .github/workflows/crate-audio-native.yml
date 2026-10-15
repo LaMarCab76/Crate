@@ -1,0 +1,235 @@
+name: crate-audio native assets
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/crate-audio-native.yml"
+      - "native/crate-audio/**"
+      - "native/libs/licenses/crate-audio/**"
+      - "scripts/*crate-audio*.mjs"
+      - "scripts/native-binary.mjs"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/crate-audio-native.yml"
+      - "native/crate-audio/**"
+      - "native/libs/licenses/crate-audio/**"
+      - "scripts/*crate-audio*.mjs"
+      - "scripts/native-binary.mjs"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the immutable native asset release after all targets pass
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  GH_REPO: ${{ github.repository }}
+  RELEASE_TAG: crate-audio-native-v1.0.0-1
+
+jobs:
+  prepare_release:
+    name: Prepare native release draft
+    if: github.event_name == 'workflow_dispatch' && inputs.publish == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Create or reset the release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${RELEASE_TAG}"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            if [[ "$(gh release view "${tag}" --json isDraft --jq '.isDraft')" != "true" ]]; then
+              echo "${tag} is already published; refusing to replace immutable native binaries" >&2
+              exit 1
+            fi
+
+            while IFS= read -r asset; do
+              [[ -z "${asset}" ]] && continue
+              gh release delete-asset "${tag}" "${asset}" --yes
+            done < <(gh release view "${tag}" --json assets --jq '.assets[].name')
+          else
+            gh release create "${tag}" \
+              --draft \
+              --target "${GITHUB_SHA}" \
+              --title "Crate audio engine 1.0.0 native assets (revision 1)" \
+              --notes "libcrate_audio built from the pinned FFmpeg 9.0.2 (LGPL, audio decoders only) and miniaudio 0.11.25 sources. Each archive includes its provenance manifest, the exact FFmpeg source archive and the license notices."
+          fi
+
+  build:
+    name: Build ${{ matrix.asset }}
+    needs: prepare_release
+    if: >-
+      always() &&
+      (needs.prepare_release.result == 'success' || needs.prepare_release.result == 'skipped')
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: darwin
+            arch: universal
+            asset: crate-audio-1.0.0-darwin-universal
+            binary: native/libs/libcrate_audio.dylib
+          - os: windows-2022
+            platform: win32
+            arch: x64
+            asset: crate-audio-1.0.0-win32-x64
+            binary: native/libs/crate_audio.dll
+          - os: ubuntu-24.04
+            platform: linux
+            arch: x64
+            asset: crate-audio-1.0.0-linux-x64
+            binary: native/libs/libcrate_audio.so
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Setup MSYS2 (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          path-type: inherit
+          update: true
+          install: >-
+            make
+            tar
+            xz
+            diffutils
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+
+      - name: Build and test (macOS / Linux)
+        if: runner.os != 'Windows'
+        run: npm run build:crate-audio -- --platform=${{ matrix.platform }} --arch=${{ matrix.arch }} --force --test
+
+      - name: Build and test (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        env:
+          CRATE_AUDIO_BUILD_DIR: ${{ runner.temp }}/crate-audio-build
+        run: node scripts/build-crate-audio.mjs --platform=win32 --arch=x64 --force --test
+
+      - name: Verify provenance, exports, dependencies and native load
+        run: npm run verify:crate-audio -- --platform=${{ matrix.platform }} --arch=${{ matrix.arch }} --load
+
+      - name: Package and upload verified native tree
+        if: github.event_name == 'workflow_dispatch' && inputs.publish == true && runner.os != 'Windows'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          asset="${{ matrix.asset }}.zip"
+          stage="release-staging"
+          licenses="${stage}/licenses/crate-audio"
+
+          mkdir -p "${licenses}"
+          cp "${{ matrix.binary }}" "${stage}/"
+          cp native/libs/crate-audio-manifest.json "${stage}/"
+          for file in LICENSE.md LGPL-2.1.txt MINIAUDIO-LICENSE.txt SOURCE.md ffmpeg-9.0.2.tar.xz; do
+            cp "native/libs/licenses/crate-audio/${file}" "${licenses}/"
+          done
+
+          (
+            cd "${stage}"
+            zip -9 -r "../${asset}" .
+          )
+          gh release upload "${RELEASE_TAG}" "${asset}"
+
+      - name: Package and upload verified native tree on Windows
+        if: github.event_name == 'workflow_dispatch' && inputs.publish == true && runner.os == 'Windows'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $asset = "${{ matrix.asset }}.zip"
+          $stage = "release-staging"
+          $licenses = Join-Path $stage "licenses/crate-audio"
+
+          New-Item -ItemType Directory -Force -Path $licenses | Out-Null
+          Copy-Item "${{ matrix.binary }}" $stage
+          Copy-Item "native/libs/crate-audio-manifest.json" $stage
+          foreach ($file in @("LICENSE.md", "LGPL-2.1.txt", "MINIAUDIO-LICENSE.txt", "SOURCE.md", "ffmpeg-9.0.2.tar.xz")) {
+            Copy-Item (Join-Path "native/libs/licenses/crate-audio" $file) $licenses
+          }
+
+          Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $asset -CompressionLevel Optimal
+          & gh release upload $env:RELEASE_TAG $asset
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to upload $asset"
+          }
+
+  publish:
+    name: Publish verified native release
+    if: github.event_name == 'workflow_dispatch' && inputs.publish == true
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Verify assets and publish immutable native release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          expected=(
+            crate-audio-1.0.0-darwin-universal.zip
+            crate-audio-1.0.0-linux-x64.zip
+            crate-audio-1.0.0-win32-x64.zip
+          )
+
+          mkdir release-assets
+          gh release download "${RELEASE_TAG}" --dir release-assets --pattern 'crate-audio-1.0.0-*.zip'
+
+          for asset in "${expected[@]}"; do
+            if [[ ! -s "release-assets/${asset}" ]]; then
+              echo "Missing or empty native release asset: ${asset}" >&2
+              exit 1
+            fi
+          done
+
+          mapfile -t archives < <(find release-assets -maxdepth 1 -type f -name '*.zip' -print)
+          if [[ ${#archives[@]} -ne ${#expected[@]} ]]; then
+            echo "Expected ${#expected[@]} native archives, found ${#archives[@]}" >&2
+            exit 1
+          fi
+
+          (
+            cd release-assets
+            sha256sum "${expected[@]}" > SHA256SUMS
+          )
+          gh release upload "${RELEASE_TAG}" release-assets/SHA256SUMS
+          gh release edit "${RELEASE_TAG}" --draft=false --latest=false

@@ -1,0 +1,6 @@
+{
+  global:
+    ca_*;
+  local:
+    *;
+};

@@ -153,5 +153,10 @@ native/libs/licenses/bass/
 native/libs/chromaprint-manifest.json
 native/libs/licenses/chromaprint/chromaprint-*.tar.gz
 
+# crate-audio (FFmpeg + miniaudio engine) — built by scripts/build-crate-audio.mjs
+native/crate-audio/.cache/
+native/libs/crate-audio-manifest.json
+native/libs/licenses/crate-audio/ffmpeg-*.tar.xz
+
 # Claude Code session files
 .claude/
