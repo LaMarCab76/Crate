@@ -19,6 +19,16 @@ export function registerProtocolSchemes(): void {
         stream: true,
       },
     },
+    {
+      scheme: 'crate-interface',
+      privileges: {
+        standard: true,
+        secure: true,
+        supportFetchAPI: true,
+        corsEnabled: true,
+        bypassCSP: false,
+      },
+    },
   ])
 }
 

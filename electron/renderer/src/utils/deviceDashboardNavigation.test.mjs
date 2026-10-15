@@ -31,7 +31,8 @@ test('section tabs render as a stack at the top of the scrolling content', () =>
   const renderContentIndex = appSource.indexOf('{renderContent()}', sectionNavIndex)
 
   assert.ok(contentIndex >= 0, 'App should render the scrolling content area')
-  assert.ok(sectionNavIndex > contentIndex, 'Section tabs should live inside .content, not as a toolbar row')
+  assert.ok(appSource.slice(contentIndex, renderContentIndex).includes("interfaceBase !== 'classic' && sectionNavigation"), 'Glass sections should stay inside the scroller')
+  assert.ok(appSource.includes('className="classic-section-nav"'), 'Classic sections should retain their own non-scrolling row')
   assert.ok(renderContentIndex > sectionNavIndex, 'Section tabs should sit above the view content')
   assert.ok(appSource.indexOf('<DeviceSectionTabs', sectionNavIndex) > sectionNavIndex, 'Device sections should render inside the section nav')
   assert.ok(appSource.indexOf('<SettingsSectionTabs', sectionNavIndex) > sectionNavIndex, 'Preferences tabs should render inside the section nav')

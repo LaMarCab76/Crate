@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "nightdesk",
+  "name": "Nightdesk",
+  "version": "1.0.0",
+  "description": "Una interfaz programada con tarjetas de canciones, navegación por pestañas y una pantalla de escucha propia.",
+  "kind": "code",
+  "base": "glass",
+  "capabilities": ["library.read", "playback.control", "queue.control", "navigation"],
+  "entry": "index.html"
+}

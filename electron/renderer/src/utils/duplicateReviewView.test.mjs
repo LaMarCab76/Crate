@@ -7,6 +7,7 @@ function read(relative) {
 }
 
 const app = read('../App.tsx')
+const navigation = read('../runtime/navigation.ts')
 const sidebar = read('../components/Sidebar.tsx')
 const activity = read('../stores/activityCenterStore.ts')
 const store = read('../stores/duplicateStore.ts')
@@ -21,7 +22,7 @@ function cssBlock(selector) {
 }
 
 test('App routes duplicate review and suppresses every main playback surface', () => {
-  assert.match(app, /kind: 'duplicates'; candidateId\?: string/, 'View union must support a deep-linked candidate')
+  assert.match(navigation, /kind: 'duplicates'; candidateId\?: string/, 'View union must support a deep-linked candidate')
   assert.match(app, /case 'duplicates':\s*return <DuplicateReviewView/, 'renderContent must render duplicate review')
   assert.match(app, /!duplicateReviewOpen && \(playerPaneVisible \|\| lyricsSidePaneVisible\)/, 'lateral player must be hidden')
   assert.match(app, /!duplicateReviewOpen && bottomPlayerVisible/, 'bottom player must be hidden')

@@ -1,3 +1,4 @@
+import { InterfaceManager } from '../interfaces/InterfaceManager'
 import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import type { ArtistCreditSource, PlayerTintSource, Tweak } from '@renderer/stores/settingsStore'
 import type { DbFolder } from '@shared/types/db'
@@ -1246,7 +1247,8 @@ export function SettingsView({ tweak, setTweak, activeTab, playbackSubTab, onCon
       <h1>Preferences</h1>
       <div id="settings-content">
         {activeTab === 'apariencia' ? (
-          <AppearanceSection tweak={tweak} setTweak={setTweak} />
+          <><AppearanceSection tweak={tweak} setTweak={setTweak} />
+          <InterfaceManager /></>
         ) : activeTab === 'reproduccion' ? (
           <div className="settings-tab-content">
             {playbackSubTab === 'general' ? (

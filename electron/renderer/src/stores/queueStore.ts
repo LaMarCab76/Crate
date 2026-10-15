@@ -19,6 +19,7 @@ import { fadeTrackVolume } from '@renderer/utils/trackTransitionVolume'
 import { shouldPreloadUpcomingTrack } from '@renderer/utils/progressivePreload'
 import { shouldApplyTransitionFade } from '@renderer/utils/transitionFade'
 import { selectQueueNextIndex } from './queuePolicy'
+import { canRestoreQueueSnapshot, recoverEngineTrack } from './queueHydration'
 
 export type RepeatMode = 'off' | 'one' | 'all'
 
@@ -46,6 +47,8 @@ interface QueueState {
   seek(positionSec: number): Promise<void>
   setVolume(v: number): Promise<void>
   clear(): void
+  enqueue(tracks: Track[]): void
+  removeAt(index: number): Promise<void>
   setRepeat(mode: RepeatMode): void
   toggleShuffle(): void
 }
@@ -427,6 +430,21 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   },
 
   async hydrate(availableTracks: Track[]) {
+    const recoverPlayback = () => recoverEngineTrack({
+      availableTracks,
+      readEngineStatus: () => window.api.audio.getStatus(),
+      currentTrack: () => usePlaybackStore.getState().currentTrack,
+      transitionToken: () => trackTransitionToken,
+      isTransitioning: () => get().isTrackTransitioning || get().transitionTarget != null,
+      adopt: track => {
+        const { tracks } = get()
+        const currentIndex = tracks.findIndex(candidate => trackKey(candidate) === trackKey(track))
+        // An engine stream can outlive queue.clear(). Keep the user's queue
+        // intact; -1 means every queued track is upcoming in that case.
+        set({ currentIndex, history: currentIndex > 0 ? tracks.slice(0, currentIndex).slice(-50) : [] })
+        usePlaybackStore.getState().setCurrentTrack(track)
+      },
+    })
     if (queueHydrated) {
       const availableById = new Map(
         availableTracks.flatMap(track => track.dbId != null ? [[track.dbId, track] as const] : []),
@@ -443,7 +461,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
           : tracks.findIndex(track => trackKey(track) === currentKey)
         return {
           tracks,
-          currentIndex: tracks.length === 0 ? -1 : Math.max(0, matchedIndex),
+          currentIndex: tracks.length === 0 || matchedIndex < 0 ? -1 : Math.min(matchedIndex, tracks.length - 1),
           history: state.history.flatMap(track => {
             if (track.dbId == null) return [track]
             const fresh = availableById.get(track.dbId)
@@ -451,31 +469,44 @@ export const useQueueStore = create<QueueState>((set, get) => ({
           }),
         }
       })
+      try { await recoverPlayback() }
+      catch (error) { console.warn('[queue] failed to recover active engine track:', error) }
       return
     }
     if (queueHydrationPromise) return queueHydrationPromise
+    const tokenAtStart = trackTransitionToken
+    const queueAtStart = get()
     queueHydrationPromise = (async () => {
       try {
-        const snapshot = await window.api.queue.load()
-        const byId = new Map(
-          availableTracks.flatMap(track => track.dbId != null ? [[track.dbId, track] as const] : []),
-        )
-        const tracks = snapshot.trackIds.flatMap(id => {
-          const track = byId.get(id)
-          return track ? [track] : []
-        })
-        const currentIndex = tracks.length === 0
-          ? -1
-          : Math.max(0, Math.min(snapshot.currentIndex, tracks.length - 1))
-        set({
-          tracks,
-          currentIndex,
-          history: currentIndex > 0 ? tracks.slice(0, currentIndex).slice(-50) : [],
-          shuffle: snapshot.shuffle === true,
-          repeat: snapshot.repeat === 'all' || snapshot.repeat === 'one' ? snapshot.repeat : 'off',
-        })
-      } catch (error) {
-        console.warn('[queue] failed to hydrate snapshot:', error)
+        try {
+          const snapshot = await window.api.queue.load()
+          const current = get()
+          // A slow snapshot must not replace a queue created or changed by a
+          // user action since hydration started.
+          if (canRestoreQueueSnapshot(queueAtStart, current, usePlaybackStore.getState().currentTrack, tokenAtStart, trackTransitionToken)) {
+            const byId = new Map(
+              availableTracks.flatMap(track => track.dbId != null ? [[track.dbId, track] as const] : []),
+            )
+            const tracks = snapshot.trackIds.flatMap(id => {
+              const track = byId.get(id)
+              return track ? [track] : []
+            })
+            const currentIndex = tracks.length === 0 || snapshot.currentIndex < 0
+              ? -1
+              : Math.min(snapshot.currentIndex, tracks.length - 1)
+            set({
+              tracks,
+              currentIndex,
+              history: currentIndex > 0 ? tracks.slice(0, currentIndex).slice(-50) : [],
+              shuffle: snapshot.shuffle === true,
+              repeat: snapshot.repeat === 'all' || snapshot.repeat === 'one' ? snapshot.repeat : 'off',
+            })
+          }
+        } catch (error) {
+          console.warn('[queue] failed to hydrate snapshot:', error)
+        }
+        try { await recoverPlayback() }
+        catch (error) { console.warn('[queue] failed to recover active engine track:', error) }
       } finally {
         queueHydrated = true
         queueHydrationPromise = null
@@ -672,6 +703,26 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     const from = clampQueueIndex(index, 0, tracks.length - 1)
     if (from <= currentIndex) return
     moveQueueTrackWithValidation(from, tracks.length - 1)
+  },
+
+  enqueue(tracks) {
+    if (tracks.length === 0) return
+    set(state => ({ tracks: [...state.tracks, ...tracks] }))
+    clearGaplessQueuePreloadState()
+  },
+
+  async removeAt(index) {
+    const state = get()
+    if (!Number.isInteger(index) || index < 0 || index >= state.tracks.length) throw new Error('Invalid queue index')
+    if (state.isTrackTransitioning) throw new Error('Wait until the track transition finishes')
+    if (index === state.currentIndex) {
+      if (state.tracks.length === 1) { state.clear(); return }
+      const tracks = state.tracks.filter((_, current) => current !== index)
+      await get().playNow(tracks[Math.min(index, tracks.length - 1)], tracks)
+      return
+    }
+    set({ tracks: state.tracks.filter((_, current) => current !== index), currentIndex: index < state.currentIndex ? state.currentIndex - 1 : state.currentIndex })
+    clearGaplessQueuePreloadState()
   },
 }))
 

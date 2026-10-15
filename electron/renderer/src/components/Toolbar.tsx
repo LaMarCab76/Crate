@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { Icon } from './Icon'
-import type { View } from '@renderer/App'
+import type { View } from '@renderer/runtime/navigation'
 import { useDeviceStore } from '@renderer/stores/deviceStore'
 
 interface ToolbarProps {
@@ -153,6 +153,7 @@ export function Toolbar({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.altKey || event.shiftKey) return
       if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'f') return
+      if (!searchInputRef.current?.getClientRects().length) return
       if (document.querySelector(SEARCH_SHORTCUT_BLOCKERS)) return
       event.preventDefault()
       if (isViewMode || isSearchView) {

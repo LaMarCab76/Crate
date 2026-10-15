@@ -27,6 +27,8 @@
     "build:chromaprint": "node scripts/build-chromaprint.mjs",
     "verify:chromaprint": "node scripts/verify-chromaprint.mjs",
     "smoke:chromaprint-pipeline": "node scripts/smoke-chromaprint-pipeline.mjs",
+    "smoke:interfaces": "node scripts/smoke-interfaces.mjs",
+    "smoke:interface-runtime": "node electron/main/interfaces/runtime.smoke.mjs",
     "fetch:native": "node scripts/fetch-native.mjs",
     "verify:native": "node scripts/verify-native.mjs",
     "postinstall": "electron-rebuild -f -w better-sqlite3",

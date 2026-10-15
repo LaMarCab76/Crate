@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Nightdesk · Crate</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header><div><small>CRATE / NIGHTDESK</small><h1>Un espacio para escuchar.</h1></div><button id="settings">Preferencias</button></header>
+  <nav aria-label="Pantallas"><button data-screen="collection" aria-current="page">Colección</button><button data-screen="listening">Escuchando</button><button data-screen="queue">Cola</button></nav>
+  <p id="status" role="status" aria-live="polite"></p>
+  <main>
+    <section id="collection"><div class="collection-tools"><label>Buscar<input id="search" type="search" placeholder="Canción, artista o álbum"></label><button id="refresh">Actualizar</button></div><div id="cards" class="cards" aria-label="Canciones"></div><div class="pagination"><button id="previous-page">Página anterior</button><span id="page-description"></span><button id="next-page">Página siguiente</button></div></section>
+    <section id="listening" hidden><div class="listening"><div id="cover" class="listening-cover" aria-hidden="true"></div><div><small>AHORA SUENA</small><h2 id="listening-title">Elegí una canción</h2><p id="listening-artist"></p><p id="listening-quality"></p></div></div></section>
+    <section id="queue" hidden><h2>A continuación</h2><div id="queue-list"></div><button id="clear-queue">Vaciar cola</button></section>
+  </main>
+  <footer><div><strong id="track-title">Tu música está lista</strong><small id="track-artist"></small></div><div class="transport"><button id="previous-track" aria-label="Canción anterior">◀◀</button><button id="toggle" aria-label="Reproducir">▶</button><button id="next-track" aria-label="Canción siguiente">▶▶</button></div><label class="progress"><span id="elapsed">0:00</span><input id="seek" type="range" aria-label="Posición de reproducción" min="0" max="1" value="0"><span id="duration">0:00</span></label><label class="volume">Volumen<input id="volume" type="range" min="0" max="1" step="0.02" value="1"></label></footer>
+</body>
+</html>

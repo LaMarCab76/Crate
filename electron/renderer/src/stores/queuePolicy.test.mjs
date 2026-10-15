@@ -41,3 +41,13 @@ test('shuffle repeat-all resets after every other track is exhausted', () => {
   })
   assert.equal(next, 0)
 })
+
+test('Next starts an unstarted queue without applying repeat-one to an absent current item', () => {
+  for (const repeat of ['off', 'all', 'one']) {
+    for (const shuffle of [false, true]) {
+      assert.equal(selectQueueNextIndex({ ...base, currentIndex: -1, repeat, shuffle }), 0)
+    }
+  }
+  assert.equal(selectQueueNextIndex({ ...base, tracks: [], currentIndex: -1 }), null)
+  assert.equal(selectQueueNextIndex({ ...base, currentIndex: -2 }), null)
+})

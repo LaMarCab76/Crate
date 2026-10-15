@@ -9,6 +9,7 @@ function read(relative) {
 const view = read('../views/MetadataFixView.tsx')
 const css = read('../styles/globals.css')
 const app = read('../App.tsx')
+const navigation = read('../runtime/navigation.ts')
 const toolbar = read('../components/Toolbar.tsx')
 const libraryView = read('../views/LibraryView.tsx')
 const importView = read('../views/ImportView.tsx')
@@ -22,7 +23,7 @@ function cssBlock(selector) {
 }
 
 test('App registers the metadataFix view kind and routes to it', () => {
-  assert.match(app, /kind: 'metadataFix'; trackIds: number\[\]/, 'View union missing metadataFix kind')
+  assert.match(navigation, /kind: 'metadataFix'; trackIds: number\[\]/, 'View union missing metadataFix kind')
   assert.match(app, /case 'metadataFix':/, 'renderContent missing metadataFix case')
   assert.match(app, /<MetadataFixView[\s\S]*?trackIds=\{view\.trackIds\}[\s\S]*?onDone=\{goBack\}/, 'metadataFix case must render MetadataFixView with goBack')
 })

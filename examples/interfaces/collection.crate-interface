@@ -1,0 +1,145 @@
+{
+  "manifest": {
+    "schemaVersion": 1,
+    "id": "collection-example",
+    "name": "Colección personal",
+    "version": "1.0.0",
+    "description": "Ejemplo editable de navegación, pestañas y composición declarativa.",
+    "kind": "declarative",
+    "base": "classic",
+    "capabilities": [
+      "library.read",
+      "playback.control",
+      "navigation"
+    ],
+    "theme": {
+      "background": "#182326",
+      "surface": "#243539",
+      "accent": "#a4d1c3"
+    },
+    "screens": [
+      {
+        "id": "home",
+        "title": "Colección",
+        "root": {
+          "id": "root",
+          "type": "column",
+          "props": {
+            "padding": 24,
+            "gap": 22
+          },
+          "children": [
+            {
+              "id": "title",
+              "type": "text",
+              "props": {
+                "text": "Un lugar para tu música",
+                "fontSize": 30
+              }
+            },
+            {
+              "id": "player",
+              "type": "player"
+            },
+            {
+              "id": "search",
+              "type": "search"
+            },
+            {
+              "id": "collection-tabs",
+              "type": "tabs",
+              "children": [
+                {
+                  "id": "album-panel",
+                  "type": "panel",
+                  "props": {
+                    "title": "Álbumes",
+                    "padding": 16
+                  },
+                  "children": [
+                    {
+                      "id": "albums",
+                      "type": "albums",
+                      "props": {
+                        "limit": 24
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "tracks-panel",
+                  "type": "panel",
+                  "props": {
+                    "title": "Canciones",
+                    "padding": 16
+                  },
+                  "children": [
+                    {
+                      "id": "tracks",
+                      "type": "tracks",
+                      "props": {
+                        "limit": 50,
+                        "data": "library"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "listening",
+        "title": "Escuchando",
+        "root": {
+          "id": "listening-root",
+          "type": "column",
+          "props": {
+            "padding": 30,
+            "gap": 24
+          },
+          "children": [
+            {
+              "id": "listen-title",
+              "type": "text",
+              "props": {
+                "text": "En primer plano",
+                "fontSize": 32
+              }
+            },
+            {
+              "id": "listen-player",
+              "type": "player"
+            },
+            {
+              "id": "listen-lyrics",
+              "type": "lyrics"
+            },
+            {
+              "id": "settings-button",
+              "type": "button",
+              "props": {
+                "text": "Preferencias",
+                "action": "navigate",
+                "target": "settings"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "navigation": [
+      {
+        "id": "nav-home",
+        "label": "Colección",
+        "screenId": "home"
+      },
+      {
+        "id": "nav-listening",
+        "label": "Escuchando",
+        "screenId": "listening"
+      }
+    ]
+  }
+}

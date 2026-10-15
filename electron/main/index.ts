@@ -38,6 +38,7 @@ import { setLibraryLocationLockDatabase } from './library-migration/locationLock
 import { getDuplicateResolutionService } from './duplicates/DuplicateResolutionService'
 import { getDuplicateDecisionPortableService } from './duplicates/DuplicateDecisionPortableService'
 import { getDuplicateRuntime } from './duplicates/runtime'
+import { attachInterfaceWindow, disposeInterfacesChannel, recoverInterfaceHost, registerInterfacesChannel } from './ipc/interfaces-channel'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -121,6 +122,7 @@ function createMainWindow(): BrowserWindow {
     },
   })
   trustIpcWindow(win, rendererEntryUrl())
+  attachInterfaceWindow(win)
 
   win.once('ready-to-show', () => win.show())
   // Safety net: if the renderer crashes before first paint, ready-to-show
@@ -134,6 +136,7 @@ function createMainWindow(): BrowserWindow {
   const rendererCrashes: number[] = []
   win.webContents.on('render-process-gone', (_e, details) => {
     console.error('[renderer] render-process-gone', details)
+    recoverInterfaceHost()
     if (!win.isDestroyed() && BrowserWindow.getAllWindows().includes(win)) {
       const now = Date.now()
       rendererCrashes.push(now)
@@ -193,6 +196,7 @@ app.whenReady().then(async () => {
   registerDuplicateChannel()
   registerFolderCleanupChannel()
   registerUpdatesChannel()
+  registerInterfacesChannel(join(__dirname, '../preload/interface-guest.cjs'))
   getDeviceSyncService().startVolumeMonitor()
 
   // The UI becomes available as soon as DB and IPC are ready. Potentially slow
@@ -252,6 +256,7 @@ async function shutdownApplication(exitCode: number): Promise<void> {
   try { await getOneDriveLibraryService().stopPolling() } catch { /* cloud service may not have initialized */ }
   try { unsubscribeCloudMirror?.() } catch { /* listener may not have initialized */ }
   unsubscribeCloudMirror = null
+  disposeInterfacesChannel()
   disposeLibraryLocationsChannel()
   disposeLibraryMigrationsChannel()
   try { await disposeDuplicateChannel() } catch { /* no active duplicate review */ }

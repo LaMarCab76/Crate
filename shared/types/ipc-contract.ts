@@ -1046,6 +1046,7 @@ export interface FolderCleanupApi {
 }
 
 export interface Api {
+  interfaces: import('./interfaces').InterfacesApi
   meta: MetaApi
   library: LibraryApi
   queue: QueueApi

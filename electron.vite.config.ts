@@ -29,7 +29,10 @@ export default defineConfig({
     build: {
       outDir: 'out/preload',
       rollupOptions: {
-        input: resolve(__dirname, 'electron/preload/index.ts'),
+        input: {
+          index: resolve(__dirname, 'electron/preload/index.ts'),
+          'interface-guest': resolve(__dirname, 'electron/preload/interface-guest.ts'),
+        },
         output: {
           format: 'cjs',
           entryFileNames: '[name].cjs',

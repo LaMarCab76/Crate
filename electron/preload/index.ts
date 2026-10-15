@@ -139,6 +139,24 @@ function subscribe<T>(channel: string, handler: (payload: T) => void): EventOff 
 }
 
 const api: Api = {
+  interfaces: {
+    list: () => ipcRenderer.invoke('interfaces:list'),
+    read: (id, revision) => ipcRenderer.invoke('interfaces:read', id, revision),
+    save: (pkg) => ipcRenderer.invoke('interfaces:save', pkg),
+    importPackage: () => ipcRenderer.invoke('interfaces:import'),
+    exportPackage: (id, revision) => ipcRenderer.invoke('interfaces:export', id, revision),
+    remove: (id) => ipcRenderer.invoke('interfaces:remove', id),
+    getSelection: () => ipcRenderer.invoke('interfaces:selection'),
+    activate: (id, revision) => ipcRenderer.invoke('interfaces:activate', id, revision),
+    confirm: () => ipcRenderer.invoke('interfaces:confirm'),
+    revert: () => ipcRenderer.invoke('interfaces:revert'),
+    onSelectionChanged: (handler) => subscribe('interfaces:selection-changed', handler),
+    setGuestVisible: (visible) => ipcRenderer.invoke('interfaces:guest-visible', visible),
+    setChrome: (base) => ipcRenderer.invoke('interfaces:chrome', base),
+    onRequest: (handler) => subscribe('interfaces:request', handler),
+    respond: (response) => ipcRenderer.invoke('interfaces:respond', response),
+    updateGuestState: (snapshot) => ipcRenderer.invoke('interfaces:guest-state', snapshot),
+  },
   meta: {
     version: packageJson.version,
     platform: desktopPlatform(process.platform),

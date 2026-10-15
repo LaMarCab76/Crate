@@ -142,6 +142,13 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
   the user-data directory.
 
 ### Views & UI shell
+- Choose **Glass** or the previous **Classic** interface in Preferences →
+  Appearance → Interface without restarting playback. Personal interfaces can
+  be composed in the visual editor, saved as revisions, and imported/exported
+  as `.crate-interface` packages. Programmable packages use an isolated SDK;
+  custom activations can be confirmed or reverted, with recovery available
+  from the native Interface menu. See [interface authoring and the SDK](docs/interfaces.md)
+  and the importable examples in [`examples/interfaces/`](examples/interfaces/).
 - Three-pane layout with a translucent vibrant sidebar, main content, and a
   right-side player pane behind a draggable splitter.
 - Dark + light themes, three densities (compact / regular / comfy), three list

@@ -19,7 +19,11 @@ export function selectQueueNextIndex<T>({
   key,
   random = Math.random,
 }: QueueNextSelection<T>): number | null {
-  if (tracks.length === 0 || currentIndex < 0 || currentIndex >= tracks.length) return null
+  if (tracks.length === 0) return null
+  // A cleared queue may be filled while another engine stream keeps playing.
+  // With no queued current item, Next starts its first item in every mode.
+  if (currentIndex === -1) return 0
+  if (currentIndex < 0 || currentIndex >= tracks.length) return null
   if (repeat === 'one') return currentIndex
 
   if (!shuffle) {

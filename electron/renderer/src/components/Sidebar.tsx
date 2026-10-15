@@ -1,9 +1,9 @@
-import { useEffect, type CSSProperties, type KeyboardEvent } from 'react'
+import { type CSSProperties, type KeyboardEvent } from 'react'
 import type { Artist, Playlist } from '@shared/types/library'
 import { Artwork } from './Artwork'
 import type { DeviceConnectTarget } from './DeviceConnectModal'
 import { Icon, type IconName } from './Icon'
-import type { View } from '@renderer/App'
+import type { View } from '@renderer/runtime/navigation'
 import { useDeviceStore } from '@renderer/stores/deviceStore'
 import { useDuplicateStore } from '@renderer/stores/duplicateStore'
 import {
@@ -67,14 +67,7 @@ export function Sidebar({
   const addFolder = useLibraryStore(s => s.addFolder)
   const devices = useDeviceStore(s => s.devices)
   const candidates = useDeviceStore(s => s.candidates)
-  const loadDevices = useDeviceStore(s => s.load)
-  const refreshVolumes = useDeviceStore(s => s.refreshVolumes)
   const duplicateCount = useDuplicateStore(s => s.summary.pendingCount)
-
-  useEffect(() => {
-    void loadDevices()
-    void refreshVolumes()
-  }, [loadDevices, refreshVolumes])
 
   const addLibrary = async () => {
     const picked = await pickFolder()

@@ -44,24 +44,17 @@ import {
 import { installAutoHideScrollbars } from './utils/autoHideScrollbars'
 import { extractDominantColor, extractPalette } from './utils/colorExtract'
 import { vivify } from './utils/colorAdjust'
+import { ClassicPlayerBar } from './components/ClassicPlayerBar'
+import { DeclarativeInterface } from './interfaces/DeclarativeInterface'
+import { initializeInterfaceStore, useInterfaceStore } from './interfaces/interfaceStore'
+import { InterfaceBoundary } from './runtime/InterfaceBoundary'
+import { useInterfaceBridge } from './runtime/interfaceBridge'
+import { panelLayout } from './runtime/panelLayout'
+import { resolveRoute, viewRoute, type View } from './runtime/navigation'
+import './styles/classic.css'
+import './runtime/interfaceHost.css'
 
-export type View =
-  | { kind: 'library' }
-  | { kind: 'recent' }
-  | { kind: 'albums' }
-  | { kind: 'artists' }
-  | { kind: 'genres' }
-  | { kind: 'search' }
-  | { kind: 'settings' }
-  | { kind: 'import' }
-  | { kind: 'devices' }
-  | { kind: 'device'; deviceId: string; section: 'dashboard' | 'sync' | DeviceLibrarySection }
-  | { kind: 'album'; album: Album }
-  | { kind: 'artist'; artist: Artist }
-  | { kind: 'playlist'; playlist: Playlist }
-  | { kind: 'favoriteTracks' }
-  | { kind: 'metadataFix'; trackIds: number[]; title?: string; missingCount?: number }
-  | { kind: 'duplicates'; candidateId?: string }
+export type { View } from './runtime/navigation'
 
 const SIDEBAR_WIDTH_STORAGE_KEY = 'crate.layout.sidebarWidth.v1'
 const PLAYER_PANE_OPEN_STORAGE_KEY = 'crate.layout.playerPaneOpen.v1'
@@ -280,6 +273,17 @@ function SettingsSectionTabs({
 
 export default function App() {
   const [tweak, setTweak] = useTweaks()
+  // App is the persistent runtime. Only its presentation changes; audio, queue,
+  // jobs, navigation and host dialogs stay above the selected interface.
+  const interfaceSelection = useInterfaceStore(s => s.selection)
+  const interfacePackage = useInterfaceStore(s => s.activePackage)
+  const customSelected = !['crate-glass', 'crate-classic'].includes(interfaceSelection.activeId)
+  const interfaceBase = interfaceSelection.activeId === 'crate-classic' ? 'classic' : interfacePackage?.manifest.base ?? 'glass'
+  const [hostRouteVisible, setHostRouteVisible] = useState(false)
+  const [interfaceNotice, setInterfaceNotice] = useState<string | null>(null)
+  useEffect(() => initializeInterfaceStore(), [])
+  useEffect(() => { setHostRouteVisible(false); setExpanded(false) }, [interfaceSelection.activeId, interfaceSelection.activeRevision])
+  useEffect(() => { void window.api?.interfaces?.setChrome(interfaceBase).catch(() => {}) }, [interfaceBase])
   const [history, setHistory] = useState<View[]>([{ kind: 'library' }])
   const [idx, setIdx] = useState(0)
   const [expanded, setExpanded] = useState(false)
@@ -291,7 +295,8 @@ export default function App() {
   const [settingsPlaybackTab, setSettingsPlaybackTab] = useState<PlaybackSubTab>('general')
   const [searchQuery, setSearchQuery] = useState('')
   const [searchScope, setSearchScope] = useState<'global' | 'view'>('view')
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarPreferredOpen, setSidebarOpen] = useState(true)
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth)
   const [playerPaneOpen, setPlayerPaneOpen] = useState(() =>
     loadPersistedBool(PLAYER_PANE_OPEN_STORAGE_KEY, true)
   )
@@ -309,6 +314,21 @@ export default function App() {
   const [isResizingWindow, setIsResizingWindow] = useState(false)
   const contentRef = useRef<HTMLDivElement>(null)
   const windowRef = useRef<HTMLDivElement>(null)
+  const layoutProfileRef = useRef('crate-glass')
+  const profileKey = (key: string, id = layoutProfileRef.current) => id === 'crate-glass' ? key : `${key}.${id}`
+  useEffect(() => {
+    const nextId = interfaceSelection.activeId
+    if (layoutProfileRef.current === nextId) return
+    try {
+      window.localStorage.setItem(profileKey(SIDEBAR_WIDTH_STORAGE_KEY), String(sidebarWidth))
+      window.localStorage.setItem(profileKey(LYRICS_SIDE_WIDTH_STORAGE_KEY), String(lyricsSideWidth))
+      window.localStorage.setItem(profileKey(PLAYER_PANE_OPEN_STORAGE_KEY), String(playerPaneOpen))
+    } catch { /* storage can be unavailable without affecting playback */ }
+    layoutProfileRef.current = nextId
+    setSidebarWidth(loadPersistedWidth(profileKey(SIDEBAR_WIDTH_STORAGE_KEY), nextId === 'crate-classic' ? 240 : SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX))
+    setLyricsSideWidth(loadPersistedWidth(profileKey(LYRICS_SIDE_WIDTH_STORAGE_KEY), LYRICS_SIDE_WIDTH_DEFAULT, LYRICS_SIDE_WIDTH_MIN, LYRICS_SIDE_WIDTH_MAX))
+    setPlayerPaneOpen(loadPersistedBool(profileKey(PLAYER_PANE_OPEN_STORAGE_KEY), true))
+  }, [interfaceSelection.activeId])
   const scrollPositionsRef = useRef(new Map<number, number>())
   const [contentScrolled, setContentScrolled] = useState(false)
   const contentScrolledRef = useRef(false)
@@ -340,6 +360,7 @@ export default function App() {
   const subscribeMigrations = useMigrationStore(s => s.subscribe)
   const loadPendingDeviceJournals = useDeviceStore(s => s.loadPendingJournals)
   const refreshDeviceVolumes = useDeviceStore(s => s.refreshVolumes)
+  const loadDevices = useDeviceStore(s => s.load)
   const refreshUnknownVolume = useDeviceStore(s => s.refreshUnknownVolume)
   const ignoreVolume = useDeviceStore(s => s.ignoreVolume)
   const selectedDeviceId = useDeviceStore(s => s.selectedDeviceId)
@@ -366,7 +387,10 @@ export default function App() {
   const islandTrackActions = useTrackActions()
   const duplicateReviewOpen = view.kind === 'duplicates'
   const canShowPlayerPane = nowTrack != null && !expanded && !duplicateReviewOpen
-  const isPlayerPaneOpen = playerPaneOpen && canShowPlayerPane
+  const panels = panelLayout({ width: viewportWidth, sidebarWidth, sidebarOpen: sidebarPreferredOpen, playerOpen: playerPaneOpen && canShowPlayerPane, lyricsOpen: lyricsSidePaneOpen && canShowPlayerPane, lyricsWidth: lyricsSideWidth })
+  const sidebarOpen = panels.sidebarOpen
+  const effectiveLyricsWidth = panels.lyricsWidth
+  const isPlayerPaneOpen = panels.playerOpen
   const showLyricsSidePane = lyricsSidePaneOpen && canShowPlayerPane
   const showBottomPlayer = !isPlayerPaneOpen && canShowPlayerPane
   const [playerPaneVisible, setPlayerPaneVisible] = useState(() => isPlayerPaneOpen)
@@ -437,6 +461,7 @@ export default function App() {
   useEffect(() => {
     let settleTimer: number | undefined
     const onResize = () => {
+      setViewportWidth(window.innerWidth)
       setIsResizingWindow(true)
       window.clearTimeout(settleTimer)
       settleTimer = window.setTimeout(() => setIsResizingWindow(false), WINDOW_RESIZE_SETTLE_MS)
@@ -450,7 +475,7 @@ export default function App() {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(PLAYER_PANE_OPEN_STORAGE_KEY, String(playerPaneOpen))
+      window.localStorage.setItem(profileKey(PLAYER_PANE_OPEN_STORAGE_KEY), String(playerPaneOpen))
     } catch { /* ignore */ }
   }, [playerPaneOpen])
 
@@ -569,8 +594,9 @@ export default function App() {
 
   useEffect(() => {
     void loadPendingDeviceJournals()
+    void loadDevices()
     void refreshDeviceVolumes()
-  }, [loadPendingDeviceJournals, refreshDeviceVolumes])
+  }, [loadPendingDeviceJournals, loadDevices, refreshDeviceVolumes])
 
   useEffect(() => installAutoHideScrollbars(), [])
 
@@ -595,6 +621,7 @@ export default function App() {
 
   const navigate = (v: View, { replace = false }: { replace?: boolean } = {}) => {
     saveCurrentScroll()
+    if (customSelected) setHostRouteVisible(true)
 
     if (replace) {
       const h = [...history]
@@ -1011,7 +1038,7 @@ export default function App() {
     // caps --sb-w at --gl-sb-cap (a typed var, so it reads back in px). Stop
     // the drag there too, so the stored width is the one the user sees.
     const shellAtStart = windowRef.current
-    const fitCap = shellAtStart
+    const fitCap = interfaceBase !== 'classic' && shellAtStart
       ? Number.parseFloat(getComputedStyle(shellAtStart).getPropertyValue('--gl-sb-cap'))
       : Number.NaN
     const maxWidth = Number.isFinite(fitCap)
@@ -1035,7 +1062,7 @@ export default function App() {
       setIsResizingSidebar(false)
 
       try {
-        window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidthRef.current))
+        window.localStorage.setItem(profileKey(SIDEBAR_WIDTH_STORAGE_KEY), String(sidebarWidthRef.current))
       } catch { /* ignore */ }
     }
 
@@ -1053,7 +1080,7 @@ export default function App() {
     // The handle is centered on the lyrics card's left edge; the card's right
     // edge (next to the player card, or the dock edge) stays put while dragging.
     const handleRect = event.currentTarget.getBoundingClientRect()
-    const cardRight = handleRect.left + handleRect.width / 2 + lyricsSideWidthRef.current
+    const cardRight = handleRect.left + handleRect.width / 2 + effectiveLyricsWidth
 
     const onMove = (e: globalThis.PointerEvent) => {
       const nextWidth = clamp(Math.round(cardRight - e.clientX), LYRICS_SIDE_WIDTH_MIN, LYRICS_SIDE_WIDTH_MAX)
@@ -1068,7 +1095,7 @@ export default function App() {
       setIsResizingLyricsSide(false)
 
       try {
-        window.localStorage.setItem(LYRICS_SIDE_WIDTH_STORAGE_KEY, String(lyricsSideWidthRef.current))
+        window.localStorage.setItem(profileKey(LYRICS_SIDE_WIDTH_STORAGE_KEY), String(lyricsSideWidthRef.current))
       } catch { /* ignore */ }
     }
 
@@ -1078,7 +1105,7 @@ export default function App() {
     document.addEventListener('pointerup', stop)
   }
 
-  function renderContent() {
+  function renderContent(view: View = history[idx]) {
     switch (view.kind) {
       case 'library':
         return <LibraryView />
@@ -1161,6 +1188,28 @@ export default function App() {
     }
   }
 
+  const navigateInterface = (route: string) => {
+    navigate(resolveRoute(route, useLibraryStore.getState()))
+  }
+  useInterfaceBridge(navigateInterface, viewRoute(view))
+  const showProgrammedInterface = customSelected && interfacePackage?.manifest.kind === 'code' && !hostRouteVisible
+  useEffect(() => {
+    if (!window.api?.interfaces) return
+    let visible: boolean | undefined
+    const sync = () => {
+      const covered = !!document.querySelector('.modal-backdrop, [aria-modal="true"], .context-menu, .activity-center.fullscreen, .np-full')
+      const next = showProgrammedInterface && !covered
+      if (next !== visible) { visible = next; void window.api.interfaces.setGuestVisible(next).catch(() => {}) }
+    }
+    sync()
+    const observer = new MutationObserver(sync)
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'aria-modal'] })
+    return () => { observer.disconnect(); void window.api.interfaces.setGuestVisible(false).catch(() => {}) }
+  }, [showProgrammedInterface])
+  const interfaceAction = (action: () => Promise<unknown>) => {
+    void action().catch(error => setInterfaceNotice(error instanceof Error ? error.message : String(error)))
+  }
+
   // Floating shell geometry contract: inline vars + state classes on .window,
   // inherited by every floating surface (globals.css derives the toolbar /
   // island insets from these). Visibility follows the mounted-and-open state
@@ -1170,7 +1219,7 @@ export default function App() {
   const islandShown = bottomPlayerVisible && showBottomPlayer
   const dockWidth =
     (playerCardShown ? PLAYER_CARD_WIDTH : 0)
-    + (lyricsCardShown ? lyricsSideWidth : 0)
+    + (lyricsCardShown ? effectiveLyricsWidth : 0)
   // The lyrics card sits left of the player card (or at the dock edge alone).
   const lyricsCardRight = playerCardShown ? PLAYER_CARD_WIDTH : 0
   const shellStyle = {
@@ -1193,84 +1242,11 @@ export default function App() {
   ].filter(Boolean).join(' ')
   // Device and Preferences sections no longer fit a second toolbar row; they
   // render as a centered segmented stack at the top of the content instead.
+  const SelectedPlayerBar = interfaceBase === 'classic' ? ClassicPlayerBar : PlayerBottomBar
   const showSectionNav = view.kind === 'devices' || view.kind === 'device' || view.kind === 'settings'
 
-  return (
-    <div className="desktop">
-      <div ref={windowRef} className={shellClassName} style={shellStyle}>
-        {/* Thin drag strip along the top edge so the window stays draggable
-            with the sidebar hidden. First in tree order so the no-drag
-            controls rendered later still carve themselves out of it. */}
-        <div className="gl-drag-strip" aria-hidden="true" />
-        {/* With the sidebar hidden: the grab spot beside the traffic lights,
-            left of the toolbar pill (hidden by CSS while the sidebar shows). */}
-        <div className="gl-drag-corner" aria-hidden="true" />
-
-        <Sidebar
-          setView={navigate}
-          selectedKey={sidebarKey}
-          isOpen={sidebarOpen}
-          translucent={tweak.translucent}
-          onSelectPlaylist={pl => navigate({ kind: 'playlist', playlist: pl })}
-          onSelectArtist={ar => navigate({ kind: 'artist', artist: ar })}
-          onSelectFavoriteTracks={() => navigate({ kind: 'favoriteTracks' })}
-          favoriteTracksCount={favoriteTracks.length}
-          onConnectDevice={setConnectTarget}
-        />
-
-        {sidebarOpen && (
-          <div
-            className={`layout-resize-handle sidebar-resize-handle ${isResizingSidebar ? 'active' : ''}`}
-            style={{ left: 'var(--sb-w)' }}
-            onPointerDown={beginSidebarResize}
-            aria-hidden
-          />
-        )}
-
-        <div className={`main-area ${sidebarOpen ? 'with-sidebar' : 'without-sidebar'}`}>
-          <Toolbar
-            view={view}
-            history={history}
-            idx={idx}
-            onBack={goBack}
-            onForward={goForward}
-            onNavigate={navigate}
-            searchQuery={searchQuery}
-            onSearchQueryChange={setSearchQuery}
-            searchScope={searchScope}
-            onSearchScopeChange={setSearchScope}
-            viewQuery={viewQuery}
-            onViewQueryChange={setViewQuery}
-            viewQueryable={viewQueryable}
-            sidebarOpen={sidebarOpen}
-            onToggleSidebar={() => setSidebarOpen(open => !open)}
-            playerPaneOpen={isPlayerPaneOpen}
-            canTogglePlayerPane={canShowPlayerPane}
-            onTogglePlayerPane={() => setPlayerPaneOpen(open => !open)}
-            activityOpen={activityOpen}
-            activityActiveCount={activityActiveCount}
-            activityUnreadCount={activityUnreadCount}
-            onToggleActivityCenter={toggleActivityPanel}
-            contentScrolled={contentScrolled}
-          />
-          <ActivityCenter
-            open={activityOpen}
-            pinned={activityPinned}
-            fullscreen={activityFullscreen}
-            items={activityItems}
-            onClose={closeActivityPanel}
-            onTogglePinned={() => setActivityPinned(!activityPinned)}
-            onToggleFullscreen={() => setActivityFullscreen(!activityFullscreen)}
-            onMarkAllRead={markActivityRead}
-            onClearResolved={clearResolvedActivity}
-            onAction={(actionId, item) => { void handleActivityAction(actionId, item) }}
-          />
-          <div
-            ref={contentRef}
-            className="content"
-            onScroll={handleContentScroll}
-          >
-            {showSectionNav && (
+  const sectionNavigation = (
+    showSectionNav && (
               <div className="gl-section-nav">
                 {view.kind === 'devices' && selectedDeviceId && (
                   <DeviceSectionTabs
@@ -1315,7 +1291,87 @@ export default function App() {
                   />
                 )}
               </div>
-            )}
+            )
+  )
+
+  return (
+    <div className="desktop">
+      <div ref={windowRef} data-interface={interfaceBase} className={`${shellClassName}${customSelected && hostRouteVisible ? ' if-show-host' : ''}`} style={shellStyle}>
+        {/* Thin drag strip along the top edge so the window stays draggable
+            with the sidebar hidden. First in tree order so the no-drag
+            controls rendered later still carve themselves out of it. */}
+        <div className="gl-drag-strip" aria-hidden="true" />
+        {/* With the sidebar hidden: the grab spot beside the traffic lights,
+            left of the toolbar pill (hidden by CSS while the sidebar shows). */}
+        <div className="gl-drag-corner" aria-hidden="true" />
+
+        <div className="classic-frame" hidden={customSelected && !hostRouteVisible}>
+        <Sidebar
+          setView={navigate}
+          selectedKey={sidebarKey}
+          isOpen={sidebarOpen}
+          translucent={tweak.translucent}
+          onSelectPlaylist={pl => navigate({ kind: 'playlist', playlist: pl })}
+          onSelectArtist={ar => navigate({ kind: 'artist', artist: ar })}
+          onSelectFavoriteTracks={() => navigate({ kind: 'favoriteTracks' })}
+          favoriteTracksCount={favoriteTracks.length}
+          onConnectDevice={setConnectTarget}
+        />
+
+        {sidebarOpen && (
+          <div
+            className={`layout-resize-handle sidebar-resize-handle ${isResizingSidebar ? 'active' : ''}`}
+            style={{ left: 'var(--sb-w)' }}
+            onPointerDown={beginSidebarResize}
+            aria-hidden
+          />
+        )}
+
+        <div className={`main-area ${sidebarOpen ? 'with-sidebar' : 'without-sidebar'}`}>
+          <Toolbar
+            view={view}
+            history={history}
+            idx={idx}
+            onBack={goBack}
+            onForward={goForward}
+            onNavigate={navigate}
+            searchQuery={searchQuery}
+            onSearchQueryChange={setSearchQuery}
+            searchScope={searchScope}
+            onSearchScopeChange={setSearchScope}
+            viewQuery={viewQuery}
+            onViewQueryChange={setViewQuery}
+            viewQueryable={viewQueryable}
+            sidebarOpen={sidebarOpen}
+            onToggleSidebar={() => { if (sidebarOpen) setSidebarOpen(false); else { setSidebarOpen(true); setLyricsSidePaneOpen(false) } }}
+            playerPaneOpen={isPlayerPaneOpen}
+            canTogglePlayerPane={canShowPlayerPane}
+            onTogglePlayerPane={() => setPlayerPaneOpen(open => !open)}
+            activityOpen={activityOpen}
+            activityActiveCount={activityActiveCount}
+            activityUnreadCount={activityUnreadCount}
+            onToggleActivityCenter={toggleActivityPanel}
+            contentScrolled={interfaceBase === 'classic' || contentScrolled}
+          />
+          <ActivityCenter
+            open={activityOpen}
+            pinned={activityPinned}
+            fullscreen={activityFullscreen}
+            items={activityItems}
+            onClose={closeActivityPanel}
+            onTogglePinned={() => setActivityPinned(!activityPinned)}
+            onToggleFullscreen={() => setActivityFullscreen(!activityFullscreen)}
+            onMarkAllRead={markActivityRead}
+            onClearResolved={clearResolvedActivity}
+            onAction={(actionId, item) => { void handleActivityAction(actionId, item) }}
+          />
+          {interfaceBase === 'classic' && <div className="classic-section-nav">{sectionNavigation}</div>}
+          <div
+            ref={contentRef}
+            className="content"
+            onScroll={handleContentScroll}
+          >
+            {interfaceBase !== 'classic' && sectionNavigation}
             {renderContent()}
           </div>
           {/* Frosted edge the content scrolls under, behind the toolbar. */}
@@ -1324,6 +1380,7 @@ export default function App() {
 
         {!duplicateReviewOpen && (playerPaneVisible || lyricsSidePaneVisible) && (
           <div className="np-dock-lateral">
+            {interfaceBase === 'classic' && <><div className="pane-bg-canvas" aria-hidden="true"><div className="np-bg-blob np-bg-blob-a" /><div className="np-bg-blob np-bg-blob-b" /><div className="np-bg-blob np-bg-blob-c" /><div className="np-bg-blob np-bg-blob-d" /></div><div className="pane-bg-scrim" aria-hidden="true" /></>}
             {playerPaneVisible && (
               <PlayerPane
                 isOpen={isPlayerPaneOpen}
@@ -1344,7 +1401,7 @@ export default function App() {
             {lyricsSidePaneVisible && (
               <div
                 className={`layout-resize-handle lyrics-side-resize-handle ${isResizingLyricsSide ? 'active' : ''}`}
-                style={{ right: `${lyricsCardRight + lyricsSideWidth}px` }}
+                style={{ right: `${(interfaceBase === 'classic' ? 0 : lyricsCardRight) + effectiveLyricsWidth}px` }}
                 onPointerDown={beginLyricsSideResize}
                 aria-hidden
               />
@@ -1353,20 +1410,22 @@ export default function App() {
             {lyricsSidePaneVisible && (
               <LyricsSidePane
                 closing={lyricsSidePaneClosing || !showLyricsSidePane}
-                width={lyricsSideWidth}
+                width={effectiveLyricsWidth}
                 onClose={() => setLyricsSidePaneOpen(false)}
               />
             )}
           </div>
         )}
 
-        {!duplicateReviewOpen && bottomPlayerVisible && (
+        </div>
+
+        {(!customSelected || hostRouteVisible) && !duplicateReviewOpen && bottomPlayerVisible && (
           <div className={`player-dock ${
             (isBottomPlayerClosing || bottomPlayerClosing) ? 'collapsed' : bottomPlayerPriming ? 'priming' : 'open'
           } ${bottomPlayerEntering && !(isBottomPlayerClosing || bottomPlayerClosing) ? 'entering' : ''}`}>
             {!expanded && !isBottomPlayerClosing && !bottomPlayerClosing && <UpNextToast variant="bottom" />}
             <div className="player-dock-inner">
-              <PlayerBottomBar
+              <SelectedPlayerBar
                 closing={isBottomPlayerClosing || bottomPlayerClosing}
                 viewKey={view}
                 onExpand={() => {
@@ -1383,6 +1442,29 @@ export default function App() {
             </div>
           </div>
         )}
+        {customSelected && !hostRouteVisible && (
+          <div className="if-host-canvas">
+            <InterfaceBoundary key={`${interfaceSelection.activeId}:${interfaceSelection.activeRevision}`} onRecover={() => interfaceAction(() => useInterfaceStore.getState().activate('crate-glass'))}>
+              {interfacePackage?.manifest.kind === 'declarative' ? (
+                <DeclarativeInterface manifest={interfacePackage.manifest} onNavigateHost={navigateInterface} renderHostView={route => {
+                  try { return renderContent(resolveRoute(route, useLibraryStore.getState())) }
+                  catch (error) { return <div className="if-recovery" role="alert">{error instanceof Error ? error.message : 'Pantalla no disponible.'}</div> }
+                }} />
+              ) : <div className="if-recovery">{interfacePackage ? 'Cargando interfaz programada…' : 'Cargando interfaz…'}</div>}
+            </InterfaceBoundary>
+          </div>
+        )}
+        {(customSelected || interfaceSelection.trial) && (
+          <div className={`if-host-controls${interfaceSelection.trial ? ' is-trial' : ''}`} role="region" aria-label="Controles de interfaz de Crate">
+            <span className="if-host-name">{interfacePackage?.manifest.name ?? 'Interfaz personalizada'}</span>
+            {hostRouteVisible && <button onClick={() => setHostRouteVisible(false)}>Volver a mi interfaz</button>}
+            <button onClick={() => navigateInterface('library')}>Biblioteca de Crate</button>
+            <button onClick={() => { setSettingsTab('apariencia'); navigateInterface('settings') }}>Interfaces</button>
+            {interfaceSelection.trial && <button className="if-host-confirm" onClick={() => interfaceAction(() => useInterfaceStore.getState().confirm())}>Conservar</button>}
+            <button onClick={() => interfaceAction(() => interfaceSelection.trial ? useInterfaceStore.getState().revert() : useInterfaceStore.getState().activate('crate-glass'))}>{interfaceSelection.trial ? 'Revertir' : 'Restaurar diseño incluido'}</button>
+          </div>
+        )}
+        {(interfaceNotice || interfaceSelection.reason) && <div className="if-host-notice" role="status">{interfaceNotice ?? interfaceSelection.reason}<button onClick={() => { setInterfaceNotice(null); useInterfaceStore.setState({ selection: { ...interfaceSelection, reason: undefined } }) }}>Cerrar</button></div>}
         {islandTrackActions.elements}
 
         {!duplicateReviewOpen && expanded && nowTrack && (

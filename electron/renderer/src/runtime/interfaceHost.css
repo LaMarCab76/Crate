@@ -1,0 +1,23 @@
+.if-host-controls{height:48px;position:absolute;inset:0 0 auto;display:flex;align-items:center;gap:8px;padding:4px 12px 4px 96px;background:var(--bg-window,#17171b);color:var(--text-primary,#eee);border-bottom:1px solid var(--border-default, #ffffff18);z-index:900;-webkit-app-region:drag;font-size:12px}
+.if-host-controls button{font:inherit;color:inherit;border:1px solid var(--border-default,#ffffff22);border-radius:8px;background:var(--bg-elev,#ffffff0c);padding:6px 10px;cursor:pointer;-webkit-app-region:no-drag;white-space:nowrap}
+.if-host-controls button:focus-visible,.if-recovery button:focus-visible{outline:2px solid var(--accent,#0a84ff);outline-offset:2px}
+.if-host-controls .if-host-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.if-host-controls .if-host-confirm{background:var(--color-playing,#0a84ff);color:#fff}
+.if-host-controls.is-trial{background:var(--bg-window,#17171b)}
+.if-host-canvas{position:absolute;inset:48px 0 0;overflow:auto;isolation:isolate}
+.classic-frame[hidden]{display:none!important}
+.window.if-show-host>.classic-frame{position:absolute;inset:48px 0 0}
+.window.if-show-host .toolbar{top:60px}
+.window.if-show-host[data-interface="classic"] .toolbar{top:auto}
+.window.if-show-host .sidebar{top:48px;height:calc(100% - 48px)}
+.window.if-show-host[data-interface="classic"] .sidebar{top:auto;height:100%}
+.window.if-show-host .content{padding-top:120px}
+.window.if-show-host[data-interface="classic"] .content{padding-top:0}
+.window.if-show-host:not([data-interface="classic"]) .np-dock-lateral{top:48px}
+.window.if-show-host[data-interface="classic"]{padding-top:48px}
+.window.if-show-host[data-interface="classic"]>.classic-frame{position:relative;inset:auto}
+.if-host-notice{position:absolute;bottom:16px;left:16px;z-index:1000;max-width:min(520px,calc(100% - 32px));background:var(--bg-window,#25252b);color:var(--text-primary,#eee);padding:12px 16px;border:1px solid var(--border-default,#ffffff22);border-radius:12px;box-shadow:0 8px 32px #0004;font-size:13px}
+.if-host-notice button{margin-left:12px;background:none;color:inherit;border:0;cursor:pointer;text-decoration:underline}
+.if-recovery{padding:32px;color:var(--text-primary,#eee);font:14px system-ui}
+@media(max-width:1000px){.if-host-controls{gap:4px}.if-host-controls button{padding:6px}.if-host-controls .if-host-name{font-size:11px}}
+@media(prefers-reduced-motion:reduce){.if-host-canvas *{scroll-behavior:auto}}
