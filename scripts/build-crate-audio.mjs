@@ -132,7 +132,9 @@ async function prepareSources() {
   if (!existsSync(marker)) {
     await rm(ffmpegSource, { recursive: true, force: true })
     await mkdir(sourceRoot, { recursive: true })
-    run('tar', ['-xJf', toolPath(archive), '-C', toolPath(sourceRoot)])
+    // GNU tar reads "D:/..." as host:path unless told the archive is local.
+    const local = process.platform === 'win32' ? ['--force-local'] : []
+    run('tar', [...local, '-xJf', toolPath(archive), '-C', toolPath(sourceRoot)])
     if (!existsSync(join(ffmpegSource, 'configure'))) throw new Error('Pinned FFmpeg archive has an unexpected layout')
     if (sha256(await readFile(join(ffmpegSource, 'COPYING.LGPLv2.1'))) !== FFMPEG_LGPL_SHA256) {
       throw new Error('FFmpeg COPYING.LGPLv2.1 differs from the pinned text')

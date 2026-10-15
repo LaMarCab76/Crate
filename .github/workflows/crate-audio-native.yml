@@ -141,10 +141,10 @@ jobs:
       - name: Verify provenance, exports, dependencies and native load
         run: npm run verify:crate-audio -- --platform=${{ matrix.platform }} --arch=${{ matrix.arch }} --load
 
+      # Chromaprint is built from its pinned source so the smoke test doesn't
+      # depend on a published native release.
       - name: Smoke crate-audio PCM into Chromaprint
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: npm run fetch:chromaprint -- --platform=${{ matrix.platform }} --arch=${{ matrix.arch }} && npm run smoke:chromaprint-pipeline
+        run: npm run build:chromaprint -- --platform=${{ matrix.platform }} --arch=${{ matrix.arch }} --force && npm run smoke:chromaprint-pipeline
 
       - name: Package and upload verified native tree
         if: github.event_name == 'workflow_dispatch' && inputs.publish == true && runner.os != 'Windows'
