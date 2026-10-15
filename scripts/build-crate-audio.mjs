@@ -97,17 +97,33 @@ function requireTools() {
   if (TARGET.platform === 'darwin') run('xcrun', ['--find', 'lipo'], { capture: true })
 }
 
+// Network errors and server-side failures (CI runners, ffmpeg.org) get a few
+// retries; client errors such as 404 fail at once.
+async function fetchWithRetries(url, attempts = 4) {
+  for (let attempt = 1; ; attempt++) {
+    console.log(`[build-crate-audio] downloading ${url}${attempt > 1 ? ` (attempt ${attempt})` : ''}`)
+    let failure
+    try {
+      const response = await fetch(url, {
+        redirect: 'follow',
+        signal: AbortSignal.timeout(120_000),
+        headers: { 'User-Agent': 'Crate-Audio-Builder' },
+      })
+      if (response.ok) return Buffer.from(await response.arrayBuffer())
+      failure = `HTTP ${response.status}`
+      if (response.status < 500 && response.status !== 429) attempt = attempts
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error)
+    }
+    if (attempt >= attempts) throw new Error(`Unable to download ${url}: ${failure}`)
+    await new Promise((done) => setTimeout(done, attempt * 5_000))
+  }
+}
+
 async function download(url, expectedSha256, fileName) {
   const path = join(CACHE_DIR, fileName)
   if (existsSync(path) && sha256(readFileSync(path)) === expectedSha256) return path
-  console.log(`[build-crate-audio] downloading ${url}`)
-  const response = await fetch(url, {
-    redirect: 'follow',
-    signal: AbortSignal.timeout(120_000),
-    headers: { 'User-Agent': 'Crate-Audio-Builder' },
-  })
-  if (!response.ok) throw new Error(`Unable to download ${url}: HTTP ${response.status}`)
-  const bytes = Buffer.from(await response.arrayBuffer())
+  const bytes = await fetchWithRetries(url)
   if (bytes.length > MAX_DOWNLOAD_BYTES) throw new Error(`${url} exceeds ${MAX_DOWNLOAD_BYTES} bytes`)
   const digest = sha256(bytes)
   if (digest !== expectedSha256) throw new Error(`SHA-256 mismatch for ${url}: expected ${expectedSha256}, got ${digest}`)
