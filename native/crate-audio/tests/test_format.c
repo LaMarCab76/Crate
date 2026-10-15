@@ -5,12 +5,18 @@
 
 #include "crate_audio.h"
 
-static ca_device_caps make_caps(const int *rates, int count, int bits, int channels, int current, int can_set) {
+#define D16 CA_DEPTH_BIT(16)
+#define D24 CA_DEPTH_BIT(24)
+#define D32 CA_DEPTH_BIT(32)
+
+/* `bits` is the deepest format; `depths` every one the DAC takes (0 = unknown). */
+static ca_device_caps make_caps(const int *rates, int count, int bits, uint32_t depths, int channels, int current, int can_set) {
   ca_device_caps caps;
   memset(&caps, 0, sizeof caps);
   for (int i = 0; i < count; i++) {
     caps.rates[i] = rates[i];
     caps.bits[i] = bits;
+    caps.depths[i] = depths;
   }
   caps.count = count;
   caps.max_channels = channels;
@@ -72,36 +78,50 @@ void run_format_tests(void) {
   static const int BT[] = {48000};
   static const int AIRPLAY[] = {44100};
   static const int FAMILY48[] = {48000, 96000, 192000};
-  ca_device_caps usb96 = make_caps(USB96, 4, 24, 2, 48000, 1);
-  ca_device_caps usb384 = make_caps(USB384, 8, 32, 2, 44100, 1);
-  ca_device_caps bluetooth = make_caps(BT, 1, 16, 2, 48000, 1);
-  ca_device_caps airplay = make_caps(AIRPLAY, 1, 16, 2, 44100, 1);
-  ca_device_caps family48 = make_caps(FAMILY48, 3, 24, 2, 48000, 1);
-  ca_device_caps windows_shared = make_caps(BT, 1, 32, 2, 48000, 0);
-  ca_device_caps surround = make_caps(USB96, 4, 24, 8, 48000, 1);
+  ca_device_caps usb96 = make_caps(USB96, 4, 24, D16 | D24, 2, 48000, 1);
+  ca_device_caps usb384 = make_caps(USB384, 8, 32, D16 | D24 | D32, 2, 44100, 1);
+  ca_device_caps only24 = make_caps(USB96, 4, 24, D24, 2, 48000, 1);
+  ca_device_caps only16_32 = make_caps(USB96, 4, 32, D16 | D32, 2, 48000, 1);
+  ca_device_caps unknown_depths = make_caps(USB96, 4, 24, 0, 2, 48000, 1);
+  ca_device_caps bluetooth = make_caps(BT, 1, 16, D16, 2, 48000, 1);
+  ca_device_caps airplay = make_caps(AIRPLAY, 1, 16, D16, 2, 44100, 1);
+  ca_device_caps family48 = make_caps(FAMILY48, 3, 24, D16 | D24, 2, 48000, 1);
+  ca_device_caps windows_shared = make_caps(BT, 1, 32, D32, 2, 48000, 0);
+  ca_device_caps surround = make_caps(USB96, 4, 24, D16 | D24, 8, 48000, 1);
 
   const format_case cases[] = {
-    {"16/44.1 on USB 24/96", pcm(44100, 16, 2, 1), &usb96, 1, 44100, 24, 2, 0, 0, 0, 0},
-    {"24/88.2 on USB 24/96", pcm(88200, 24, 2, 1), &usb96, 1, 88200, 24, 2, 0, 0, 0, 0},
-    {"24/192 on USB 24/96 -> 96k", pcm(192000, 24, 2, 1), &usb96, 1, 96000, 24, 2, 1, 0, 0, CA_LIMIT_DAC_RATE},
-    {"32f/352.8 on USB 24/96 -> 88.2k", float_pcm(352800), &usb96, 1, 88200, 24, 2, 1, 0, 0, CA_LIMIT_DAC_RATE | CA_LIMIT_DAC_BITS},
-    {"DSD64 on USB 24/96 -> 88.2k", dsd(2822400), &usb96, 1, 88200, 24, 2, 1, 0, 0, CA_LIMIT_DAC_RATE},
-    {"5.1 on a stereo DAC", pcm(48000, 24, 6, 1), &usb96, 1, 48000, 24, 2, 0, 0, 1, CA_LIMIT_DAC_CHANNELS},
+    /* Bit-perfect: the device gets exactly the track's rate and depth. */
+    {"16/44.1 on USB 16-24/96 is bit-perfect", pcm(44100, 16, 2, 1), &usb96, 1, 44100, 16, 2, 0, 0, 0, 0},
+    {"24/88.2 on USB 16-24/96 is bit-perfect", pcm(88200, 24, 2, 1), &usb96, 1, 88200, 24, 2, 0, 0, 0, 0},
+    {"24/192 on USB 32/384 stays 24 bits", pcm(192000, 24, 2, 1), &usb384, 1, 192000, 24, 2, 0, 0, 0, 0},
+    {"16/44.1 on AirPlay is bit-perfect", pcm(44100, 16, 2, 1), &airplay, 1, 44100, 16, 2, 0, 0, 0, 0},
     {"5.1 on an 8-channel DAC", pcm(48000, 24, 6, 1), &surround, 1, 48000, 24, 6, 0, 0, 0, 0},
-    {"lossy 44.1 on USB 24/96", pcm(44100, 0, 2, 0), &usb96, 1, 44100, 24, 2, 0, 0, 0, 0},
-    {"mono 22.05 -> 44.1 stereo", pcm(22050, 16, 1, 1), &usb96, 1, 44100, 24, 2, 1, 0, 0, CA_LIMIT_DAC_RATE},
+    /* A deeper format keeps every bit but is not bit-perfect. */
+    {"16/44.1 on a 24-bit-only DAC -> 24", pcm(44100, 16, 2, 1), &only24, 1, 44100, 24, 2, 0, 0, 0, CA_LIMIT_DAC_BITS},
+    {"24/44.1 on a 16/32 DAC -> 32", pcm(44100, 24, 2, 1), &only16_32, 1, 44100, 32, 2, 0, 0, 0, CA_LIMIT_DAC_BITS},
+    {"16/44.1 with unknown depths -> deepest", pcm(44100, 16, 2, 1), &unknown_depths, 1, 44100, 24, 2, 0, 0, 0, CA_LIMIT_DAC_BITS},
+    /* The DAC tops out below the track. */
+    {"24/192 on USB 16-24/96 -> 96k", pcm(192000, 24, 2, 1), &usb96, 1, 96000, 24, 2, 1, 0, 0, CA_LIMIT_DAC_RATE},
+    {"32f/352.8 on USB 16-24/96 -> 88.2k", float_pcm(352800), &usb96, 1, 88200, 24, 2, 1, 0, 0, CA_LIMIT_DAC_RATE | CA_LIMIT_DAC_BITS},
+    {"DSD64 on USB 16-24/96 -> 88.2k", dsd(2822400), &usb96, 1, 88200, 24, 2, 1, 0, 0, CA_LIMIT_DAC_RATE},
+    {"5.1 on a stereo DAC", pcm(48000, 24, 6, 1), &usb96, 1, 48000, 24, 2, 0, 0, 1, CA_LIMIT_DAC_CHANNELS},
+    {"lossy 44.1 on USB 16-24/96 -> deepest", pcm(44100, 0, 2, 0), &usb96, 1, 44100, 24, 2, 0, 0, 0, 0},
+    {"mono 22.05 -> 44.1 stereo at the deepest", pcm(22050, 16, 1, 1), &usb96, 1, 44100, 24, 2, 1, 0, 0, CA_LIMIT_DAC_RATE},
     {"DSD128 on USB 32/384", dsd(5644800), &usb384, 1, 352800, 32, 2, 0, 0, 0, 0},
-    {"24/192 on USB 32/384", pcm(192000, 24, 2, 1), &usb384, 1, 192000, 32, 2, 0, 0, 0, 0},
+    {"32f/96 on USB 32/384", float_pcm(96000), &usb384, 1, 96000, 32, 2, 0, 0, 0, 0},
     {"16/44.1 on Bluetooth 16/48", pcm(44100, 16, 2, 1), &bluetooth, 1, 48000, 16, 2, 1, 1, 0, CA_LIMIT_DAC_RATE},
     {"24/88.2 on Bluetooth 16/48", pcm(88200, 24, 2, 1), &bluetooth, 1, 48000, 16, 2, 1, 1, 0, CA_LIMIT_DAC_RATE | CA_LIMIT_DAC_BITS},
-    {"16/44.1 on AirPlay is bit-perfect", pcm(44100, 16, 2, 1), &airplay, 1, 44100, 16, 2, 0, 0, 0, 0},
+    {"24/44.1 on AirPlay is dithered", pcm(44100, 24, 2, 1), &airplay, 1, 44100, 16, 2, 0, 1, 0, CA_LIMIT_DAC_BITS},
     {"24/192 on AirPlay", pcm(192000, 24, 2, 1), &airplay, 1, 44100, 16, 2, 1, 1, 0, CA_LIMIT_DAC_RATE | CA_LIMIT_DAC_BITS},
     {"lossy on AirPlay is dithered", pcm(44100, 0, 2, 0), &airplay, 1, 44100, 16, 2, 0, 1, 0, 0},
     {"16/44.1 on a 48k-family DAC", pcm(44100, 16, 2, 1), &family48, 1, 48000, 24, 2, 1, 0, 0, CA_LIMIT_DAC_RATE},
     {"24/88.2 on a 48k-family DAC", pcm(88200, 24, 2, 1), &family48, 1, 96000, 24, 2, 1, 0, 0, CA_LIMIT_DAC_RATE},
+    /* The format can't follow the track. */
     {"Windows shared mode keeps the mix rate", pcm(44100, 16, 2, 1), &windows_shared, 1, 48000, 32, 2, 1, 0, 0, CA_LIMIT_FIXED_RATE},
+    {"Windows shared mode, same rate, other depth", pcm(48000, 16, 2, 1), &windows_shared, 1, 48000, 32, 2, 0, 0, 0, CA_LIMIT_FIXED_RATE},
     {"bit-perfect off keeps the device rate", pcm(44100, 16, 2, 1), &usb96, 0, 48000, 24, 2, 1, 0, 0, CA_LIMIT_SETTING_OFF},
-    {"bit-perfect off, same rate", pcm(48000, 16, 2, 1), &usb96, 0, 48000, 24, 2, 0, 0, 0, 0},
+    {"bit-perfect off, same rate, other depth", pcm(48000, 16, 2, 1), &usb96, 0, 48000, 24, 2, 0, 0, 0, CA_LIMIT_SETTING_OFF},
+    {"bit-perfect off, same format", pcm(48000, 24, 2, 1), &usb96, 0, 48000, 24, 2, 0, 0, 0, 0},
   };
   for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) check_case(&cases[i]);
 }

@@ -99,8 +99,10 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
   with adoption from the queue store so autoplay keeps working even if preload
   didn't fire.
 - **Bit-perfect output** (Settings toggle, on by default): the device follows
-  each track's sample rate and bit depth up to what the DAC supports; the
-  output menu explains when the DAC limits it (e.g. 24/192 → 24/96).
+  each track's sample rate and bit depth. It only counts as bit-perfect when
+  the DAC receives exactly the file's format; when the DAC lacks it, the
+  closest format is used and the output menu says why (e.g. 24/192 → 24/96,
+  or 16/44.1 → 24/44.1 on a DAC without 16-bit).
 - **Crossfade** (0–12 s) and **soundcheck** toggle in Settings.
 - **Exclusive mode** — CoreAudio hog mode on macOS, WASAPI exclusive on Windows
   (experimental) — bypasses the system mixer; the device's own rate is restored

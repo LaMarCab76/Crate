@@ -166,10 +166,14 @@ typedef struct ca_device_info {
 CA_API int ca_device_count(void);
 CA_API int ca_device_get(int32_t index, ca_device_info *out);
 
+/* Bit for depth d (1..32) in ca_device_caps.depths. */
+#define CA_DEPTH_BIT(d) (1u << ((d) - 1))
+
 typedef struct ca_device_caps {
-  int32_t count;               /* entries in rates/bits */
+  int32_t count;               /* entries in rates/bits/depths */
   int32_t rates[CA_MAX_RATES]; /* supported rates, ascending */
   int32_t bits[CA_MAX_RATES];  /* deepest integer format at rates[i]; 32 may be float */
+  uint32_t depths[CA_MAX_RATES]; /* every depth at rates[i] (CA_DEPTH_BIT); 0 = only bits[i] is known */
   int32_t max_channels;
   int32_t current_rate;
   int32_t current_bits;
@@ -187,11 +191,13 @@ typedef struct ca_output_policy {
   int32_t bit_perfect;         /* follow each track's rate and depth */
 } ca_output_policy;
 
-/* Why the output differs from the track. */
-#define CA_LIMIT_DAC_RATE      0x01
-#define CA_LIMIT_DAC_BITS      0x02
+/* Why the output differs from the track. Bit-perfect means the device gets
+ * exactly the track's rate and depth: a deeper or faster format is a
+ * difference too. */
+#define CA_LIMIT_DAC_RATE      0x01   /* the DAC lacks the track's rate */
+#define CA_LIMIT_DAC_BITS      0x02   /* the DAC lacks the track's depth (output shallower or deeper) */
 #define CA_LIMIT_DAC_CHANNELS  0x04
-#define CA_LIMIT_FIXED_RATE    0x08   /* the rate can't change in this mode (e.g. Windows shared) */
+#define CA_LIMIT_FIXED_RATE    0x08   /* the format can't follow the track in this mode (e.g. Windows shared) */
 #define CA_LIMIT_SETTING_OFF   0x10   /* bit-perfect is switched off */
 
 typedef struct ca_output_format {

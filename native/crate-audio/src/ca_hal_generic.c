@@ -18,6 +18,10 @@ int ca__hal_current_rate(const char *device_id) {
   (void)device_id;
   return 0;
 }
+int ca__hal_current_bits(const char *device_id) {
+  (void)device_id;
+  return 0;
+}
 int ca__hal_prepare_device(const char *device_id, int rate, int bits, int exclusive) {
   (void)device_id;
   (void)rate;

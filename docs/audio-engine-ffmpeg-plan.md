@@ -11,7 +11,7 @@ cerrar cada fase (ver §6).
 | Transición | Reemplazo total. Todo se hace en la rama `feat/ffmpeg-audio-engine` y se integra a `main` cuando BASS ya no queda en ningún lado. No hay doble motor. |
 | Decodificación | FFmpeg (libavformat + libavcodec + libswresample) compilado como LGPL, solo audio. |
 | Salida | miniaudio (dominio público / MIT-0) más código propio de HAL CoreAudio y WASAPI para frecuencia, formato y exclusivo. |
-| Bit-perfect | **Interruptor en Ajustes → Audio**, encendido por defecto. Encendido: el dispositivo se adapta a la frecuencia y la profundidad de cada pista, también en modo compartido, **hasta donde llegue el DAC** (§1 y §2.4). Apagado: el dispositivo queda en su frecuencia actual y se remuestrea todo, como hoy con BASS. |
+| Bit-perfect | **Interruptor en Ajustes → Audio**, encendido por defecto. Encendido: el dispositivo se adapta a la frecuencia y la profundidad de cada pista, también en modo compartido, **hasta donde llegue el DAC** (§1 y §2.4). **Solo es bit-perfect si el DAC recibe exactamente la frecuencia y la profundidad del archivo**: un formato distinto, aunque sea mayor (16 bits enviados como 24, 44,1 kHz como 88,2), no cuenta. Apagado: el dispositivo queda en su frecuencia actual y se remuestrea todo, como hoy con BASS. |
 | Exclusivo | macOS (hog, ya existe) y **Windows WASAPI exclusivo** (nuevo). Linux sin exclusivo. Es independiente del interruptor de bit-perfect. |
 | Pruebas con audio real | Solo macOS Apple Silicon, más el slice x64 bajo Rosetta. Windows y Linux se prueban por CI, sin dispositivo de audio. |
 | Formatos | Los 16 actuales: flac, m4a, mp3, wav, aiff/aif, ogg, opus, ape, wv, tta, dsf, dff, webm, mpc, spx. Se eliminan `bassmidi` y `basshls`, que no se usan. |
@@ -33,9 +33,9 @@ cerrar cada fase (ver §6).
   - DSD256 en un DAC de 192 kHz.
 - **Windows, modo compartido:** no existe API pública para cambiar el formato de mezcla. En compartido se remuestrea al formato configurado en Windows; bit-perfect real solo se logra con WASAPI exclusivo. La UI lo avisa.
 - **Linux:** best-effort. Se pide la frecuencia de la pista, pero PipeWire o PulseAudio deciden según su configuración (`default.clock.allowed-rates`).
-- **Gapless entre frecuencias distintas:** si la pista siguiente tiene otra frecuencia, hay que reconfigurar el dispositivo y queda un hueco de unos 100–300 ms en ese borde. Entre pistas de igual frecuencia (el caso normal en un disco) el gapless se mantiene.
+- **Gapless entre formatos distintos:** si la pista siguiente tiene otra frecuencia u otra profundidad (con bit-perfect encendido), hay que reconfigurar el dispositivo y queda un hueco de unos 100–300 ms en ese borde. Entre pistas del mismo formato (el caso normal en un disco) el gapless se mantiene.
 - **macOS compartido:** cambiar la frecuencia afecta a todas las apps que usan ese dispositivo.
-- **Bit-perfect estricto** solo existe con volumen 100 %, EQ apagado, nivelador en 0 dB y el DAC soportando el formato de la pista. Si no se cumple todo eso, el resultado es "sin remuestreo" (cuando se pueda), pero no idéntico bit a bit, y la UI muestra el motivo.
+- **Bit-perfect estricto** solo existe con volumen 100 %, EQ apagado, nivelador en 0 dB y el DAC recibiendo exactamente la frecuencia y la profundidad del archivo. Si no se cumple todo eso, el resultado es "sin remuestreo" o "ampliado a N bits" (cuando se pueda), pero no bit-perfect, y la UI muestra el motivo.
 
 ## 2. Arquitectura
 
@@ -209,11 +209,13 @@ Al apagar el interruptor se restaura la frecuencia original del dispositivo.
 3. Si la pista está en una frecuencia que el DAC no tiene, pero por debajo de su máximo: el múltiplo entero más chico de la misma familia que soporte (44,1k → 88,2k). Si no hay, la más cercana por encima.
 4. DSD: la frecuencia PCM más alta de la familia de 44,1 kHz que soporte el DAC, hasta 352,8 kHz.
 
-**3. Profundidad:** la mayor que el DAC ofrezca en esa frecuencia. En macOS se fija el formato físico del stream; en Windows exclusivo se abre con ese formato. Si es menor que la de la pista (24 bits en un DAC de 16), se aplica dither TPDF a la profundidad del DAC en vez de truncar.
+**3. Profundidad:** si la frecuencia no cambió, la de la pista, siempre que el DAC la ofrezca en esa frecuencia (las capacidades guardan todas las profundidades de cada frecuencia, no solo la mayor). Si no la ofrece, la más chica por encima (16 → 24 bits: no se pierde nada, pero ya no es bit-perfect y el indicador lo dice); si tampoco hay, la mayor que tenga. Lo que ya se convirtió (remuestreado, DSD, coma flotante, con pérdida) va a la mayor profundidad disponible. En macOS se fija el formato físico del stream; en Windows exclusivo se abre con ese formato (24 bits como 24 en 32 o 24 empaquetado antes que un contenedor de 32). Si es menor que la de la pista (24 bits en un DAC de 16), se aplica dither TPDF a la profundidad del DAC en vez de truncar.
 
 **4. Canales:** si la pista tiene más canales que el dispositivo (5.1 en estéreo), se hace downmix con la matriz estándar de libswresample.
 
-**5. Sin conversión:** si la frecuencia coincide y la profundidad alcanza, la señal no se toca, salvo por EQ, volumen o nivelador si están activos.
+**5. Sin conversión:** si la frecuencia y la profundidad coinciden con las del archivo, la señal no se toca, salvo por EQ, volumen o nivelador si están activos.
+
+**6. Lo que informa el motor es lo que corre de verdad:** después de reabrir, se leen la frecuencia del dispositivo (la interna de miniaudio) y, en macOS, la profundidad del formato físico. Si el dispositivo no tomó lo pedido, el indicador lo muestra y no dice bit-perfect. El formato informado es el de la pista que suena, también después de un paso gapless. El dither forma parte del formato: si la pista siguiente necesita otro (24 → 16 bits con dither y después un 16 bits), se reabre el dispositivo para no meterle ruido a la que no lo necesita.
 
 **Transición entre pistas**, cuando el formato elegido para la pista nueva difiere del actual:
 
@@ -241,6 +243,7 @@ Al apagar el interruptor se restaura la frecuencia original del dispositivo.
 Ejemplos en el player:
 
 - "24/96 · bit-perfect"
+- "16/44.1 → 24/44.1 · ampliado a 24 bits · el DAC no admite 16 bits"
 - "24/192 → 24/96 · el DAC llega a 96 kHz"
 - "24 → 16 bits con dither · el DAC llega a 16 bits"
 - "remuestreado a 48 kHz · bit-perfect apagado"
@@ -373,6 +376,7 @@ Tamaño estimado: unas 3.500–4.500 líneas de C (incluye bit-perfect, capacida
 - [ ] 5.1 en estéreo → downmix.
 - [ ] DSD64, 128 y 256 en un dispositivo limitado.
 - [ ] Bit-perfect estricto con volumen 100 %, EQ apagado y nivelador en 0, y se pierde (con el motivo) al tocar cualquiera de los tres.
+- [ ] Un 16/44.1 en el FiiO sale a 16/44.1 (Configuración de Audio MIDI muestra 16 bits) y el indicador dice bit-perfect; un 24/96 después pasa a 24 bits. Si el dispositivo no admite la profundidad del archivo, el indicador dice "Ampliado a N bits" y no bit-perfect.
 - [ ] Entrar y salir de hog sin recargar ni perder posición; otra app no puede usar el dispositivo mientras dura.
 - [ ] Al cerrar la app se restaura la frecuencia original.
 - [ ] Desconectar auriculares o DAC durante la reproducción; cambiar el dispositivo por defecto.
@@ -498,6 +502,16 @@ Capacidades leídas del FiiO KA13 del usuario: hasta 384 kHz/32 bits; formato f�
 - README, `native/libs/README.md` y `THIRD_PARTY_NOTICES.md` describen el motor nuevo y sus licencias.
 - Las menciones de BASS que quedan son referencias de compatibilidad (por qué el motor reproduce exactamente lo que hacía BASS) y los datos y el script de referencia en `native/crate-audio/tests/golden/`.
 - Empaquetado macOS sin firma verificado: el bundle lleva `libcrate_audio` + Chromaprint, licencias y el fuente de FFmpeg; `verify:native --packaged-root` pasa.
+
+### Corrección de bit-perfect (2026-10-15)
+
+Pedido del usuario: bit-perfect es que el DAC reciba exactamente el formato del archivo; si recibe otro, aunque sea mayor, no lo es. Antes el motor mandaba siempre la profundidad más alta del DAC (un 16/44.1 salía a 24 o 32 bits) y la etiqueta decía igual "Bit-perfect".
+
+- `ca_device_caps.depths[]`: todas las profundidades por frecuencia (CoreAudio, sondeo WASAPI y miniaudio). `ca_choose_output_format` elige la de la pista; si el DAC no la tiene, la más chica por encima con `CA_LIMIT_DAC_BITS`. Apagado o formato fijo marcan también la diferencia de profundidad.
+- Cambiar de profundidad o de dither entre pistas reabre el dispositivo en el borde, igual que un cambio de frecuencia. Antes el dither quedaba del tema anterior (bug previo: un 16 bits después de un 24 en un DAC de 16 recibía dither).
+- `ca_output_get_info` informa el formato de la pista que suena y lo corrige con lo que el dispositivo reporta (frecuencia interna de miniaudio y profundidad física en macOS).
+- El indicador solo dice "Bit-perfect" si la frecuencia y la profundidad coinciden; si no, "Ampliado a N bits", "Reducido a N bits" o el motivo que corresponda. El parche de WASAPI prueba 24 en 32 y 24 empaquetado antes que un contenedor de 32.
+- Tests: 858 verificaciones nativas (también limpias con TSan y ASan/UBSan), con un caso nuevo de 16 → 24 bits a 44,1 kHz que es bit-exacto en las dos partes.
 
 ### F7 · Pendiente
 

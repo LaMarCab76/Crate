@@ -119,7 +119,8 @@ static void end_command(ca_player *p) {
 
 static int item_compatible(const ca_player *p, const ca_item *item) {
   if (!p->is_main) return 1;
-  return item->format.sample_rate == p->rate && item->format.channels == p->channels;
+  return item->format.sample_rate == p->rate && item->format.channels == p->channels &&
+         item->format.bits == p->bits && ca__format_dither_bits(&item->format) == p->dither;
 }
 
 static void retire_finished(ca_player *p) {
@@ -220,6 +221,8 @@ static int ensure_buffers(ca_player *p, int rate, int channels) {
   p->channels = channels;
   p->tap_channels = channels;
   p->rate = rate;
+  p->bits = g_engine.out_bits;
+  p->dither = g_engine.dither_bits;
   atomic_store(&p->tap_write, 0);
   memset(p->tap, 0, sizeof(float) * CA_TAP_FRAMES * (size_t)channels);
   ca_mutex_unlock(&p->tap_lock);

@@ -89,6 +89,19 @@ static int bits_at(const ca_device_caps *caps, int rate) {
   return caps->current_bits > 0 ? caps->current_bits : 32;
 }
 
+/* Bit-perfect depth: the track's own when the DAC takes it at that rate.
+ * Otherwise the nearest deeper one (padding keeps every bit, though it is no
+ * longer bit-perfect), else the deepest it has. */
+static int pick_bits(const ca_device_caps *caps, int rate, int want) {
+  int index = caps_index_of(caps, rate);
+  uint32_t depths = index >= 0 ? caps->depths[index] : 0;
+  if (!depths || want < 1 || want > 32) return bits_at(caps, rate);
+  for (int d = want; d <= 32; d++) {
+    if (depths & CA_DEPTH_BIT(d)) return d;
+  }
+  return bits_at(caps, rate);
+}
+
 CA_API int ca_choose_output_format(const ca_stream_info *source, const ca_device_caps *caps,
                                    const ca_output_policy *policy, ca_output_format *out) {
   if (!source || !caps || !policy || !out) return ca__fail(CA_ERR_INVALID_ARG, "ca_choose_output_format: NULL argument");
@@ -125,12 +138,20 @@ CA_API int ca_choose_output_format(const ca_stream_info *source, const ca_device
   }
   out->resampled = out->sample_rate != ideal;
 
-  /* Depth: the deepest the device offers at that rate. Dither whenever the
-   * signal must be requantised to 16 bits or less. */
-  out->bits = policy->bit_perfect || caps->current_bits <= 0 ? bits_at(caps, out->sample_rate) : caps->current_bits;
+  /* Depth: an integer PCM track that keeps its rate gets its own depth when
+   * the DAC has it; anything already converted (resampled, DSD, float, lossy)
+   * gets the deepest the DAC offers. Dither whenever the signal must be
+   * requantised to 16 bits or less. */
   int source_bits = source->is_dsd ? 24 : (source->is_float ? 32 : source->bits_per_sample);
-  if (source_bits > out->bits && source->is_lossless) {
-    out->limited_by |= CA_LIMIT_DAC_BITS;
+  int exact = source->is_lossless && !source->is_dsd && !source->is_float && !out->resampled && source_bits > 0;
+  int follows = policy->bit_perfect && caps->can_set_rate;
+  if (!policy->bit_perfect && caps->current_bits > 0) out->bits = caps->current_bits;
+  else if (follows && exact) out->bits = pick_bits(caps, out->sample_rate, source_bits);
+  else out->bits = bits_at(caps, out->sample_rate);
+  if (source->is_lossless && source_bits > 0 && (exact ? out->bits != source_bits : out->bits < source_bits)) {
+    if (!policy->bit_perfect) out->limited_by |= CA_LIMIT_SETTING_OFF;
+    else if (!caps->can_set_rate) out->limited_by |= CA_LIMIT_FIXED_RATE;
+    else out->limited_by |= CA_LIMIT_DAC_BITS;
   }
   if (out->bits <= 16 && (source_bits == 0 || source_bits > out->bits || out->resampled || source->is_dsd)) {
     out->dithered = 1;

@@ -59,6 +59,7 @@ int ca__wasapi_exclusive_caps(ma_context *context, const ma_device_id *id, ca_de
   caps->count = 0;
   for (size_t r = 0; r < sizeof rates / sizeof rates[0] && caps->count < CA_MAX_RATES; r++) {
     int best = 0;
+    uint32_t accepted = 0;
     for (size_t d = 0; d < sizeof depths / sizeof depths[0]; d++) {
       MA_WAVEFORMATEXTENSIBLE wf;
       MA_ZERO_OBJECT(&wf);
@@ -74,6 +75,7 @@ int ca__wasapi_exclusive_caps(ma_context *context, const ma_device_id *id, ca_de
       wf.SubFormat = MA_GUID_KSDATAFORMAT_SUBTYPE_PCM;
       if (ma_IAudioClient_IsFormatSupported(client, MA_AUDCLNT_SHAREMODE_EXCLUSIVE, (MA_WAVEFORMATEX *)&wf, NULL) == S_OK) {
         if ((int)depths[d].valid > best) best = depths[d].valid;
+        accepted |= CA_DEPTH_BIT(depths[d].valid);
       }
     }
     if (best > 0) {
@@ -81,10 +83,12 @@ int ca__wasapi_exclusive_caps(ma_context *context, const ma_device_id *id, ca_de
       while (i > 0 && caps->rates[i - 1] > (int32_t)rates[r]) {
         caps->rates[i] = caps->rates[i - 1];
         caps->bits[i] = caps->bits[i - 1];
+        caps->depths[i] = caps->depths[i - 1];
         i--;
       }
       caps->rates[i] = (int32_t)rates[r];
       caps->bits[i] = best;
+      caps->depths[i] = accepted;
     }
   }
   caps->max_channels = (int32_t)channels;

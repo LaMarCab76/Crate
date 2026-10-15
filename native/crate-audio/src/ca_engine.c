@@ -131,9 +131,11 @@ static ca_known_device *find_device_locked(const char *device_id) {
 
 static void add_rate(ca_device_caps *caps, int rate, int bits) {
   if (rate <= 0) return;
+  uint32_t depth = bits >= 1 && bits <= 32 ? CA_DEPTH_BIT(bits) : 0;
   for (int i = 0; i < caps->count; i++) {
     if (caps->rates[i] == rate) {
       if (bits > caps->bits[i]) caps->bits[i] = bits;
+      caps->depths[i] |= depth;
       return;
     }
   }
@@ -142,10 +144,12 @@ static void add_rate(ca_device_caps *caps, int rate, int bits) {
   while (i > 0 && caps->rates[i - 1] > rate) {
     caps->rates[i] = caps->rates[i - 1];
     caps->bits[i] = caps->bits[i - 1];
+    caps->depths[i] = caps->depths[i - 1];
     i--;
   }
   caps->rates[i] = rate;
   caps->bits[i] = bits;
+  caps->depths[i] = depth;
 }
 
 static int format_bits(ma_format format) {
@@ -340,8 +344,13 @@ void ca__desired_format(const ca_player *p, const ca_stream_info *info, ca_outpu
   ca_choose_output_format(info, &caps, &g_engine.policy, out);
 }
 
+int ca__format_dither_bits(const ca_output_format *format) {
+  return format->dithered && format->bits < 24 ? format->bits : 0;
+}
+
 int ca__format_matches_output(const ca_output_format *format) {
-  return format->sample_rate == g_engine.out_rate && format->channels == g_engine.out_channels;
+  return format->sample_rate == g_engine.out_rate && format->channels == g_engine.out_channels &&
+         format->bits == g_engine.out_bits && ca__format_dither_bits(format) == g_engine.dither_bits;
 }
 
 /* WASAPI exclusive streams take the device's integer format directly. On
@@ -462,8 +471,7 @@ static void release_players_locked(void) {
 }
 
 static void update_dither_locked(void) {
-  g_engine.dither_bits = g_engine.current_format.dithered ? g_engine.current_format.bits : 0;
-  if (g_engine.dither_bits >= 24) g_engine.dither_bits = 0;
+  g_engine.dither_bits = ca__format_dither_bits(&g_engine.current_format);
 }
 
 int ca__engine_apply_format(const ca_output_format *format, int advance_main) {
@@ -490,6 +498,15 @@ int ca__engine_apply_format(const ca_output_format *format, int advance_main) {
   int status = open_device_locked(rate, channels, bits);
   if (status != CA_OK && rate > 0) status = open_device_locked(0, channels, 0);
   if (status == CA_OK) {
+    /* What the device really runs at: the platform may not have taken the
+     * requested rate or depth, and then the output is not bit-perfect. */
+    g_engine.device_rate = g_engine.out_rate;
+    g_engine.device_bits = g_engine.out_bits;
+    if (!(g_engine.flags & CA_INIT_NO_DEVICE)) {
+      if (g_engine.device.playback.internalSampleRate > 0) g_engine.device_rate = (int)g_engine.device.playback.internalSampleRate;
+      int physical = device ? ca__hal_current_bits(device->info.id) : 0;
+      if (physical > 0) g_engine.device_bits = physical;
+    }
     if (format) {
       g_engine.current_format = *format;
       if (g_engine.out_rate != format->sample_rate) {
@@ -535,7 +552,10 @@ CA_API int ca_output_open(const char *device_id, const ca_output_policy *policy)
   /* Capabilities, and the rate the device runs at before we touch it. */
   if (g_engine.flags & CA_INIT_NO_DEVICE) {
     memset(&g_caps, 0, sizeof g_caps);
-    for (size_t r = 0; r < sizeof STANDARD_RATES / sizeof STANDARD_RATES[0]; r++) add_rate(&g_caps, STANDARD_RATES[r], 24);
+    for (size_t r = 0; r < sizeof STANDARD_RATES / sizeof STANDARD_RATES[0]; r++) {
+      add_rate(&g_caps, STANDARD_RATES[r], 16);
+      add_rate(&g_caps, STANDARD_RATES[r], 24);
+    }
     g_caps.max_channels = 8;
     g_caps.can_set_rate = 1;
     g_caps.current_rate = 48000;
@@ -598,7 +618,6 @@ CA_API int ca_output_set_policy(const ca_output_policy *policy) {
       status = ca__engine_apply_format(&format, 0);
     } else {
       g_engine.current_format = format;
-      update_dither_locked();
     }
   }
   ca_mutex_unlock(&g_engine.lock);
@@ -628,7 +647,24 @@ CA_API int ca_output_get_info(ca_output_info *out) {
   out->exclusive = g_engine.policy.exclusive;
   out->bit_perfect = g_engine.policy.bit_perfect;
   out->original_rate = g_engine.native_rate;
+  /* The decision for the track that is actually playing (a gapless hand-over
+   * to a track in the same device format doesn't pass through here)... */
   out->current = g_engine.current_format;
+  ca_player *main = main_player();
+  if (main) {
+    ca_mutex_lock(&main->lock);
+    int64_t playing = atomic_load(&main->played_serial);
+    for (int i = 0; i < main->count; i++) {
+      if (main->items[i].serial == playing) out->current = main->items[i].format;
+    }
+    ca_mutex_unlock(&main->lock);
+  }
+  /* ...corrected by what the device reports. */
+  if (g_engine.device_open && g_engine.device_rate > 0 && out->current.sample_rate != g_engine.device_rate) {
+    out->current.sample_rate = g_engine.device_rate;
+    out->current.resampled = 1;
+  }
+  if (g_engine.device_open && g_engine.device_bits > 0) out->current.bits = g_engine.device_bits;
   ca__copy_string(out->device_id, sizeof out->device_id, g_engine.device_id);
   ca__copy_string(out->device_name, sizeof out->device_name, g_engine.device_name);
   ca_mutex_unlock(&g_engine.lock);

@@ -247,6 +247,44 @@ static void test_format_switch(ca_player *p) {
   capture_free(&c);
 }
 
+/* Bit-perfect follows the depth too: a 24-bit track after a 16-bit one at the
+ * same rate reopens the device at 24 bits instead of carrying on at 16. */
+static void test_depth_switch(ca_player *p) {
+  drain_events();
+  ca_decoder *a = open_fixture("flac-44100-16-stereo.flac");
+  ca_decoder *b = open_fixture("pcm-44100-24-stereo.wav");
+  if (!a || !b) return;
+  CHECK(ca_player_set_source(p, a, 1.0f, 25) == CA_OK, "set_source 16-bit");
+  ca_output_info info;
+  ca_output_get_info(&info);
+  CHECK(info.bits == 16 && info.current.bits == 16 && info.current.limited_by == 0,
+        "16-bit track: device %d bits, reported %d (limited 0x%x)", info.bits, info.current.bits, info.current.limited_by);
+  CHECK(ca_player_queue_next(p, b, 1.0f, 26) == CA_OK, "queue 24-bit");
+  ca_player_play(p);
+  capture c = {0};
+  render_until(p, &c, CA_EVENT_TRACK_ENDED, 26, 200000);
+  CHECK(has_event(&c, CA_EVENT_OUTPUT_CHANGED, -1), "no OUTPUT_CHANGED for the 24-bit track");
+  CHECK(has_event(&c, CA_EVENT_TRACK_STARTED, 26), "no TRACK_STARTED for the 24-bit track");
+  ca_output_get_info(&info);
+  CHECK(info.bits == 24 && info.current.bits == 24 && !info.current.resampled && info.current.limited_by == 0,
+        "24-bit track: device %d bits, reported %d (resampled %d, limited 0x%x)",
+        info.bits, info.current.bits, info.current.resampled, info.current.limited_by);
+  CHECK(c.segment_count == 1, "the rate changed (%d segments)", c.segment_count);
+  if (c.segment_count == 1) {
+    segment *s = &c.segments[0];
+    double err_a = segment_error(s, 0, 44100, 0, 16);
+    CHECK(err_a < 1e-6, "16-bit part not exact (%g)", err_a);
+    long long start_b = 44100;
+    while (start_b < s->frames && s->data[start_b * 2] == 0.0f && s->data[start_b * 2 + 1] == 0.0f) start_b++;
+    double err_b = segment_error(s, start_b - 1, 22050, 0, 24);
+    CHECK(err_b < 1e-6, "24-bit part not bit-exact (%g)", err_b);
+  }
+  ca_player_detach(p);
+  ca_decoder_close(a);
+  ca_decoder_close(b);
+  capture_free(&c);
+}
+
 static void test_seek(ca_player *p) {
   drain_events();
   ca_decoder *dec = open_fixture("ref-44100-16-stereo.wav");
@@ -512,6 +550,7 @@ void run_engine_tests(void) {
   test_gapless(p, "m4a", 0, 44100, "gapless");
   test_gapless(p, "ogg", 0, 132300, "gapless-long");
   test_format_switch(p);
+  test_depth_switch(p);
   test_seek(p);
   test_seek_after_handover(p);
   test_clear_next_rollback(p);

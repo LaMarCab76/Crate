@@ -17,6 +17,8 @@ void ca__hal_refine_caps(const char *device_id, int exclusive, ca_device_caps *c
 int ca__hal_supports_exclusive(const char *device_id);
 /* Current nominal rate, or 0 when unknown. NULL = default device. */
 int ca__hal_current_rate(const char *device_id);
+/* Depth of the device's physical format, or 0 when unknown. */
+int ca__hal_current_bits(const char *device_id);
 
 /* Called with the device closed, right before it is reopened: switch the
  * device to `rate`/`bits` and take or release exclusive access. Waits until

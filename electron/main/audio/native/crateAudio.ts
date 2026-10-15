@@ -159,6 +159,7 @@ function defineTypes(): void {
     count: 'int32_t',
     rates: koffi.array('int32_t', 32),
     bits: koffi.array('int32_t', 32),
+    depths: koffi.array('uint32_t', 32),
     max_channels: 'int32_t',
     current_rate: 'int32_t',
     current_bits: 'int32_t',

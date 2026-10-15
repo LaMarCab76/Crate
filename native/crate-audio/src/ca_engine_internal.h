@@ -87,6 +87,8 @@ struct ca_player {
   uint32_t ring_frames;
   int channels;
   int rate;
+  int bits;                /* device depth and dither: a track needing other */
+  int dither;              /* ones reopens the device at its boundary */
   _Atomic uint64_t write_pos;
   _Atomic uint64_t read_pos;
   ca_mutex ring_lock;      /* producer-side flushes; callback only try-locks */
@@ -159,6 +161,8 @@ typedef struct ca_engine {
   int out_bits;            /* depth the device receives (32 = float) */
   ma_format out_format;
   int dither_bits;         /* 0 = none */
+  int device_rate;         /* what the device itself runs at (miniaudio may resample to it) */
+  int device_bits;         /* physical depth when the platform reports it, else out_bits */
   int native_rate;         /* device rate before bit-perfect touched it */
   ca_output_policy policy;
   int follow_default;      /* opened with device_id NULL */
@@ -202,7 +206,10 @@ void ca__push_rt_event(int type, int player_id, int64_t serial);
 /* Output format the player's track needs; for non-main players this is
  * always the current device format. Engine lock held. */
 void ca__desired_format(const ca_player *player, const ca_stream_info *info, ca_output_format *out);
+/* Whether the open device already plays `format`: same rate, channels,
+ * depth and dither, so the track can follow without reopening it. */
 int ca__format_matches_output(const ca_output_format *format);
+int ca__format_dither_bits(const ca_output_format *format);
 /* Reopens the device in `format` and rebuilds every player around it. With
  * advance_main, the main player's queued track becomes current. Engine lock
  * held; no player locks held. */

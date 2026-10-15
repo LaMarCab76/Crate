@@ -5,8 +5,9 @@
 // WASAPI exclusive format: miniaudio always opens exclusive streams in the
 // device's default format (Sound settings > Advanced). For bit-perfect output
 // Crate needs the track's rate and depth, so the requested format is tried
-// first — 32-bit, 24-in-32, packed 24, 16-bit or float — and the default is
-// only used when the device refuses all of them.
+// first — 24 bits as 24-in-32 or packed 24 before a padded 32-bit container,
+// so the device gets exactly the track's depth — and the default is only used
+// when the device refuses all of them.
 
 export const MINIAUDIO_PATCHES = Object.freeze([
   {
@@ -29,10 +30,14 @@ static ma_bool32 ma_crate_try_exclusive_format(ma_device_init_internal_data__was
     switch (pData->formatIn) {
         case ma_format_f32: bits[count] = 32; valid[count] = 32; count++; isFloat = MA_TRUE; break;
         case ma_format_s32:
-        case ma_format_s24:
             bits[count] = 32; valid[count] = 32; count++;
             bits[count] = 32; valid[count] = 24; count++;
             bits[count] = 24; valid[count] = 24; count++;
+            break;
+        case ma_format_s24:
+            bits[count] = 32; valid[count] = 24; count++;
+            bits[count] = 24; valid[count] = 24; count++;
+            bits[count] = 32; valid[count] = 32; count++;
             break;
         case ma_format_s16: bits[count] = 16; valid[count] = 16; count++; break;
         default: return MA_FALSE;

@@ -214,19 +214,22 @@ void ca__hal_refine_caps(const char *device_id, int exclusive, ca_device_caps *c
     free(ranges);
   }
 
-  /* Depth: the deepest physical PCM format at each rate. */
+  /* Depths: every physical PCM format at each rate, and the deepest. */
   AudioStreamID stream = output_stream(device);
   UInt32 format_count = 0;
   AudioStreamRangedDescription *formats = stream != kAudioObjectUnknown ? physical_formats(stream, &format_count) : NULL;
   for (int i = 0; i < caps->count; i++) {
     int best = 0;
+    uint32_t depths = 0;
     for (UInt32 f = 0; f < format_count; f++) {
       if (!usable_pcm(&formats[f].mFormat, exclusive) || !format_covers(&formats[f], caps->rates[i])) continue;
       int depth = format_depth(&formats[f].mFormat);
       if (depth > best) best = depth;
+      if (depth <= 32) depths |= CA_DEPTH_BIT(depth);
       if ((int)formats[f].mFormat.mChannelsPerFrame > caps->max_channels) caps->max_channels = (int)formats[f].mFormat.mChannelsPerFrame;
     }
     caps->bits[i] = best > 0 ? best : 24;
+    caps->depths[i] = depths;
   }
   free(formats);
 
@@ -253,6 +256,13 @@ int ca__hal_supports_exclusive(const char *device_id) {
 int ca__hal_current_rate(const char *device_id) {
   AudioObjectID device = device_for_uid(device_id);
   return device == kAudioObjectUnknown ? 0 : (int)(nominal_rate(device) + 0.5);
+}
+
+int ca__hal_current_bits(const char *device_id) {
+  AudioObjectID device = device_for_uid(device_id);
+  AudioStreamID stream = device == kAudioObjectUnknown ? kAudioObjectUnknown : output_stream(device);
+  AudioStreamBasicDescription current;
+  return stream != kAudioObjectUnknown && physical_format(stream, &current) ? format_depth(&current) : 0;
 }
 
 static pid_t hog_owner(AudioObjectID device) {
@@ -301,7 +311,8 @@ int ca__hal_prepare_device(const char *device_id, int rate, int bits, int exclus
     }
   }
 
-  /* Physical format: the deepest PCM format at that rate (up to `bits`). */
+  /* Physical format: the deepest PCM format at that rate up to `bits` (the
+   * track's own depth when bit-perfect picked it). */
   AudioStreamID stream = output_stream(device);
   if (bits > 0 && rate > 0 && stream != kAudioObjectUnknown) {
     AudioStreamBasicDescription current;
