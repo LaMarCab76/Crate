@@ -44,7 +44,7 @@ static void test_fft_matches_bass(void) {
     CHECK(input && bass && in_count == CA_FFT_SIZE * 2 && bass_count == CA_FFT_BINS, "%s: golden files", names[i]);
     if (input && bass) {
       float ours[CA_FFT_BINS];
-      ca_fft_run(fft, input, 2, ours);
+      ca_fft_run(fft, input, CA_FFT_SIZE, 2, ours);
       double worst = 0;
       for (int k = 0; k < CA_FFT_BINS; k++) worst = fmax(worst, fabs(ours[k] - bass[k]));
       CHECK(worst < 1e-5, "%s: FFT differs from BASS by %g", names[i], worst);

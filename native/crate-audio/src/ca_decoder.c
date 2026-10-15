@@ -605,13 +605,15 @@ CA_API int64_t ca_decoder_read(ca_decoder *d, void *out, int64_t max_frames) {
       if (d->out_format == CA_SAMPLE_F32) {
         memcpy((float *)out + done * ch, src, (size_t)(n * ch) * sizeof(float));
       } else {
+        /* Truncate like BASS (an arithmetic shift for 24-bit sources), so
+         * Chromaprint fingerprints match the ones BASS produced. */
         int16_t *dst = (int16_t *)out + done * ch;
         int64_t samples = n * ch;
         for (int64_t i = 0; i < samples; i++) {
-          float v = src[i] * 32768.0f;
+          float v = floorf(src[i] * 32768.0f);
           if (v > 32767.0f) v = 32767.0f;
           else if (v < -32768.0f) v = -32768.0f;
-          dst[i] = (int16_t)lrintf(v);
+          dst[i] = (int16_t)v;
         }
       }
       d->fifo_offset += n;

@@ -2,14 +2,55 @@ import { statSync } from 'node:fs'
 import { getRepos } from '../db/repositories'
 import { PLAYBACK_ANALYSIS_VERSION, type TrackCacheFingerprint } from '../db/repositories/PlaybackAnalysisRepo'
 import { getAudioEngine } from './AudioEngine'
+import { decodeTableBarsAnalysis, decodeWaveformAnalysis } from './PlaybackDecode'
 import type { DbTrack } from '@shared/types/db'
 import type { PlaybackAnalysisResult, PlaybackCacheStats, PlaybackTableBarsResult } from '@shared/types/ipc-contract'
 import { requireLocalLibraryTrackPath } from '../library/localLibraryTrackGuard'
 import { requireFilesystemPlaybackAnalysisPath } from './playbackAnalysisSafety'
 
 const DEFAULT_BUCKETS = 1200
+// Short-lived layer over the persistent DB cache, mainly for tracks that are
+// not in the library (device playback) and therefore can't be stored.
+const MEMORY_CACHE_MAX = 50
 
 let service: PlaybackAnalysisService | null = null
+
+function memoryCacheKey(path: string, kind: string): string {
+  try {
+    const st = statSync(path)
+    return `${path}:${kind}:${st.size}:${Math.round(st.mtimeMs)}`
+  } catch {
+    return `${path}:${kind}`
+  }
+}
+
+function remember<T>(cache: Map<string, T>, key: string, value: T): T {
+  if (cache.size >= MEMORY_CACHE_MAX) {
+    const oldest = cache.keys().next().value
+    if (oldest !== undefined) cache.delete(oldest)
+  }
+  cache.set(key, value)
+  return value
+}
+
+const analysisMemory = new Map<string, PlaybackAnalysisResult>()
+const tableBarsMemory = new Map<string, PlaybackTableBarsResult>()
+
+async function decodeAnalysis(path: string, buckets: number): Promise<PlaybackAnalysisResult> {
+  const key = memoryCacheKey(path, String(buckets))
+  const cached = analysisMemory.get(key)
+  if (cached) return { ...cached, source: 'decoded' }
+  const decoded = await decodeWaveformAnalysis(path, buckets)
+  return remember(analysisMemory, key, { ...decoded, analysisVersion: PLAYBACK_ANALYSIS_VERSION, source: 'decoded' })
+}
+
+async function decodeTableBars(path: string): Promise<PlaybackTableBarsResult> {
+  const key = memoryCacheKey(path, 'table-bars')
+  const cached = tableBarsMemory.get(key)
+  if (cached) return { ...cached, source: 'decoded' }
+  const decoded = await decodeTableBarsAnalysis(path)
+  return remember(tableBarsMemory, key, { ...decoded, analysisVersion: PLAYBACK_ANALYSIS_VERSION, source: 'decoded' })
+}
 
 function normalizeBuckets(buckets: number | undefined): number {
   const n = Number(buckets)
@@ -56,7 +97,7 @@ export class PlaybackAnalysisService {
     const resolved = this.resolveTrack(path, trackId)
     const normalizedBuckets = normalizeBuckets(buckets)
     if (!resolved) {
-      return getAudioEngine().decodePlaybackAnalysis(path, normalizedBuckets)
+      return decodeAnalysis(path, normalizedBuckets)
     }
 
     const current = this.requireCurrentLocalTrack(resolved)
@@ -88,7 +129,7 @@ export class PlaybackAnalysisService {
     requireFilesystemPlaybackAnalysisPath(path)
     const resolved = this.resolveTrack(path, trackId)
     if (!resolved) {
-      return getAudioEngine().decodeTableBars(path)
+      return decodeTableBars(path)
     }
 
     const current = this.requireCurrentLocalTrack(resolved)
@@ -120,12 +161,7 @@ export class PlaybackAnalysisService {
   private async decodeAndStore(track: DbTrack, buckets: number): Promise<PlaybackAnalysisResult> {
     const current = this.requireCurrentLocalTrack(track)
     const fingerprint = fingerprintFor(current)
-    const decoded = await getAudioEngine().decodePlaybackAnalysis(current.path, buckets)
-    const normalized: PlaybackAnalysisResult = {
-      ...decoded,
-      analysisVersion: PLAYBACK_ANALYSIS_VERSION,
-      source: 'decoded',
-    }
+    const normalized = await decodeAnalysis(current.path, buckets)
     getRepos().playbackAnalysis.save(current, fingerprint, normalized, [current.id, this.currentTrackId()])
     return normalized
   }
@@ -133,12 +169,7 @@ export class PlaybackAnalysisService {
   private async decodeAndStoreTableBars(track: DbTrack): Promise<PlaybackTableBarsResult> {
     const current = this.requireCurrentLocalTrack(track)
     const fingerprint = fingerprintFor(current)
-    const decoded = await getAudioEngine().decodeTableBars(current.path)
-    const normalized: PlaybackTableBarsResult = {
-      ...decoded,
-      analysisVersion: PLAYBACK_ANALYSIS_VERSION,
-      source: 'decoded',
-    }
+    const normalized = await decodeTableBars(current.path)
     getRepos().playbackAnalysis.saveTableBars(current, fingerprint, normalized, [current.id, this.currentTrackId()])
     return normalized
   }

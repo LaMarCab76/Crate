@@ -11,8 +11,6 @@ on:
       - "scripts/fetch-native.mjs"
       - "scripts/verify-native.mjs"
       - "native/libs/licenses/chromaprint/**"
-      - "electron/main/audio/bass-constants.ts"
-      - "electron/main/audio/bass-ffi.ts"
       - "electron/main/duplicates/fingerprint.ts"
       - "electron/main/duplicates/native/**"
   push:
@@ -26,8 +24,6 @@ on:
       - "scripts/fetch-native.mjs"
       - "scripts/verify-native.mjs"
       - "native/libs/licenses/chromaprint/**"
-      - "electron/main/audio/bass-constants.ts"
-      - "electron/main/audio/bass-ffi.ts"
       - "electron/main/duplicates/fingerprint.ts"
       - "electron/main/duplicates/native/**"
   workflow_dispatch:
@@ -129,14 +125,8 @@ jobs:
       - name: Build pinned shared library
         run: npm run build:chromaprint -- --platform=${{ matrix.platform }} --arch=${{ matrix.arch }} --force
 
-      - name: Fetch and load BASS decode libraries
-        run: npm run fetch:bass -- --platform=${{ matrix.platform }} --arch=${{ matrix.arch == 'universal' && 'x64' || matrix.arch }} && npm run verify:bass -- --platform=${{ matrix.platform }} --load
-
       - name: Verify provenance, ABI, dependencies, and fingerprint
         run: npm run verify:chromaprint -- --platform=${{ matrix.platform }} --arch=${{ matrix.arch }} --load
-
-      - name: Smoke BASS PCM into Chromaprint
-        run: npm run smoke:chromaprint-pipeline
 
       - name: Package and upload verified native tree
         if: github.event_name == 'workflow_dispatch' && inputs.publish == true && runner.os != 'Windows'

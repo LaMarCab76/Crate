@@ -462,7 +462,7 @@ static void test_fft(void) {
     frames[i * 2] = v;
     frames[i * 2 + 1] = v;
   }
-  CHECK(ca_fft_run(fft, frames, 2, out) == CA_OK, "fft run");
+  CHECK(ca_fft_run(fft, frames, CA_FFT_SIZE, 2, out) == CA_OK, "fft run");
   int peak = 0;
   for (int k = 1; k < CA_FFT_BINS; k++) if (out[k] > out[peak]) peak = k;
   CHECK(peak == bin, "fft peak at bin %d, expected %d", peak, bin);

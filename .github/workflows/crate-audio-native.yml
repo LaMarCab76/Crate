@@ -8,6 +8,7 @@ on:
       - "native/libs/licenses/crate-audio/**"
       - "scripts/*crate-audio*.mjs"
       - "scripts/native-binary.mjs"
+      - "scripts/smoke-chromaprint-pipeline.mjs"
   push:
     branches: [main]
     paths:
@@ -16,6 +17,7 @@ on:
       - "native/libs/licenses/crate-audio/**"
       - "scripts/*crate-audio*.mjs"
       - "scripts/native-binary.mjs"
+      - "scripts/smoke-chromaprint-pipeline.mjs"
   workflow_dispatch:
     inputs:
       publish:
@@ -138,6 +140,11 @@ jobs:
 
       - name: Verify provenance, exports, dependencies and native load
         run: npm run verify:crate-audio -- --platform=${{ matrix.platform }} --arch=${{ matrix.arch }} --load
+
+      - name: Smoke crate-audio PCM into Chromaprint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: npm run fetch:chromaprint -- --platform=${{ matrix.platform }} --arch=${{ matrix.arch }} && npm run smoke:chromaprint-pipeline
 
       - name: Package and upload verified native tree
         if: github.event_name == 'workflow_dispatch' && inputs.publish == true && runner.os != 'Windows'

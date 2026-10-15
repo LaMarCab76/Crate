@@ -3,7 +3,7 @@ import { getRepos } from '../../db/repositories/index.ts'
 import { getLocalFileAccessService } from '../../security/localFileAccessRuntime.ts'
 import type { FingerprintProvider, FingerprintSource } from '../fingerprint.ts'
 import { UnavailableFingerprintProvider } from '../fingerprint.ts'
-import { BassChromaprintPcmDecoder } from './BassChromaprintPcmDecoder.ts'
+import { FfmpegChromaprintPcmDecoder } from './FfmpegChromaprintPcmDecoder.ts'
 import {
   CHROMAPRINT_PROVIDER_VERSION,
   ChromaprintFingerprintProvider,
@@ -14,7 +14,7 @@ import {
   type ChromaprintUnavailableReason,
 } from './chromaprint-ffi.ts'
 
-export * from './BassChromaprintPcmDecoder.ts'
+export * from './FfmpegChromaprintPcmDecoder.ts'
 export * from './ChromaprintFingerprintProvider.ts'
 export * from './ChromaprintSourceResolver.ts'
 export * from './chromaprint-ffi.ts'
@@ -94,7 +94,7 @@ export function createChromaprintFingerprintProvider(): FingerprintProvider {
   }
   return new ChromaprintFingerprintProvider(
     new DefaultChromaprintSourceResolver({ authorizeLocalRead: authorizeIndexedLocalTrackRead }),
-    new BassChromaprintPcmDecoder(),
+    new FfmpegChromaprintPcmDecoder(),
     { availability: () => availability },
   )
 }

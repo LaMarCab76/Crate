@@ -65,7 +65,7 @@ import {
 } from './duplicateDeletionSync'
 import { fingerprintDigest, type FingerprintProvider } from '../duplicates/fingerprint'
 import {
-  BassChromaprintPcmDecoder,
+  FfmpegChromaprintPcmDecoder,
   ChromaprintFingerprintProvider,
   DefaultChromaprintSourceResolver,
 } from '../duplicates/native'
@@ -735,7 +735,7 @@ export class DeviceSyncService {
   private readonly duplicateDeviceFingerprintProvider: FingerprintProvider =
     new ChromaprintFingerprintProvider(
       new DefaultChromaprintSourceResolver(),
-      new BassChromaprintPcmDecoder(),
+      new FfmpegChromaprintPcmDecoder(),
     )
 
   private async withDeviceMutation<T>(deviceId: string, operation: string, run: () => Promise<T>): Promise<T> {

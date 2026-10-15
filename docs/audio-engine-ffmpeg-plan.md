@@ -419,3 +419,21 @@ Hallazgos:
 - DSD: la ganancia de +6 dB reproduce el nivel de BASSDSD a 0,00 dB.
 - Bug previo: en `bass-constants.ts` `BASS_LEVEL_RMS` y `BASS_LEVEL_STEREO` estaban intercambiados, así que el "pico" de los medidores era RMS. Ningún componente del renderer consume hoy esos medidores; el motor nuevo entrega pico y RMS reales.
 - El slice x86_64 compila pero no se puede ejecutar en esta Mac (no hay Rosetta instalado).
+
+### F2 · Decodificación offline — completa
+
+- `electron/main/audio/native/crateAudio.ts`: bindings koffi (decoder con lecturas async en hilos de koffi, FFT). `crateAudioPaths.ts` resuelve la librería (o `CRATE_AUDIO_NATIVE_DIR`).
+- `PlaybackDecode.ts`: forma de onda y table bars. Las table bars decodifican el archivo una sola vez en lugar de ~18.000 seeks. `PlaybackAnalysisService` lo usa directamente; `AudioEngine` ya no decodifica análisis.
+- `FfmpegChromaprintPcmDecoder.ts` reemplaza a `BassChromaprintPcmDecoder.ts`.
+- `smoke-chromaprint-pipeline.mjs` usa crate-audio y pasó al workflow `crate-audio-native.yml`; `chromaprint-native.yml` ya no depende de BASS.
+
+Validación contra BASS:
+
+- Forma de onda idéntica (error < 1e-6) y table bars dentro de 1e-3 en mono, estéreo y 5.1 (`PlaybackDecode.test.mjs`).
+- Huella Chromaprint congelada del smoke: mismo digest que con BASS.
+- Biblioteca real (30 FLAC al azar de 16 y 24 bits, hasta 192 kHz): PCM de 16 bits **idéntico bit a bit** y huellas idénticas. Para lograrlo la conversión a 16 bits trunca como BASS (desplazamiento aritmético) en vez de redondear. Las huellas ya guardadas siguen siendo válidas, así que no hace falta recalcularlas ni subir `PLAYBACK_ANALYSIS_VERSION`.
+
+Hallazgos:
+
+- Al final del stream BASS no rellena con ceros la ventana de la FFT: estira la ventana Hann sobre las muestras que quedan y normaliza por esa cantidad. Se replica con una tabla de 2048 puntos (exacto en potencias de 2; en el resto difiere < 0,05 solo en los ~33 ms finales de cada tema).
+- BASS posicionaba las table bars en bytes de float (`floor(segundos × bytes por segundo)`); se replica para que cada frame empiece en la misma muestra.

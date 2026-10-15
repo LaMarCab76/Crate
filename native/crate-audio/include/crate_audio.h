@@ -122,15 +122,18 @@ CA_API void ca_decoder_close(ca_decoder *dec);
 /* ------------------------------------------------------------------- FFT */
 
 /* 2048-point spectrum compatible with BASS_DATA_FFT2048: the input frames are
- * mixed to mono, Hann-windowed and transformed; out receives 1024 magnitudes. */
+ * mixed to mono (average), Hann-windowed and transformed; out receives 1024
+ * magnitudes, scaled so a full-scale sine reads 1.0. */
 #define CA_FFT_SIZE 2048
 #define CA_FFT_BINS 1024
 
 typedef struct ca_fft ca_fft;
 
 CA_API ca_fft *ca_fft_create(void);
-/* `frames` must hold CA_FFT_SIZE interleaved frames of `channels` channels. */
-CA_API int ca_fft_run(ca_fft *fft, const float *frames, int32_t channels, float *out);
+/* `frames` holds `frame_count` (1..CA_FFT_SIZE) interleaved frames. Fewer
+ * than CA_FFT_SIZE frames (the end of a stream) are windowed over their own
+ * length and zero-padded, exactly like BASS does. */
+CA_API int ca_fft_run(ca_fft *fft, const float *frames, int32_t frame_count, int32_t channels, float *out);
 CA_API void ca_fft_destroy(ca_fft *fft);
 
 #ifdef __cplusplus

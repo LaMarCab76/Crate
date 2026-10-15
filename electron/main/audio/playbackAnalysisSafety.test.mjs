@@ -23,7 +23,7 @@ test('analysis service applies the cloud and current-library guards before stat/
   )
   assert.match(
     source,
-    /private async decodeAndStore[\s\S]*?this\.requireCurrentLocalTrack\(track\)[\s\S]*?decodePlaybackAnalysis\(current\.path/,
+    /private async decodeAndStore[\s\S]*?this\.requireCurrentLocalTrack\(track\)[\s\S]*?decodeAnalysis\(current\.path/,
   )
   assert.match(
     source,
