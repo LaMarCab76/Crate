@@ -467,3 +467,26 @@ Tests (788 verificaciones, también bajo ASan/UBSan y ThreadSanitizer sin report
 - `CRATE_AUDIO_NULL_OUTPUT=1` (solo desarrollo) manda el audio al dispositivo nulo para pruebas automáticas.
 
 Validación: smoke test en la app real por CDP (perfil aislado, dispositivo nulo): carga, gapless natural, fin de pista, "siguiente" manual con cambio a 96 kHz, seek y DSD64 → PCM 352,8 kHz.
+
+### F5 · Bit-perfect y exclusivo — completa (macOS probado en hardware; Windows compilado, sin probar)
+
+- `ca_hal_coreaudio.c`:
+  - capacidades reales (frecuencias nominales y profundidad física por frecuencia);
+  - cambio de frecuencia nominal y de formato físico, esperando la confirmación del dispositivo;
+  - hog mode por UID exacto;
+  - restauración de lo original al apagar bit-perfect, cambiar de dispositivo o cerrar.
+- En macOS miniaudio abre en modo compartido sobre el dispositivo en hog; si otra app tiene el hog, el motor vuelve a compartido y lo avisa.
+- Windows: parche a miniaudio (`native/crate-audio/patches/miniaudio.mjs`, aplicado por el build con verificación de coincidencia exacta) para que WASAPI exclusivo abra en el formato pedido (32, 24-en-32, 24 empaquetado, 16 o float), y sondeo de formatos exclusivos con `IsFormatSupported`. COM se inicializa en cada hilo que entra al motor.
+- Cross-compilación local con MinGW: la DLL de Windows compila y enlaza, exporta solo `ca_*` y solo importa DLLs del sistema. Así apareció que libavutil necesita `bcrypt`, que se agregó al enlace.
+- UI:
+  - interruptor "Salida bit-perfect" en Ajustes (encendido por defecto, persistido y enviado al motor al arrancar);
+  - indicador de salida en los menús Audio Output, por ejemplo "24/192 → 24/96 · Remuestreado a 96 kHz · El DAC llega a 96 kHz" (`shared/utils/outputPath.ts`, con tests);
+  - modo exclusivo marcado "experimental" en Windows.
+
+Prueba en hardware (MacBook Pro Speakers, sin reproducir audio audible):
+
+- 48 kHz → 44,1 kHz (≈0,5–0,7 s con la espera) → 96 kHz;
+- hog a 96 kHz;
+- al apagar bit-perfect vuelve a 48 kHz, y al cerrar queda como estaba.
+
+Capacidades leídas del FiiO KA13 del usuario: hasta 384 kHz/32 bits; formato físico actual 48 kHz/16 bits.

@@ -7,6 +7,7 @@
 #include <stdlib.h>
 
 #include "ca_hal.h"
+#include "ca_wasapi.h"
 
 ca_engine g_engine;
 
@@ -189,6 +190,13 @@ static int miniaudio_caps_locked(const ca_known_device *device, int exclusive, c
 }
 
 static int device_caps_locked(const ca_known_device *device, int exclusive, ca_device_caps *caps) {
+#if defined(_WIN32)
+  /* miniaudio reports a single exclusive format; probe the real list. */
+  if (exclusive && device && g_engine.context_ready && g_engine.context.backend == ma_backend_wasapi) {
+    memset(caps, 0, sizeof *caps);
+    if (ca__wasapi_exclusive_caps(&g_engine.context, &device->id, caps)) return CA_OK;
+  }
+#endif
   int status = miniaudio_caps_locked(device, exclusive, caps);
   if (status == CA_OK && device) ca__hal_refine_caps(device->info.id, exclusive, caps);
   return status;
@@ -196,6 +204,7 @@ static int device_caps_locked(const ca_known_device *device, int exclusive, ca_d
 
 CA_API int ca_device_count(void) {
   if (!g_engine.initialized) return ca__fail(CA_ERR_STATE, "ca_init has not been called");
+  ca__platform_thread_init();
   ca_mutex_lock(&g_engine.lock);
   int count = refresh_devices_locked();
   ca_mutex_unlock(&g_engine.lock);
@@ -204,6 +213,7 @@ CA_API int ca_device_count(void) {
 
 CA_API int ca_device_get(int32_t index, ca_device_info *out) {
   if (!out) return ca__fail(CA_ERR_INVALID_ARG, "ca_device_get: NULL out");
+  ca__platform_thread_init();
   ca_mutex_lock(&g_engine.lock);
   if (index < 0 || index >= g_device_total) {
     ca_mutex_unlock(&g_engine.lock);
@@ -231,6 +241,7 @@ CA_API int ca_device_get(int32_t index, ca_device_info *out) {
 
 CA_API int ca_device_get_caps(const char *device_id, int32_t exclusive, ca_device_caps *out) {
   if (!out) return ca__fail(CA_ERR_INVALID_ARG, "ca_device_get_caps: NULL out");
+  ca__platform_thread_init();
   ca_mutex_lock(&g_engine.lock);
   if (g_device_total == 0) refresh_devices_locked();
   ca_known_device *device = find_device_locked(device_id);
@@ -333,8 +344,15 @@ int ca__format_matches_output(const ca_output_format *format) {
   return format->sample_rate == g_engine.out_rate && format->channels == g_engine.out_channels;
 }
 
+/* WASAPI exclusive streams take the device's integer format directly. On
+ * macOS exclusivity is hog mode (ca_hal_coreaudio.c) and the stream stays
+ * float, which CoreAudio converts to the physical format bit-transparently. */
+static int miniaudio_exclusive(void) {
+  return g_engine.policy.exclusive && g_engine.context.backend == ma_backend_wasapi;
+}
+
 static ma_format device_format_for_bits(int bits) {
-  if (!g_engine.policy.exclusive) return ma_format_f32;
+  if (!miniaudio_exclusive()) return ma_format_f32;
   switch (bits) {
     case 16: return ma_format_s16;
     case 24: return ma_format_s24;
@@ -376,7 +394,7 @@ static int open_device_locked(int rate, int channels, int bits) {
   config.playback.pDeviceID = g_engine.follow_default || !device ? NULL : &device->id;
   config.playback.format = device_format_for_bits(bits);
   config.playback.channels = (ma_uint32)(channels > 0 ? channels : 2);
-  config.playback.shareMode = g_engine.policy.exclusive ? ma_share_mode_exclusive : ma_share_mode_shared;
+  config.playback.shareMode = miniaudio_exclusive() ? ma_share_mode_exclusive : ma_share_mode_shared;
   config.sampleRate = (ma_uint32)(rate > 0 ? rate : 0);
   config.dataCallback = data_callback;
   config.notificationCallback = notification_callback;
@@ -390,7 +408,7 @@ static int open_device_locked(int rate, int channels, int bits) {
   config.wasapi.noDefaultQualitySRC = MA_TRUE;
 
   ma_result result = ma_device_init(&g_engine.context, &config, &g_engine.device);
-  if (result != MA_SUCCESS && g_engine.policy.exclusive) {
+  if (result != MA_SUCCESS && miniaudio_exclusive()) {
     /* Exclusive mode refused: fall back to shared output and report it. */
     config.playback.shareMode = ma_share_mode_shared;
     config.playback.format = ma_format_f32;
@@ -449,6 +467,7 @@ static void update_dither_locked(void) {
 }
 
 int ca__engine_apply_format(const ca_output_format *format, int advance_main) {
+  ca__platform_thread_init();
   /* Without a device the test harness renders on its own thread. */
   if (g_engine.flags & CA_INIT_NO_DEVICE) ca_mutex_lock(&g_engine.render_lock);
   hold_players_locked();
@@ -458,7 +477,15 @@ int ca__engine_apply_format(const ca_output_format *format, int advance_main) {
   int channels = format && format->channels > 0 ? format->channels : 2;
   int bits = format ? format->bits : 0;
   ca_known_device *device = (g_engine.flags & CA_INIT_NO_DEVICE) ? NULL : current_device_locked();
-  if (rate > 0 && device) ca__hal_prepare_device(device->info.id, rate, bits, g_engine.policy.exclusive);
+  if (rate > 0 && device) {
+    int prepared = ca__hal_prepare_device(device->info.id, rate, bits, g_engine.policy.exclusive);
+    if (prepared != CA_OK && g_engine.policy.exclusive && !miniaudio_exclusive()) {
+      /* Hog mode refused (another app holds the device): stay shared. */
+      g_engine.policy.exclusive = 0;
+      ca__hal_prepare_device(device->info.id, rate, bits, 0);
+      ca__push_event(CA_EVENT_OUTPUT_CHANGED, 0, 0, NULL, CA_ERR_UNSUPPORTED);
+    }
+  }
 
   int status = open_device_locked(rate, channels, bits);
   if (status != CA_OK && rate > 0) status = open_device_locked(0, channels, 0);
@@ -486,11 +513,15 @@ int ca__engine_apply_format(const ca_output_format *format, int advance_main) {
 
 CA_API int ca_output_open(const char *device_id, const ca_output_policy *policy) {
   if (!g_engine.initialized) return ca__fail(CA_ERR_STATE, "ca_init has not been called");
+  ca__platform_thread_init();
   ca_mutex_lock(&g_engine.lock);
   hold_players_locked();
   stop_device_locked();
   release_players_locked();
   g_engine.device_open = 0;
+  /* Leaving a device: give it back its own rate and format. */
+  ca__hal_release_exclusive();
+  ca__hal_restore_rates();
   if (policy) g_engine.policy = *policy;
   g_engine.follow_default = device_id == NULL;
   ca__copy_string(g_engine.device_id, sizeof g_engine.device_id, device_id ? device_id : "");
@@ -538,6 +569,7 @@ CA_API int ca_output_open(const char *device_id, const ca_output_policy *policy)
 
 CA_API int ca_output_set_policy(const ca_output_policy *policy) {
   if (!policy) return ca__fail(CA_ERR_INVALID_ARG, "ca_output_set_policy: NULL policy");
+  ca__platform_thread_init();
   ca_mutex_lock(&g_engine.lock);
   int was_bit_perfect = g_engine.policy.bit_perfect;
   int exclusive_changed = g_engine.policy.exclusive != policy->exclusive;
@@ -618,6 +650,7 @@ static void handle_pending_switch(void) {
 
 static void control_thread(void *arg) {
   (void)arg;
+  ca__platform_thread_init();
   ca_mutex_lock(&g_engine.lock);
   while (!g_engine.control_quit) {
     ca_cond_timedwait(&g_engine.control_cond, &g_engine.lock, 10);

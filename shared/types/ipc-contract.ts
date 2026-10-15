@@ -665,7 +665,7 @@ export interface AudioOutputDevice {
 
 // Output path for the bit-perfect indicator: what the track is and what the
 // device actually receives. limitedBy is a bit mask, see
-// shared/constants/output.ts.
+// shared/utils/outputPath.ts.
 export interface OutputInfoPayload {
   open: boolean
   deviceName: string

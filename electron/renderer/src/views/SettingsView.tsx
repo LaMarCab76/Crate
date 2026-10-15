@@ -597,6 +597,26 @@ function PlaybackGeneralSection({ tweak, setTweak }: Props) {
               tabIndex={0}
             />
           </div>
+          <div className="set-row">
+            <div>
+              <div className="lbl">Salida bit-perfect</div>
+              <div className="sub">
+                Adapta la frecuencia y la profundidad del dispositivo a cada pista, hasta donde llegue el DAC.
+                {window.api.meta.platform === 'windows'
+                  ? ' En Windows necesita el modo exclusivo.'
+                  : ' Mientras Crate reproduce, el dispositivo cambia de frecuencia para todo el sistema.'}
+              </div>
+            </div>
+            <div
+              className={`toggle ${tweak.bitPerfect ? 'on' : ''}`}
+              onClick={() => setTweak('bitPerfect', !tweak.bitPerfect)}
+              onKeyDown={event => activateSwitchFromKeyboard(event, () => setTweak('bitPerfect', !tweak.bitPerfect))}
+              role="switch"
+              aria-checked={tweak.bitPerfect}
+              aria-label="Salida bit-perfect"
+              tabIndex={0}
+            />
+          </div>
           <LevelerSettings />
         </div>
       </section>

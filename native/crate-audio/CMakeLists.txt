@@ -29,6 +29,7 @@ set(CA_SOURCES
   src/ca_player.c
   src/ca_engine.c
   src/ca_hal_generic.c
+  src/ca_hal_coreaudio.c
   src/ca_miniaudio.c
 )
 
@@ -37,6 +38,9 @@ target_include_directories(crate_audio_objects
   PUBLIC include
   PRIVATE src "${CA_FFMPEG_PREFIX}/include" "${CA_MINIAUDIO_DIR}")
 target_compile_definitions(crate_audio_objects PRIVATE CA_BUILDING_LIBRARY)
+if(APPLE)
+  target_compile_definitions(crate_audio_objects PRIVATE CA_HAL_COREAUDIO)
+endif()
 set_target_properties(crate_audio_objects PROPERTIES C_VISIBILITY_PRESET hidden)
 if(NOT MSVC)
   target_compile_options(crate_audio_objects PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers)
@@ -56,7 +60,7 @@ function(ca_link_dependencies target)
     target_link_libraries(${target} PRIVATE
       "-framework CoreAudio" "-framework AudioToolbox" "-framework AudioUnit" "-framework CoreFoundation")
   elseif(WIN32)
-    target_link_libraries(${target} PRIVATE ole32 uuid -static-libgcc -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic)
+    target_link_libraries(${target} PRIVATE ole32 uuid bcrypt -static-libgcc -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic)
   else()
     target_link_libraries(${target} PRIVATE m dl pthread)
   endif()

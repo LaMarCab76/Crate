@@ -24,6 +24,9 @@ export interface Tweak {
   translucent: boolean
   crossfade: number
   gapless: boolean
+  // Bit-perfect output: the device follows each track's rate and depth, up to
+  // what the DAC supports. Off keeps the device rate and resamples.
+  bitPerfect: boolean
   artistsPrincipalOnly: boolean
   artistsMode: ArtistsMode
   artistsTopN: number
@@ -31,9 +34,9 @@ export interface Tweak {
   libraryBackup: boolean
   libraryScanLogRetentionDays: number | null
   deviceArtworkMaxEdge: number
-  // Bypasses the macOS mixer (CoreAudio hog mode) so audio goes straight to
-  // the output device. Persisted so the toggle restores on relaunch, but
-  // reconciled against the engine's actual state on boot.
+  // Bypasses the system mixer (CoreAudio hog mode on macOS, WASAPI exclusive
+  // on Windows) so audio goes straight to the output device. Persisted so the
+  // toggle restores on relaunch, but reconciled against the engine on boot.
   exclusiveMode: boolean
   playerTintSource: PlayerTintSource
   playerTintColor: string
@@ -69,6 +72,7 @@ const TWEAK_DEFAULTS: Tweak = {
   translucent: true,
   crossfade: 4,
   gapless: true,
+  bitPerfect: true,
   artistsPrincipalOnly: false,
   artistsMode: 'manual',
   artistsTopN: 20,
@@ -283,6 +287,11 @@ export const useTweakStore = create<TweakStore>((set, get) => ({
           // main not ready yet, renderer still blocks local preloads
         })
       }
+      if (k === 'bitPerfect') {
+        void window.api?.audio?.setOutputPolicy({ bitPerfect: value as boolean }).catch(() => {
+          // main not ready yet; pushed again on the next launch
+        })
+      }
       if (String(k).startsWith('lyrics')) {
         void window.api?.settings?.setLyrics(lyricsPrefsFromTweak(next)).catch(() => {
           // main not ready yet, ignore
@@ -305,6 +314,9 @@ if (typeof window !== 'undefined') {
   })
   void window.api?.audio?.setGaplessEnabled(initial.gapless).catch(() => {
     /* main not ready yet, renderer also enforces the preference */
+  })
+  void window.api?.audio?.setOutputPolicy({ bitPerfect: initial.bitPerfect }).catch(() => {
+    /* main not ready yet, ignore */
   })
   // Push lyrics prefs to main on boot so cache/fetch behavior is known.
   // before the user opens Settings.

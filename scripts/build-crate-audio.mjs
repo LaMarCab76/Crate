@@ -18,6 +18,7 @@ import { cpus, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { MINIAUDIO_PATCHES, applyMiniaudioPatches } from '../native/crate-audio/patches/miniaudio.mjs'
 import {
   CRATE_AUDIO_LICENSE_DIR,
   CRATE_AUDIO_LICENSE_FILES,
@@ -119,10 +120,11 @@ async function download(url, expectedSha256, fileName) {
 
 async function prepareSources() {
   const archive = await download(FFMPEG_SOURCE_URL, FFMPEG_SOURCE_SHA256, FFMPEG_SOURCE_NAME)
-  const miniaudioDir = join(CACHE_DIR, `miniaudio-${MINIAUDIO_VERSION}`)
+  const miniaudioDir = join(BUILD_DIR, `miniaudio-${MINIAUDIO_VERSION}`)
   await mkdir(miniaudioDir, { recursive: true })
   const header = await download(MINIAUDIO_HEADER_URL, MINIAUDIO_HEADER_SHA256, `miniaudio-${MINIAUDIO_VERSION}.h`)
-  await copyFile(header, join(miniaudioDir, 'miniaudio.h'))
+  // Patched copy (see native/crate-audio/patches/miniaudio.mjs).
+  await writeFile(join(miniaudioDir, 'miniaudio.h'), applyMiniaudioPatches(await readFile(header, 'utf8')))
 
   const sourceRoot = join(BUILD_DIR, 'src')
   const ffmpegSource = join(sourceRoot, `ffmpeg-${FFMPEG_VERSION}`)
@@ -276,6 +278,7 @@ async function main() {
       version: MINIAUDIO_VERSION,
       url: MINIAUDIO_HEADER_URL,
       sha256: MINIAUDIO_HEADER_SHA256,
+      patches: MINIAUDIO_PATCHES.map(patch => patch.name),
     },
     target: TARGET,
     build: {
