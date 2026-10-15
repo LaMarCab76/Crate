@@ -568,12 +568,12 @@ export type PlaybackStatus = 'stopped' | 'playing' | 'paused' | 'loading'
 export type FftMode = 'off' | 'mini' | 'full' | 'screen'
 
 export interface StreamInfoPayload {
-  freq: number
+  freq: number                 // rate the device plays at (the FFT/visualizer domain)
   chans: number
-  ctype: number
-  duration: number
-  durationBytes: number
-  bytesPerSecond: number
+  codec: string                // FFmpeg codec name, e.g. "flac"
+  duration: number             // seconds
+  sourceRate: number           // the file's own rate (DSD: the 1-bit rate)
+  bitsPerSample: number        // 0 for lossy, 1 for DSD
 }
 
 export type StreamLoadSource = 'memory' | 'progressive' | 'file' | 'none'
@@ -647,7 +647,10 @@ export interface PlaybackStatePayload {
 }
 
 export interface AudioOutputDevice {
-  id: number
+  id: number                   // session-stable number for this device
+  uid?: string                 // CoreAudio UID / WASAPI endpoint id / ALSA or Pulse name
+  maxSampleRate?: number
+  maxBits?: number
   name: string
   driver: string | null
   flags: number
@@ -658,6 +661,35 @@ export interface AudioOutputDevice {
   // and can therefore participate in hog-mode (macOS-only). The renderer uses
   // this to grey out the exclusive-mode toggle for unsupported devices.
   supportsExclusive: boolean
+}
+
+// Output path for the bit-perfect indicator: what the track is and what the
+// device actually receives. limitedBy is a bit mask, see
+// shared/utils/outputPath.ts.
+export interface OutputInfoPayload {
+  open: boolean
+  deviceName: string
+  exclusive: boolean
+  bitPerfectSetting: boolean
+  sourceRate: number | null
+  sourceBits: number | null
+  sourceIsDsd: boolean
+  sourceIsFloat: boolean
+  sourceLossless: boolean
+  sourceChannels: number | null
+  outputRate: number | null
+  outputBits: number | null
+  outputChannels: number | null
+  resampled: boolean
+  dithered: boolean
+  downmixed: boolean
+  limitedBy: number
+  volume: number
+  normalizationGain: number
+}
+
+export interface OutputPolicyPayload {
+  bitPerfect: boolean
 }
 
 export interface ExclusiveModeState {
@@ -764,6 +796,8 @@ export interface AudioApi {
   getOutputDevice(): Promise<AudioOutputDevice | null>
   getExclusiveMode(): Promise<ExclusiveModeState>
   setExclusiveMode(enabled: boolean): Promise<ExclusiveModeState>
+  getOutputInfo(): Promise<OutputInfoPayload>
+  setOutputPolicy(policy: OutputPolicyPayload): Promise<OutputInfoPayload>
 
   onProgress(h: (e: ProgressEvent) => void): EventOff
   onTrackEnded(h: () => void): EventOff
@@ -775,6 +809,8 @@ export interface AudioApi {
   onLevels(h: (e: LevelsEvent) => void): EventOff
   onExclusiveModeChanged(h: (e: ExclusiveModeState) => void): EventOff
   onPlaybackCacheChanged(h: (e: PlaybackCacheStats) => void): EventOff
+  onOutputChanged(h: (e: OutputInfoPayload) => void): EventOff
+  onDevicesChanged(h: () => void): EventOff
 }
 
 export interface EqApi {

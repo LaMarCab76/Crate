@@ -130,7 +130,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: native/libs
-          key: native-libs-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-bass.mjs', 'scripts/verify-bass.mjs', 'scripts/fetch-chromaprint.mjs', 'scripts/verify-chromaprint.mjs', 'scripts/chromaprint-config.mjs') }}
+          key: native-libs-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-crate-audio.mjs', 'scripts/verify-crate-audio.mjs', 'scripts/crate-audio-config.mjs', 'scripts/fetch-chromaprint.mjs', 'scripts/verify-chromaprint.mjs', 'scripts/chromaprint-config.mjs') }}
 
       - name: Fetch native audio libraries
         env:

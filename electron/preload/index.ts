@@ -10,6 +10,7 @@ import type {
   EqState,
   EventOff,
   ExclusiveModeState,
+  OutputInfoPayload,
   FftEvent,
   FftMode,
   LevelerConfig,
@@ -276,6 +277,10 @@ const api: Api = {
     onLevels: (h) => subscribe<LevelsEvent>('audio:levels', h),
     onExclusiveModeChanged: (h) => subscribe<ExclusiveModeState>('audio:exclusive-changed', h),
     onPlaybackCacheChanged: (h) => subscribe<PlaybackCacheStats>('audio:playback-cache-changed', h),
+    getOutputInfo: () => ipcRenderer.invoke('audio:output:get') as Promise<OutputInfoPayload>,
+    setOutputPolicy: (policy) => ipcRenderer.invoke('audio:output:setPolicy', policy) as Promise<OutputInfoPayload>,
+    onOutputChanged: (h) => subscribe<OutputInfoPayload>('audio:output-changed', h),
+    onDevicesChanged: (h) => subscribe<void>('audio:devices-changed', () => h()),
   },
   eq: {
     getState: () => ipcRenderer.invoke('eq:getState') as Promise<EqState>,

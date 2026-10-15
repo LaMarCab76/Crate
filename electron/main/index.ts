@@ -269,9 +269,8 @@ async function shutdownApplication(exitCode: number): Promise<void> {
   try { getLyricsBackfillService().stop() } catch { /* service may not have initialized */ }
   try { getLibraryReconciler().dispose() } catch { /* reconciler may not have initialized */ }
   try { getDeviceSyncService().stopVolumeMonitor() } catch { /* service may not have initialized */ }
-  // Release CoreAudio hog BEFORE freeing BASS — if we leave the device
-  // hog-locked the OS keeps it claimed for this process and no other app
-  // can play sound until reboot.
+  // The engine releases exclusive access and restores the device's own rate
+  // when it closes the output; never leave a device hog-locked on exit.
   try { getExclusiveModeManager().dispose() } catch { /* manager may not have initialized */ }
   try { disposeGapless() } catch { /* gapless may not have initialized */ }
   try { getAudioEngine().dispose() } catch { /* engine may not have initialized */ }

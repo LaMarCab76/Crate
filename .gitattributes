@@ -1,3 +1,6 @@
 native/libs/licenses/chromaprint/*.md text eol=lf
 native/libs/licenses/chromaprint/*.txt text eol=lf
 native/libs/licenses/chromaprint/*.tar.gz -text
+native/libs/licenses/crate-audio/*.md text eol=lf
+native/libs/licenses/crate-audio/*.txt text eol=lf
+native/libs/licenses/crate-audio/*.tar.xz -text

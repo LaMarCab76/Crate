@@ -597,6 +597,28 @@ function PlaybackGeneralSection({ tweak, setTweak }: Props) {
               tabIndex={0}
             />
           </div>
+          <div className="set-row">
+            <div>
+              <div className="lbl">Salida bit-perfect</div>
+              <div className="sub">
+                Adapta la frecuencia y la profundidad del dispositivo a cada pista. Solo es bit-perfect si el DAC
+                recibe exactamente el formato del archivo; si no lo admite, se usa el más cercano y el indicador de
+                salida lo avisa.
+                {window.api.meta.platform === 'windows'
+                  ? ' En Windows necesita el modo exclusivo.'
+                  : ' Mientras Crate reproduce, el dispositivo cambia de frecuencia para todo el sistema.'}
+              </div>
+            </div>
+            <div
+              className={`toggle ${tweak.bitPerfect ? 'on' : ''}`}
+              onClick={() => setTweak('bitPerfect', !tweak.bitPerfect)}
+              onKeyDown={event => activateSwitchFromKeyboard(event, () => setTweak('bitPerfect', !tweak.bitPerfect))}
+              role="switch"
+              aria-checked={tweak.bitPerfect}
+              aria-label="Salida bit-perfect"
+              tabIndex={0}
+            />
+          </div>
           <LevelerSettings />
         </div>
       </section>
@@ -1603,7 +1625,7 @@ function EqPanel() {
         <div className="set-row">
           <div>
             <div className="lbl">Enable equalizer</div>
-            <div className="sub">{bandCount}-band peaking EQ applied to the BASS playback chain.</div>
+            <div className="sub">{bandCount}-band peaking EQ applied by the audio engine.</div>
           </div>
           <div
             className={`toggle ${enabled ? 'on' : ''}`}

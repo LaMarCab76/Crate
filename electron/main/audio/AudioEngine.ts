@@ -1,40 +1,53 @@
-// AudioEngine — single-track playback wrapper on top of the BASS FFI bindings.
-// The renderer drives it via IPC; gapless + queue handling live in higher-level
-// modules (GaplessController, queueStore).
+// AudioEngine — the main deck on top of libcrate_audio (FFmpeg + miniaudio).
+// The renderer drives it via IPC; GaplessController decides what to preload.
 //
 // Design choices:
-//   - All BASS calls are confined to the Electron main process main thread.
-//   - Playback streams prefer a full in-memory copy of the source file. Disk
-//     streaming remains a fallback when the RAM budget says no.
-//   - The current stream handle is owned by this class. Gapless preloading
-//     hands an additional in-memory stream over via adoptStream().
+//   - The native engine owns real-time work: decoding threads, the device
+//     callback, gapless hand-overs (sample-accurate) and output format changes
+//     (bit-perfect). This class only commands it and reacts to its events,
+//     polled on a timer — there are no native-to-JS callbacks.
+//   - Playback sources prefer a full in-memory copy of the file. Disk
+//     streaming remains a fallback when the RAM budget says no, and a later
+//     promotion swaps in the RAM copy without an audible change.
+//   - Decoders handed to the native player stay owned here and are closed
+//     once the player gives them back (synchronously, or through a
+//     DECODER_RETIRED event after a gapless transition).
 
 import { broadcast } from '../ipc/events'
 import { execFileSync } from 'node:child_process'
 import { open, stat } from 'node:fs/promises'
-import { statSync } from 'node:fs'
 import { freemem, platform, totalmem } from 'node:os'
 import {
-  BASS_ACTIVE_PAUSED, BASS_ACTIVE_PLAYING, BASS_ACTIVE_STOPPED,
-  BASS_ATTRIB_VOL, BASS_DATA_FFT2048, BASS_DEVICE_DEFAULT, BASS_DEVICE_ENABLED,
-  BASS_DEVICE_INIT, BASS_DEVICE_LOOPBACK, BASS_FILE_MEM, BASS_FILE_NAME,
-  BASS_LEVEL_RMS, BASS_LEVEL_STEREO, BASS_POS_BYTE, BASS_SAMPLE_FLOAT,
-  BASS_STREAM_DECODE, BASS_STREAM_PRESCAN,
-  bassErrorName,
-} from './bass-constants'
-import {
-  loadBass,
-  makeChannelGetInfo,
-  type BassChannelInfo,
-  type BassDeviceInfo,
-  type HSTREAM,
-} from './bass-ffi'
-import { loadAllPlugins } from './PluginLoader'
+  CA_INIT_NULL_BACKEND,
+  CA_EVENT_DECODE_ERROR,
+  CA_EVENT_DECODER_RETIRED,
+  CA_EVENT_DEVICE_LOST,
+  CA_EVENT_DEVICE_REROUTED,
+  CA_EVENT_OUTPUT_CHANGED,
+  CA_EVENT_TRACK_ENDED,
+  CA_EVENT_TRACK_STARTED,
+  CA_PLAYER_PAUSED,
+  CA_PLAYER_PLAYING,
+  Decoder,
+  NativePlayer,
+  closeOutput,
+  getOutputInfo,
+  initEngine,
+  listNativeDevices,
+  openOutput,
+  pollEvents,
+  setOutputPolicy as setNativeOutputPolicy,
+  shutdownEngine,
+  type CaStreamInfo,
+  type NativeDeviceInfo,
+  type NativeOutputInfo,
+  type NativeOutputPolicy,
+} from './native/crateAudio'
+import { FFT_BINS_OUT, toDisplayBins } from './spectrumBins'
 import type {
   AudioOutputDevice,
   FftMode,
-  PlaybackAnalysisResult,
-  PlaybackTableBarsResult,
+  OutputInfoPayload,
   StreamLoadSource,
   StreamLoadFailureReason,
 } from '@shared/types/ipc-contract'
@@ -60,41 +73,20 @@ export interface CloudTrackRef {
   itemId: string
 }
 
-// FFT2048 returns 1024 complex bins as magnitudes (0..1).
-const FFT_BINS_RAW = 1024
-const FFT_BINS_OUT = 64
-// Pre-computed log-spaced indices into the raw FFT array.
-// Skewed so low frequencies get more visual real estate (bass is where most
-// energy lives). Computed as floor(pow(1023, i / (n-1))).
-const FFT_LOG_INDEX: number[] = Array.from({ length: FFT_BINS_OUT }, (_, i) => {
-  const ratio = i / (FFT_BINS_OUT - 1)
-  return Math.max(1, Math.min(FFT_BINS_RAW - 1, Math.floor(Math.pow(FFT_BINS_RAW - 1, ratio))))
-})
 const FFT_INTERVAL_MS: Record<Exclude<FftMode, 'off' | 'screen'>, number> = {
   mini: 90,
   full: 33,
 }
 const MAX_SCREEN_FFT_HZ = 60
 const DEFAULT_SCREEN_FFT_INTERVAL_MS = Math.round(1000 / MAX_SCREEN_FFT_HZ)
-const DEFAULT_OUTPUT_FREQ = 48000
-const DEFAULT_OUTPUT_FLAGS = 0
 
 // Level metering (VU): independent of FFT so the meters keep working even when
 // no spectrum visualizer is mounted. ~30 Hz matches the 'full' FFT cadence.
 const METER_INTERVAL_MS = 33
-// How much audio ChannelGetLevelEx averages per measurement, in seconds.
+// How much audio the meters average per measurement, in seconds.
 const METER_WINDOW_SEC = 0.035
-
-// Waveform extraction: decode the whole file once and downsample to this many
-// max-abs buckets. Reads run in float chunks with event-loop yields so a long
-// FLAC doesn't block playback. Results are cached per file fingerprint
-// (bounded LRU-ish) as a short-lived layer over the persistent DB cache.
-const WAVEFORM_DEFAULT_BUCKETS = 1200
-const WAVEFORM_READ_FLOATS = 65536
-const ANALYSIS_CACHE_MAX = 50
-const TABLE_BARS_FPS = 60
-const TABLE_BARS_BANDS = 5
-const TABLE_BARS_DISPLAY_GAIN = 2.8
+// Native events (track changes, device changes) are polled at this cadence.
+const EVENT_POLL_MS = 25
 
 interface PlaybackMemorySnapshot {
   freeMemBytes: number
@@ -148,16 +140,16 @@ function completeBufferTelemetry(sizeBytes: number | null, durationSec: number |
 export type PlaybackStatus = 'stopped' | 'playing' | 'paused' | 'loading'
 
 export interface StreamInfo {
-  freq: number          // sample rate in Hz
+  freq: number          // rate the device plays at (the FFT/visualizer domain)
   chans: number
-  ctype: number         // BASS stream type (codec id)
+  codec: string
   duration: number      // seconds
-  durationBytes: bigint
-  bytesPerSecond: number
+  sourceRate: number    // the file's own rate (DSD: the 1-bit rate)
+  bitsPerSample: number // 0 for lossy, 1 for DSD
 }
 
-interface CreatedStream {
-  handle: HSTREAM
+export interface CreatedStream {
+  decoder: Decoder
   info: StreamInfo
   memoryBuffer: Buffer | null
 }
@@ -180,22 +172,6 @@ interface StreamLoadTelemetry {
   durationMs: number
   attemptedMemory: boolean
   buffer: ProgressiveBufferTelemetry
-}
-
-interface AdoptStreamOptions {
-  shouldPlay?: boolean
-  startPositionSec?: number
-  restoreStatus?: PlaybackStatus
-  // Optional source metadata when this stream was created as part of a known
-  // load attempt (e.g. memory promotion).
-  sourceResult?: {
-    source: StreamLoadSource
-    reason: StreamLoadFailureReason | null
-    sizeBytes: number | null
-    durationMs: number
-    attemptedMemory: boolean
-    buffer?: ProgressiveBufferTelemetry
-  }
 }
 
 export interface StreamLoadResult {
@@ -235,31 +211,52 @@ interface CreateStreamOptions {
   cloudSizeBytes?: number | null
 }
 
+/** A track handed to the native player. */
+interface DeckItem {
+  serial: number
+  path: string
+  decoder: Decoder
+  info: StreamInfo
+  memoryBuffer: Buffer | null
+  telemetry: StreamLoadTelemetry
+}
+
+/** Hooks GaplessController installs to follow native hand-overs. */
+export interface GaplessHooks {
+  /** A queued track became audible on its own (end of the previous one). */
+  onNaturalAdvance(path: string, result: StreamLoadResult): void
+  /** The current track ended with nothing queued. */
+  onTrackEnded(): void
+}
+
 let engine: AudioEngine | null = null
 
 export class AudioEngine {
   private initialized = false
-  private currentStream: HSTREAM = 0
-  private currentPath: string | null = null
-  private streamInfo: StreamInfo | null = null
+  private player: NativePlayer | null = null
+  private outputReady: Promise<void> = Promise.resolve()
+  private outputPolicy: NativeOutputPolicy = { exclusive: false, bitPerfect: true }
+  private outputDeviceId: string | null = null   // null = follow the system default
+  private current: DeckItem | null = null
+  private next: DeckItem | null = null
+  // Decoders the player may still read; closed when it hands them back.
+  private retiring = new Map<bigint, Decoder>()
+  private serialCounter = 0
   private volume = 1.0
-  // Per-track loudness-normalization multiplier (volume leveler). Combined with
-  // `volume` to produce the channel's BASS_ATTRIB_VOL. 1.0 = no change.
+  // Per-track loudness-normalization multiplier (volume leveler). 1.0 = no change.
   private normalizationGain = 1.0
   private status: PlaybackStatus = 'stopped'
   private progressTimer: NodeJS.Timeout | null = null
+  private eventTimer: NodeJS.Timeout | null = null
   private frameTimer: NodeJS.Timeout | null = null
   private frameTickMs = 0
   private fftMode: FftMode = 'off'
   private fftIntervalMs = 0
   private screenFftIntervalMs = DEFAULT_SCREEN_FFT_INTERVAL_MS
-  private fftBuffer: Float32Array = new Float32Array(FFT_BINS_RAW)
   private fftOut: number[] = new Array(FFT_BINS_OUT).fill(0)
   private lastFftAt = 0
   private lastMeterAt = 0
   private meterEnabled = false
-  private levelBuf: Float32Array = new Float32Array(2)
-  private currentMemoryBuffer: Buffer | null = null
   private currentStreamSource: StreamLoadSource = 'none'
   private currentStreamLoadResult: StreamLoadTelemetry = {
     source: 'none',
@@ -269,20 +266,33 @@ export class AudioEngine {
     attemptedMemory: false,
     buffer: noBufferTelemetry(),
   }
-  private analysisCache = new Map<string, PlaybackAnalysisResult>()
-  private tableBarsCache = new Map<string, PlaybackTableBarsResult>()
-  private getInfo: ReturnType<typeof makeChannelGetInfo> | null = null
-  // Optional listener invoked after setOutputDevice succeeds. Used by
-  // ExclusiveModeManager to transfer hog ownership across device switches
-  // without coupling the manager into the engine directly.
-  private onDeviceChanged: ((bassDeviceId: number) => void) | null = null
+  private deviceNumbers = new Map<string, number>()
+  private nextDeviceNumber = 1
+  private onDeviceChanged: ((deviceId: number) => void) | null = null
+  private gaplessHooks: GaplessHooks | null = null
+  private eqApplier: ((player: NativePlayer) => void) | null = null
   private memoryPromotionAbort: AbortController | null = null
   private memoryPromotionToken = 0
   private loadGeneration = 0
   private loadTail: Promise<void> = Promise.resolve()
 
-  setOnDeviceChanged(cb: ((bassDeviceId: number) => void) | null): void {
+  setOnDeviceChanged(cb: ((deviceId: number) => void) | null): void {
     this.onDeviceChanged = cb
+  }
+
+  setGaplessHooks(hooks: GaplessHooks | null): void {
+    this.gaplessHooks = hooks
+  }
+
+  /** EQManager installs this to push its state into the native player. */
+  setEqApplier(apply: ((player: NativePlayer) => void) | null): void {
+    this.eqApplier = apply
+    if (apply && this.player) apply(this.player)
+  }
+
+  /** The main native player, for EQ updates. Null until the engine starts. */
+  getPlayer(): NativePlayer | null {
+    return this.player
   }
 
   private cancelMemoryPromotion(): void {
@@ -295,38 +305,95 @@ export class AudioEngine {
 
   ensureInit(): void {
     if (this.initialized) return
-    const bass = loadBass()
-    // device=-1 lets BASS pick the default output, freq=44100 is a sane
-    // default — BASS will resample our streams as needed. flags=0 keeps the
-    // BASSFLOAT/sample-rate-sync features off for now.
-    const ok = bass.Init(-1, DEFAULT_OUTPUT_FREQ, DEFAULT_OUTPUT_FLAGS, 0n, 0n)
-    if (!ok) {
-      const code = bass.ErrorGetCode()
-      throw new Error(`BASS_Init failed: ${bassErrorName(code)} (${code})`)
-    }
-    const result = loadAllPlugins()
-    if (result.skipped.length > 0) {
-      console.warn('[audio] skipped plugins:', result.skipped.map(s => `${s.name}(${s.reason})`).join(', '))
-    }
-    console.log(`[audio] BASS initialized, ${result.loaded.length} plugins loaded`)
-    this.getInfo = makeChannelGetInfo()
+    // Automated smoke tests route audio to miniaudio's silent null device.
+    initEngine(process.env.CRATE_AUDIO_NULL_OUTPUT === '1' ? CA_INIT_NULL_BACKEND : 0)
+    this.player = new NativePlayer(true)
+    this.player.setVolume(this.volume)
     this.initialized = true
+    this.eqApplier?.(this.player)
+    this.outputReady = this.openOutputDevice().catch(err => {
+      console.error('[audio] could not open the audio output:', err instanceof Error ? err.message : err)
+    })
+    this.eventTimer = setInterval(() => this.handleEvents(), EVENT_POLL_MS)
+    this.eventTimer.unref?.()
+    console.log('[audio] crate-audio engine initialized')
   }
 
-  // Free the current stream (if any) and clear cached info.
-  private freeCurrent(): void {
-    this.cancelMemoryPromotion()
-    if (this.currentStream !== 0) {
-      this.freeStream(this.currentStream)
-      this.currentStream = 0
+  private async openOutputDevice(): Promise<void> {
+    await openOutput(this.outputDeviceId, this.outputPolicy)
+    this.broadcastOutputInfo()
+  }
+
+  private get deck(): NativePlayer {
+    this.ensureInit()
+    return this.player!
+  }
+
+  private nextSerial(): number {
+    this.serialCounter += 1
+    return this.serialCounter
+  }
+
+  // ------------------------------------------------------------ helpers
+
+  private closeDecoder(decoder: Decoder | null | undefined): void {
+    if (!decoder) return
+    if (!decoder.closed) this.retiring.delete(decoder.nativeHandle)
+    decoder.close()
+  }
+
+  /** Keeps a decoder alive until the native player retires it. */
+  private retireLater(item: DeckItem | null): void {
+    if (!item || item.decoder.closed) return
+    this.retiring.set(item.decoder.nativeHandle, item.decoder)
+  }
+
+  private toStreamInfo(info: CaStreamInfo): StreamInfo {
+    const output = this.player ? getOutputInfo() : null
+    return {
+      freq: output?.open && output.sampleRate > 0 ? output.sampleRate : info.sampleRate,
+      chans: info.channels,
+      codec: info.codec,
+      duration: info.duration > 0 ? info.duration : 0,
+      sourceRate: info.sourceSampleRate,
+      bitsPerSample: info.bitsPerSample,
     }
-    this.currentPath = null
-    this.streamInfo = null
-    this.currentStreamSource = 'none'
-    this.resetCurrentStreamLoadResult()
-    this.currentMemoryBuffer = null
-    this.stopProgressTimer()
-    this.setStatus('stopped')
+  }
+
+  private refreshStreamInfo(item: DeckItem | null): void {
+    if (item && !item.decoder.closed) item.info = this.toStreamInfo(item.decoder.info)
+  }
+
+  private telemetryFrom(result: StreamCreateResult, source: StreamLoadSource): StreamLoadTelemetry {
+    return {
+      source,
+      reason: null,
+      sizeBytes: result.sizeBytes,
+      durationMs: result.durationMs,
+      attemptedMemory: result.attemptedMemory,
+      buffer: result.buffer,
+    }
+  }
+
+  private resultFor(item: DeckItem | null, telemetry: StreamLoadTelemetry): StreamLoadResult {
+    return {
+      source: telemetry.source,
+      reason: telemetry.reason,
+      sizeBytes: telemetry.sizeBytes,
+      durationMs: telemetry.durationMs,
+      attemptedMemory: telemetry.attemptedMemory,
+      streamInfo: item?.info ?? null,
+      bufferedBytes: telemetry.buffer.bufferedBytes,
+      totalBytes: telemetry.buffer.totalBytes,
+      bufferedSec: telemetry.buffer.bufferedSec,
+      bufferComplete: telemetry.buffer.bufferComplete,
+    }
+  }
+
+  private updateCurrentStreamSource(nextSource: StreamLoadSource): void {
+    const path = this.current?.path ?? null
+    this.currentStreamSource = nextSource
+    broadcast('audio:stream-source-changed', { source: this.currentStreamSource, currentPath: path })
   }
 
   private resetCurrentStreamLoadResult(): void {
@@ -340,29 +407,7 @@ export class AudioEngine {
     }
   }
 
-  private updateCurrentStreamSource(nextSource: StreamLoadSource): void {
-    const path = this.currentPath
-    this.currentStreamSource = nextSource
-    broadcast('audio:stream-source-changed', { source: this.currentStreamSource, currentPath: path })
-  }
-
-  private setCurrentStreamLoadResult(sourceResult: {
-    source: StreamLoadSource
-    reason: StreamLoadFailureReason | null
-    sizeBytes: number | null
-    durationMs: number
-    attemptedMemory: boolean
-    buffer?: ProgressiveBufferTelemetry
-  }): void {
-    this.currentStreamLoadResult = {
-      source: sourceResult.source,
-      reason: sourceResult.reason,
-      sizeBytes: sourceResult.sizeBytes,
-      durationMs: sourceResult.durationMs,
-      attemptedMemory: sourceResult.attemptedMemory,
-      buffer: sourceResult.buffer ?? noBufferTelemetry(),
-    }
-  }
+  // ------------------------------------------------------------- loading
 
   async load(path: string, options: LoadOptions = {}): Promise<StreamLoadResult> {
     const generation = ++this.loadGeneration
@@ -394,63 +439,70 @@ export class AudioEngine {
     })
 
     if (generation !== this.loadGeneration) {
-      if (createdResult.stream) this.freeStream(createdResult.stream.handle)
+      this.closeDecoder(createdResult.stream?.decoder)
       this.setStatus(previousStatus)
       throw new Error(`Audio load superseded while opening ${path}`)
     }
 
     if (!createdResult.stream) {
-      // The old stream remains owned by the engine until a replacement has
-      // been created successfully. A corrupt/missing next track must not stop
-      // audio that is already playing.
+      // The old track keeps playing until a replacement exists: a corrupt or
+      // missing next track must not stop audio that is already playing.
       this.setStatus(previousStatus)
       throw new Error(`Failed to load ${path}: ${createdResult.reason ?? 'unknown reason'}`)
     }
+
+    await this.outputReady
     const created = createdResult.stream
-    const { handle, info } = created
-    const old = this.releaseCurrent()
-    if (old.handle !== 0) this.freeStream(old.handle)
+    const source = createdResult.source === 'none' ? 'file' : createdResult.source
+    const item: DeckItem = {
+      serial: this.nextSerial(),
+      path,
+      decoder: created.decoder,
+      info: created.info,
+      memoryBuffer: created.memoryBuffer,
+      telemetry: this.telemetryFrom(createdResult, source),
+    }
 
-    this.currentStream = handle
-    this.currentPath = path
-    this.currentMemoryBuffer = created.memoryBuffer
-    this.currentStreamSource = createdResult.source
-    this.setCurrentStreamLoadResult({
-      source: this.currentStreamSource,
-      reason: null,
-      sizeBytes: createdResult.sizeBytes,
-      durationMs: createdResult.durationMs,
-      attemptedMemory: createdResult.attemptedMemory,
-      buffer: createdResult.buffer,
-    })
-
-    // Apply current volume (× leveler gain) to the freshly created stream.
-    this.applyChannelVolume(handle)
+    // Like BASS, a freshly loaded track waits for play().
+    this.deck.pause()
+    const replaced = [this.current, this.next]
+    try {
+      await this.deck.setSource(item.decoder, this.normalizationGain, item.serial)
+    } catch (error) {
+      this.closeDecoder(item.decoder)
+      this.setStatus(previousStatus)
+      throw error
+    }
+    for (const old of replaced) this.closeDecoder(old?.decoder)
+    this.current = item
+    this.next = null
+    this.refreshStreamInfo(item)
+    this.currentStreamSource = source
+    this.currentStreamLoadResult = { ...item.telemetry }
     this.updateCurrentStreamSource(this.currentStreamSource)
-
-    this.streamInfo = info
     this.setStatus('paused')
+    this.stopProgressTimer()
+    this.broadcastOutputInfo()
     return this.getCurrentStreamLoadResult()
   }
 
   async promoteCurrentToMemory(options: PromoteCurrentToMemoryOptions = {}): Promise<StreamLoadResult> {
     this.ensureInit()
-    if (this.currentStream === 0 || !this.currentPath || !this.streamInfo) {
-      return this.getCurrentStreamLoadResult()
-    }
+    const current = this.current
+    if (!current) return this.getCurrentStreamLoadResult()
     if (this.currentStreamSource !== 'file') return this.getCurrentStreamLoadResult()
-    if (options.expectedPath && options.expectedPath !== this.currentPath) return this.getCurrentStreamLoadResult()
+    if (options.expectedPath && options.expectedPath !== current.path) return this.getCurrentStreamLoadResult()
 
-    const targetPath = this.currentPath
+    const targetPath = current.path
     const controller = new AbortController()
     this.cancelMemoryPromotion()
     const promotionToken = ++this.memoryPromotionToken
     this.memoryPromotionAbort = controller
 
-    const createResult = await this.createStream(this.currentPath, {
+    const createResult = await this.createStream(targetPath, {
       memoryOnly: true,
       memoryReadTimeoutMs: options.memoryReadTimeoutMs ?? BACKGROUND_MEMORY_PROMOTION_TIMEOUT_MS,
-      estimatedDurationSec: options.estimatedDurationSec ?? this.streamInfo.duration,
+      estimatedDurationSec: options.estimatedDurationSec ?? current.info.duration,
       abortSignal: controller.signal,
       onBufferProgress: buffer => {
         broadcast('audio:buffer-progress', {
@@ -467,25 +519,21 @@ export class AudioEngine {
 
     if (this.memoryPromotionAbort === controller) this.memoryPromotionAbort = null
 
-    if (
-      controller.signal.aborted ||
-      promotionToken !== this.memoryPromotionToken ||
-      this.currentPath !== targetPath ||
-      this.currentStreamSource !== 'file'
-    ) {
-      if (createResult.stream) this.freeStream(createResult.stream.handle)
+    const stillCurrent = this.current === current && this.currentStreamSource === 'file'
+    if (controller.signal.aborted || promotionToken !== this.memoryPromotionToken || !stillCurrent) {
+      this.closeDecoder(createResult.stream?.decoder)
       return this.getCurrentStreamLoadResult()
     }
 
     if (!createResult.stream || createResult.source !== 'memory') {
-      this.setCurrentStreamLoadResult({
+      this.currentStreamLoadResult = {
         source: this.currentStreamSource,
         reason: createResult.reason,
         sizeBytes: createResult.sizeBytes,
         durationMs: createResult.durationMs,
         attemptedMemory: createResult.attemptedMemory,
         buffer: createResult.buffer,
-      })
+      }
       broadcast('audio:buffer-progress', {
         currentPath: targetPath,
         source: this.currentStreamSource,
@@ -498,143 +546,243 @@ export class AudioEngine {
       return this.getCurrentStreamLoadResult()
     }
 
-    const currentPosition = this.getPosition()
-    const restoreStatus = this.getStatus()
-    const shouldPlay = restoreStatus === 'playing'
-    const old = this.releaseCurrent()
-    if (old.handle !== 0) this.freeStream(old.handle)
-    this.adoptStream(createResult.stream.handle, targetPath, createResult.stream.memoryBuffer, {
-      startPositionSec: currentPosition,
-      shouldPlay,
-      restoreStatus,
-      sourceResult: {
-        source: 'memory',
-        reason: null,
-        sizeBytes: createResult.sizeBytes,
-        durationMs: createResult.durationMs,
-        attemptedMemory: true,
-        buffer: createResult.buffer,
-      },
-    })
+    // The player continues from the RAM copy at the exact sample where the
+    // file decoder stopped: no seek, no gap.
+    const replaced = await this.deck.replaceSource(createResult.stream.decoder, current.serial)
+    if (!replaced || this.current !== current) {
+      this.closeDecoder(createResult.stream.decoder)
+      return this.getCurrentStreamLoadResult()
+    }
+    this.closeDecoder(current.decoder)
+    current.decoder = createResult.stream.decoder
+    current.memoryBuffer = createResult.stream.memoryBuffer
+    current.telemetry = {
+      source: 'memory',
+      reason: null,
+      sizeBytes: createResult.sizeBytes,
+      durationMs: createResult.durationMs,
+      attemptedMemory: true,
+      buffer: createResult.buffer,
+    }
+    this.currentStreamLoadResult = { ...current.telemetry }
     this.updateCurrentStreamSource('memory')
     return this.getCurrentStreamLoadResult()
   }
 
   getCurrentStreamSource(): StreamLoadSource { return this.currentStreamSource }
   getCurrentStreamLoadResult(): StreamLoadResult {
-    return {
-      source: this.currentStreamLoadResult.source,
-      reason: this.currentStreamLoadResult.reason,
-      sizeBytes: this.currentStreamLoadResult.sizeBytes,
-      durationMs: this.currentStreamLoadResult.durationMs,
-      attemptedMemory: this.currentStreamLoadResult.attemptedMemory,
-      streamInfo: this.streamInfo,
-      bufferedBytes: this.currentStreamLoadResult.buffer.bufferedBytes,
-      totalBytes: this.currentStreamLoadResult.buffer.totalBytes,
-      bufferedSec: this.currentStreamLoadResult.buffer.bufferedSec,
-      bufferComplete: this.currentStreamLoadResult.buffer.bufferComplete,
+    return this.resultFor(this.current, this.currentStreamLoadResult)
+  }
+
+  // --------------------------------------------------------- gapless queue
+
+  /** Queues a created stream right after the current track (gapless). */
+  async queueNext(path: string, created: StreamCreateResult, gain: number): Promise<StreamLoadResult | null> {
+    if (!created.stream) return null
+    await this.outputReady
+    if (!this.current) {
+      this.closeDecoder(created.stream.decoder)
+      return null
+    }
+    const source = created.source === 'none' ? 'file' : created.source
+    const item: DeckItem = {
+      serial: this.nextSerial(),
+      path,
+      decoder: created.stream.decoder,
+      info: created.stream.info,
+      memoryBuffer: created.stream.memoryBuffer,
+      telemetry: this.telemetryFrom(created, source),
+    }
+    const previous = this.next
+    try {
+      await this.deck.queueNext(item.decoder, gain, item.serial)
+    } catch (error) {
+      this.closeDecoder(item.decoder)
+      throw error
+    }
+    this.closeDecoder(previous?.decoder)
+    this.next = item
+    this.refreshStreamInfo(item)
+    return this.resultFor(item, item.telemetry)
+  }
+
+  getNextPath(): string | null { return this.next?.path ?? null }
+  hasNext(): boolean { return this.next !== null }
+  getNextResult(): StreamLoadResult | null {
+    return this.next ? this.resultFor(this.next, this.next.telemetry) : null
+  }
+
+  clearNext(): void {
+    if (!this.next) return
+    const next = this.next
+    this.next = null
+    if (this.player) this.player.clearNext()
+    this.closeDecoder(next.decoder)
+  }
+
+  /** Starts the queued track now (manual "next"). */
+  async skipToNext(expectedPath?: string | null): Promise<StreamLoadResult | null> {
+    const next = this.next
+    if (!next || (expectedPath && next.path !== expectedPath)) return null
+    const ok = await this.deck.skipToNext(next.serial)
+    if (!ok) return null
+    if (this.next === next) {
+      // Not already followed through a natural transition event.
+      const previous = this.current
+      this.adoptNext()
+      this.closeDecoder(previous?.decoder)
+    }
+    this.deck.play()
+    this.setStatus('playing')
+    this.startProgressTimer()
+    return this.getCurrentStreamLoadResult()
+  }
+
+  private adoptNext(): void {
+    const next = this.next
+    if (!next) return
+    this.current = next
+    this.next = null
+    this.refreshStreamInfo(next)
+    this.currentStreamSource = next.telemetry.source
+    this.currentStreamLoadResult = { ...next.telemetry }
+    this.updateCurrentStreamSource(this.currentStreamSource)
+  }
+
+  // ------------------------------------------------------------ events
+
+  private handleEvents(): void {
+    if (!this.player) return
+    let events
+    try {
+      events = pollEvents()
+    } catch {
+      return
+    }
+    for (const event of events) {
+      switch (event.type) {
+        case CA_EVENT_TRACK_STARTED:
+          if (event.playerId === this.player.id && this.next && event.serial === this.next.serial) {
+            // The sample-accurate hand-over already happened natively; follow it.
+            this.retireLater(this.current)
+            this.adoptNext()
+            const current = this.current!
+            broadcast('audio:gapless-fired', {
+              path: current.path,
+              streamInfo: current.info,
+              source: this.currentStreamSource,
+            })
+            this.gaplessHooks?.onNaturalAdvance(current.path, this.getCurrentStreamLoadResult())
+            this.broadcastOutputInfo()
+          }
+          break
+        case CA_EVENT_TRACK_ENDED:
+          if (event.playerId === this.player.id && this.current && event.serial === this.current.serial) {
+            this.setStatus('stopped')
+            this.stopProgressTimer()
+            this.emitProgress()
+            this.gaplessHooks?.onTrackEnded()
+            broadcast('audio:track-ended')
+          }
+          break
+        case CA_EVENT_DECODER_RETIRED: {
+          const decoder = this.retiring.get(event.decoder)
+          if (decoder) {
+            this.retiring.delete(event.decoder)
+            decoder.close()
+          }
+          break
+        }
+        case CA_EVENT_OUTPUT_CHANGED:
+          this.refreshStreamInfo(this.current)
+          this.refreshStreamInfo(this.next)
+          this.broadcastOutputInfo()
+          break
+        case CA_EVENT_DEVICE_LOST:
+          this.handleDeviceLost()
+          break
+        case CA_EVENT_DEVICE_REROUTED:
+          // The system default changed: reopen so the format matches the new device.
+          if (this.outputDeviceId == null) {
+            this.outputReady = this.openOutputDevice().catch(err => {
+              console.warn('[audio] reopening after a device change failed:', err instanceof Error ? err.message : err)
+            })
+          }
+          broadcast('audio:devices-changed')
+          break
+        case CA_EVENT_DECODE_ERROR:
+          console.warn(`[audio] decode error in track ${event.serial} (code ${event.code})`)
+          break
+        default:
+          break
+      }
     }
   }
 
-  private computeStreamInfo(handle: HSTREAM): StreamInfo {
-    const bass = loadBass()
-    const lengthBytes = bass.ChannelGetLength(handle, BASS_POS_BYTE)
-    const chInfo = this.getInfo!(handle) as BassChannelInfo
-
-    // For float-sample streams BASS reports lengthBytes in bytes regardless,
-    // and seconds = bytes / (freq * chans * bytesPerSample). We let BASS do
-    // the math via attribute query in newer versions, but a manual calc
-    // (assuming 32-bit float) works for our common case.
-    const bytesPerSample = 4 // BASS_SAMPLE_FLOAT → 32-bit
-    const bytesPerSecond = chInfo.freq * chInfo.chans * bytesPerSample
-    const duration = Number(lengthBytes) / bytesPerSecond
-
-    return {
-      freq: chInfo.freq,
-      chans: chInfo.chans,
-      ctype: chInfo.ctype,
-      duration,
-      durationBytes: lengthBytes,
-      bytesPerSecond,
-    }
+  private handleDeviceLost(): void {
+    console.warn('[audio] the output device disappeared; falling back to the system default')
+    this.outputDeviceId = null
+    this.outputReady = this.openOutputDevice().catch(err => {
+      console.error('[audio] could not reopen the default output:', err instanceof Error ? err.message : err)
+    })
+    broadcast('audio:devices-changed')
   }
+
+  // ------------------------------------------------------------ transport
 
   play(): void {
-    if (this.currentStream === 0) return
-    const bass = loadBass()
-    const ok = bass.ChannelPlay(this.currentStream, 0)
-    if (!ok) {
-      const code = bass.ErrorGetCode()
-      throw new Error(`BASS_ChannelPlay failed: ${bassErrorName(code)} (${code})`)
-    }
+    if (!this.current) return
+    this.deck.play()
     this.setStatus('playing')
     this.startProgressTimer()
   }
 
   pause(): void {
-    if (this.currentStream === 0) return
-    const bass = loadBass()
-    bass.ChannelPause(this.currentStream)
+    if (!this.current) return
+    this.deck.pause()
     this.setStatus('paused')
     this.stopProgressTimer()
   }
 
   stop(): void {
-    if (this.currentStream === 0) return
-    const bass = loadBass()
-    bass.ChannelStop(this.currentStream)
-    bass.ChannelSetPosition(this.currentStream, 0n, BASS_POS_BYTE)
+    if (!this.current) return
+    this.deck.pause()
+    this.deck.seek(0)
     this.setStatus('paused')
     this.stopProgressTimer()
     this.emitProgress()
   }
 
   seek(seconds: number): void {
-    if (this.currentStream === 0 || !this.streamInfo) return
-    const bass = loadBass()
-    const clamped = Math.max(0, Math.min(seconds, this.streamInfo.duration))
-    const bytes = BigInt(Math.floor(clamped * this.streamInfo.bytesPerSecond))
-    bass.ChannelSetPosition(this.currentStream, bytes, BASS_POS_BYTE)
+    if (!this.current) return
+    const duration = this.current.info.duration
+    const clamped = Math.max(0, duration > 0 ? Math.min(seconds, duration) : seconds)
+    this.deck.seek(clamped)
     this.emitProgress()
   }
 
   setVolume(v: number): void {
     this.volume = Math.max(0, Math.min(1, v))
-    this.applyChannelVolume()
+    if (this.player) this.player.setVolume(this.volume)
   }
 
-  // Set the volume-leveler multiplier (1.0 = unchanged). Combined with the user
-  // volume and pushed to the channel immediately so a config change is audible
-  // without waiting for the next track.
+  // Set the volume-leveler multiplier (1.0 = unchanged) of the track being
+  // heard; applied immediately so a config change is audible right away.
   setNormalizationGain(linear: number): void {
     const gain = Number.isFinite(linear) && linear > 0 ? linear : 1.0
     if (this.normalizationGain === gain) return
     this.normalizationGain = gain
-    this.applyChannelVolume()
+    if (this.player) this.player.setGain(gain)
   }
 
   getNormalizationGain(): number { return this.normalizationGain }
-
-  // The effective channel volume = user volume × leveler gain. BASS allows >1
-  // (amplification); the leveler caps its own gain so this stays sane.
-  private effectiveVolume(): number {
-    return Math.max(0, this.volume * this.normalizationGain)
-  }
-
-  // Single place that writes BASS_ATTRIB_VOL. Defaults to the current stream but
-  // accepts a handle for streams being set up (load/adopt) before they become
-  // current.
-  private applyChannelVolume(handle: HSTREAM = this.currentStream): void {
-    if (handle === 0) return
-    loadBass().ChannelSetAttribute(handle, BASS_ATTRIB_VOL, this.effectiveVolume())
-  }
 
   setFftMode(mode: FftMode, screenHz?: number): void {
     const nextScreenIntervalMs = this.intervalFromScreenHz(screenHz)
     if (this.fftMode === mode && this.screenFftIntervalMs === nextScreenIntervalMs) return
     this.fftMode = mode
     this.screenFftIntervalMs = nextScreenIntervalMs
-    this.syncFftTimer()
+    this.syncFrameTimer()
   }
 
   // Toggle real-time L/R level metering. The renderer turns this on only while a
@@ -642,24 +790,60 @@ export class AudioEngine {
   setMeterEnabled(enabled: boolean): void {
     if (this.meterEnabled === enabled) return
     this.meterEnabled = enabled
-    this.syncMeterTimer()
+    this.syncFrameTimer()
+  }
+
+  getStatus(): PlaybackStatus {
+    if (this.status === 'loading') return 'loading'
+    if (!this.current || !this.player) return 'stopped'
+    const state = this.player.status()
+    if (state.state === CA_PLAYER_PLAYING) return 'playing'
+    if (state.state === CA_PLAYER_PAUSED) return 'paused'
+    return state.ended ? 'stopped' : 'paused'
+  }
+
+  getCurrentPath(): string | null { return this.current?.path ?? null }
+  getStreamInfo(): StreamInfo | null { return this.current?.info ?? null }
+  getVolume(): number { return this.volume }
+
+  // Position (in seconds) in the track being heard.
+  getPosition(): number {
+    if (!this.current || !this.player) return 0
+    return this.player.status().position
+  }
+
+  // ------------------------------------------------------------- output
+
+  private deviceNumber(uid: string): number {
+    let number = this.deviceNumbers.get(uid)
+    if (number == null) {
+      number = this.nextDeviceNumber++
+      this.deviceNumbers.set(uid, number)
+    }
+    return number
+  }
+
+  private toOutputDevice(device: NativeDeviceInfo, output: NativeOutputInfo | null): AudioOutputDevice {
+    const isCurrent = this.outputDeviceId == null ? device.isDefault : device.id === this.outputDeviceId
+    return {
+      id: this.deviceNumber(device.id),
+      uid: device.id,
+      name: device.name.trim() || 'Output',
+      driver: device.id || null,
+      flags: 0,
+      isDefault: device.isDefault,
+      isCurrent,
+      isInitialized: isCurrent && Boolean(output?.open),
+      supportsExclusive: device.supportsExclusive,
+      maxSampleRate: device.maxSampleRate,
+      maxBits: device.maxBits,
+    }
   }
 
   listOutputDevices(): AudioOutputDevice[] {
     this.ensureInit()
-    const bass = loadBass()
-    const currentDevice = bass.GetDevice()
-    const devices: AudioOutputDevice[] = []
-
-    for (let id = 1; id < 256; id += 1) {
-      const info = this.readDeviceInfo(id)
-      if (!info) break
-      if ((info.flags & BASS_DEVICE_ENABLED) === 0) continue
-      if ((info.flags & BASS_DEVICE_LOOPBACK) !== 0) continue
-      devices.push(this.toOutputDevice(id, info, currentDevice))
-    }
-
-    return devices
+    const output = getOutputInfo()
+    return listNativeDevices().map(device => this.toOutputDevice(device, output))
   }
 
   getOutputDevice(): AudioOutputDevice | null {
@@ -667,234 +851,65 @@ export class AudioEngine {
     return devices.find(d => d.isCurrent) ?? devices.find(d => d.isDefault) ?? devices[0] ?? null
   }
 
-  setOutputDevice(deviceId: number): AudioOutputDevice {
+  async setOutputDevice(deviceId: number): Promise<AudioOutputDevice> {
     this.ensureInit()
-    const target = this.readDeviceInfo(deviceId)
-    if (!target || (target.flags & BASS_DEVICE_ENABLED) === 0 || (target.flags & BASS_DEVICE_LOOPBACK) !== 0) {
-      throw new Error(`Audio output device ${deviceId} is not available`)
-    }
-
-    const bass = loadBass()
-    const wasPlaying = this.getStatus() === 'playing'
-
-    if ((target.flags & BASS_DEVICE_INIT) === 0) {
-      const ok = bass.Init(deviceId, DEFAULT_OUTPUT_FREQ, DEFAULT_OUTPUT_FLAGS, 0n, 0n)
-      if (!ok) {
-        const code = bass.ErrorGetCode()
-        throw new Error(`BASS_Init device ${deviceId} failed: ${bassErrorName(code)} (${code})`)
-      }
-    }
-
-    if (!bass.SetDevice(deviceId)) {
-      const code = bass.ErrorGetCode()
-      throw new Error(`BASS_SetDevice ${deviceId} failed: ${bassErrorName(code)} (${code})`)
-    }
-
-    if (this.currentStream !== 0) {
-      if (!bass.ChannelSetDevice(this.currentStream, deviceId)) {
-        const code = bass.ErrorGetCode()
-        throw new Error(`BASS_ChannelSetDevice failed: ${bassErrorName(code)} (${code})`)
-      }
-      this.applyChannelVolume()
-
-      if (wasPlaying) {
-        if (!bass.Start()) {
-          const code = bass.ErrorGetCode()
-          console.warn(`[audio] BASS_Start on device ${deviceId} failed: ${bassErrorName(code)} (${code})`)
-        }
-        if (!bass.ChannelPlay(this.currentStream, 0)) {
-          const code = bass.ErrorGetCode()
-          throw new Error(`BASS_ChannelPlay after device switch failed: ${bassErrorName(code)} (${code})`)
-        }
-        this.setStatus('playing')
-        this.startProgressTimer()
-      }
-    }
-
-    const result = this.getOutputDevice() ?? this.toOutputDevice(deviceId, target, deviceId)
-    if (this.onDeviceChanged) this.onDeviceChanged(deviceId)
-    return result
+    const devices = listNativeDevices()
+    const target = devices.find(device => this.deviceNumber(device.id) === deviceId)
+    if (!target) throw new Error(`Audio output device ${deviceId} is not available`)
+    this.outputDeviceId = target.id
+    this.outputReady = this.openOutputDevice()
+    await this.outputReady
+    const selected = this.getOutputDevice() ?? this.toOutputDevice(target, getOutputInfo())
+    this.onDeviceChanged?.(selected.id)
+    return selected
   }
 
-  // Tear BASS down on the currently active output device so the underlying
-  // OS audio device can be mutated (e.g. taking CoreAudio hog mode). Frees
-  // the current stream and the BASS device but leaves engine state so
-  // reinitDevice() + load() can resume from the same path/position.
-  teardownForReinit(): void {
-    if (!this.initialized) return
-    this.cancelMemoryPromotion()
-    const bass = loadBass()
-    if (this.currentStream !== 0) {
-      try { bass.ChannelStop(this.currentStream) } catch { /* may already be stopped */ }
-      try { this.freeStream(this.currentStream) } catch { /* best-effort */ }
-      this.currentStream = 0
-    }
-    this.currentPath = null
-    this.streamInfo = null
-    this.currentMemoryBuffer = null
-    this.currentStreamSource = 'none'
-    this.resetCurrentStreamLoadResult()
-    this.stopProgressTimer()
-    this.setStatus('stopped')
-    // BASS_Free targets the current device; ensure we're on the right one
-    // before calling. SetDevice can fail if the device wasn't initialized,
-    // which is fine — there's nothing to free in that case.
-    bass.Free()
+  getOutputPolicy(): NativeOutputPolicy {
+    return { ...this.outputPolicy }
   }
 
-  // Re-initialize BASS on the requested device after a teardownForReinit().
-  // The caller is responsible for re-loading whatever stream they had before.
-  reinitDevice(deviceId: number): void {
-    const bass = loadBass()
-    const ok = bass.Init(deviceId, DEFAULT_OUTPUT_FREQ, DEFAULT_OUTPUT_FLAGS, 0n, 0n)
-    if (!ok) {
-      const code = bass.ErrorGetCode()
-      throw new Error(`BASS_Init device ${deviceId} reinit failed: ${bassErrorName(code)} (${code})`)
-    }
-    if (!bass.SetDevice(deviceId)) {
-      const code = bass.ErrorGetCode()
-      throw new Error(`BASS_SetDevice ${deviceId} after reinit failed: ${bassErrorName(code)} (${code})`)
-    }
-    this.initialized = true
+  /** Bit-perfect and exclusive mode. Playback continues where it was. */
+  async setOutputPolicy(policy: Partial<NativeOutputPolicy>): Promise<OutputInfoPayload> {
+    this.outputPolicy = { ...this.outputPolicy, ...policy }
+    if (!this.initialized) return this.getOutputInfoPayload()
+    await this.outputReady
+    await setNativeOutputPolicy(this.outputPolicy)
+    this.broadcastOutputInfo()
+    return this.getOutputInfoPayload()
   }
 
-  moveStreamToOutputDevice(handle: HSTREAM, deviceId: number): boolean {
-    if (handle === 0) return true
-    this.ensureInit()
-    const bass = loadBass()
-    return Boolean(bass.ChannelSetDevice(handle, deviceId))
-  }
-
-  getStatus(): PlaybackStatus {
-    if (this.currentStream === 0) return 'stopped'
-    const bass = loadBass()
-    const active = bass.ChannelIsActive(this.currentStream)
-    switch (active) {
-      case BASS_ACTIVE_PLAYING: return 'playing'
-      case BASS_ACTIVE_PAUSED:  return 'paused'
-      case BASS_ACTIVE_STOPPED: return 'stopped'
-      default:                  return this.status
-    }
-  }
-
-  getCurrentStream(): HSTREAM { return this.currentStream }
-  getCurrentPath(): string | null { return this.currentPath }
-  getStreamInfo(): StreamInfo | null { return this.streamInfo }
-  getVolume(): number { return this.volume }
-
-  private readDeviceInfo(deviceId: number): BassDeviceInfo | null {
-    const bass = loadBass()
-    const info = { name: null, driver: null, flags: 0 } as Record<string, unknown>
-    if (!bass.GetDeviceInfo(deviceId, info)) return null
-    return info as unknown as BassDeviceInfo
-  }
-
-  private toOutputDevice(deviceId: number, info: BassDeviceInfo, currentDevice: number): AudioOutputDevice {
+  getOutputInfoPayload(): OutputInfoPayload {
+    const info = this.initialized ? getOutputInfo() : null
+    const source = this.current && !this.current.decoder.closed ? this.current.decoder.info : null
     return {
-      id: deviceId,
-      name: info.name?.trim() || `Output ${deviceId}`,
-      driver: info.driver?.trim() || null,
-      flags: info.flags,
-      isDefault: (info.flags & BASS_DEVICE_DEFAULT) !== 0,
-      isCurrent: deviceId === currentDevice,
-      isInitialized: (info.flags & BASS_DEVICE_INIT) !== 0,
-      // The engine doesn't know about CoreAudio — supportsExclusive is filled
-      // in at the IPC boundary by ExclusiveModeManager.isSupportedDevice().
-      supportsExclusive: false,
+      open: Boolean(info?.open),
+      deviceName: info?.deviceName ?? '',
+      exclusive: info?.exclusive ?? this.outputPolicy.exclusive,
+      bitPerfectSetting: this.outputPolicy.bitPerfect,
+      sourceRate: source ? source.sourceSampleRate : null,
+      sourceBits: source ? source.bitsPerSample : null,
+      sourceIsDsd: source?.isDsd ?? false,
+      sourceIsFloat: source?.isFloat ?? false,
+      sourceLossless: source?.isLossless ?? false,
+      sourceChannels: source?.sourceChannels ?? null,
+      outputRate: info?.open ? info.sampleRate : null,
+      outputBits: info?.open ? info.current.bits || info.bits : null,
+      outputChannels: info?.open ? info.channels : null,
+      resampled: info?.current.resampled ?? false,
+      dithered: info?.current.dithered ?? false,
+      downmixed: info?.current.downmixed ?? false,
+      limitedBy: info?.current.limitedBy ?? 0,
+      volume: this.volume,
+      normalizationGain: this.normalizationGain,
     }
   }
 
-  // Position (in seconds) computed from the current byte cursor.
-  getPosition(): number {
-    if (this.currentStream === 0 || !this.streamInfo) return 0
-    const bass = loadBass()
-    const bytes = bass.ChannelGetPosition(this.currentStream, BASS_POS_BYTE)
-    return Number(bytes) / this.streamInfo.bytesPerSecond
+  broadcastOutputInfo(): void {
+    if (!this.initialized) return
+    broadcast('audio:output-changed', this.getOutputInfoPayload())
   }
 
-  // Hand the current stream off to a caller (e.g. GaplessController preserving
-  // a preloaded stream). This class no longer owns it after the call.
-  releaseCurrent(): { handle: HSTREAM; path: string | null; info: StreamInfo | null; memoryBuffer: Buffer | null } {
-    this.cancelMemoryPromotion()
-    const out = {
-      handle: this.currentStream,
-      path: this.currentPath,
-      info: this.streamInfo,
-      memoryBuffer: this.currentMemoryBuffer,
-    }
-    this.currentStream = 0
-    this.currentPath = null
-    this.streamInfo = null
-    this.currentMemoryBuffer = null
-    this.currentStreamSource = 'none'
-    this.resetCurrentStreamLoadResult()
-    this.stopProgressTimer()
-    return out
-  }
-
-  // Adopt a preloaded stream as the current one (used by GaplessController
-  // when swapping).
-  adoptStream(handle: HSTREAM, path: string, memoryBuffer: Buffer | null = null, options: AdoptStreamOptions = {}): StreamInfo {
-    const shouldPlay = options.shouldPlay ?? true
-    const startPosition = options.startPositionSec ?? 0
-    const restoreStatus = options.restoreStatus ?? (shouldPlay ? 'playing' : 'paused')
-
-    let info: StreamInfo
-    try {
-      info = this.computeStreamInfo(handle)
-    } catch (err) {
-      this.freeStream(handle)
-      throw new Error(`Adopted stream is no longer valid: ${(err as Error).message}`)
-    }
-    this.currentStream = handle
-    this.currentPath = path
-    this.currentMemoryBuffer = memoryBuffer
-    this.currentStreamSource = options.sourceResult?.source ?? (memoryBuffer ? 'memory' : 'file')
-    this.setCurrentStreamLoadResult({
-      source: options.sourceResult?.source ?? this.currentStreamSource,
-      reason: options.sourceResult?.reason ?? null,
-      sizeBytes: options.sourceResult?.sizeBytes ?? Number(info.durationBytes),
-      durationMs: options.sourceResult?.durationMs ?? 0,
-      attemptedMemory: options.sourceResult?.attemptedMemory ?? memoryBuffer != null,
-      buffer: options.sourceResult?.buffer ?? completeBufferTelemetry(memoryBuffer ? memoryBuffer.byteLength : null, info.duration),
-    })
-    this.streamInfo = info
-    const bass = loadBass()
-    const clampedStart = Math.max(0, Math.min(startPosition, info.duration))
-    const startBytes = BigInt(Math.floor(clampedStart * info.bytesPerSecond))
-
-    if (startBytes > 0n) bass.ChannelSetPosition(handle, startBytes, BASS_POS_BYTE)
-    // Set volume before starting playback so the swap doesn't blip to full
-    // volume for a frame. Start playback BEFORE setStatus/startProgressTimer:
-    // syncFftTimer() queries BASS for the live channel state, so the channel
-    // must already be playing or it would stop the FFT timer (visualizer
-    // freezes after a gapless swap).
-    this.applyChannelVolume(handle)
-
-    if (shouldPlay) {
-      const playStarted = bass.ChannelPlay(handle, 0)
-      if (!playStarted) {
-        const code = bass.ErrorGetCode()
-        this.freeStream(handle)
-        this.currentStream = 0
-        this.currentPath = null
-        this.currentMemoryBuffer = null
-        this.streamInfo = null
-        this.currentStreamSource = 'none'
-        this.resetCurrentStreamLoadResult()
-        this.currentStreamLoadResult.reason = 'file-stream-failed'
-        this.setStatus('stopped')
-        throw new Error(`Failed to start playback after gapless swap: ${bassErrorName(code)} (${code})`)
-      }
-      this.setStatus('playing')
-      this.startProgressTimer()
-    } else {
-      this.setStatus(restoreStatus)
-      this.stopProgressTimer()
-    }
-    this.updateCurrentStreamSource(this.currentStreamSource)
-    return info
-  }
+  // ------------------------------------------------------------ creation
 
   // Create a stream for playback. We prefer a full in-memory file buffer so
   // playback is detached from slow/removable storage after the initial read.
@@ -906,7 +921,7 @@ export class AudioEngine {
     const start = Date.now()
 
     // Cloud identifiers are never filesystem paths. Fetch the complete track
-    // into RAM and intentionally avoid stat/open/BASS file-stream fallbacks.
+    // into RAM and intentionally avoid stat/open/file-stream fallbacks.
     if (options.cloudRef) {
       return this.createCloudStream(path, options.cloudRef, options, start)
     }
@@ -947,13 +962,8 @@ export class AudioEngine {
       }
     }
 
-    // On memory-timeout we fall through to createFileStream (native
-    // BASS_StreamCreateFile) instead of a progressive user-callback stream.
-    // The old progressive path registered koffi callbacks that BASS invoked
-    // synchronously during stream creation; writing the buffer back re-entered
-    // koffi (koffi.view) from inside the callback relay and triggered an
-    // unrecoverable napi_fatal_error, which was most likely under exactly the
-    // low-memory pressure that caused the timeout in the first place.
+    // A preload that could not get its RAM copy reports why; the renderer
+    // falls back to a normal load later.
     if (options.isPreload) {
       return {
         stream: null,
@@ -966,7 +976,8 @@ export class AudioEngine {
       }
     }
 
-    const fileStream = this.createFileStream(path)
+    // Decode straight from the file; FFmpeg reads it on the player's thread.
+    const fileStream = await this.createFileStream(path)
     return {
       stream: fileStream,
       source: fileStream ? 'file' : 'none',
@@ -1261,15 +1272,11 @@ export class AudioEngine {
         }
       }
 
-      const bass = loadBass()
-      const handle = bass.StreamCreateFileMemory(
-        BASS_FILE_MEM,
-        buffer,
-        0n,
-        BigInt(buffer.byteLength),
-        BASS_STREAM_PRESCAN | BASS_SAMPLE_FLOAT,
-      )
-      if (handle === 0) {
+      let decoder: Decoder
+      try {
+        decoder = Decoder.openMemory(buffer, path, { exactDuration: true })
+      } catch (err) {
+        console.warn(`[audio] cannot decode ${path} from memory:`, (err as Error).message)
         return {
           stream: null,
           source: 'none',
@@ -1281,9 +1288,9 @@ export class AudioEngine {
         }
       }
 
-      const info = this.computeStreamInfo(handle)
+      const info = this.toStreamInfo(decoder.info)
       return {
-        stream: { handle, info, memoryBuffer: buffer },
+        stream: { decoder, info, memoryBuffer: buffer },
         source: 'memory',
         reason: null,
         sizeBytes: buffer.byteLength,
@@ -1327,11 +1334,14 @@ export class AudioEngine {
     }
   }
 
-  private createFileStream(path: string): CreatedStream | null {
-    const bass = loadBass()
-    const handle = bass.StreamCreateFile(BASS_FILE_NAME, path, 0n, 0n, BASS_STREAM_PRESCAN | BASS_SAMPLE_FLOAT)
-    if (handle === 0) return null
-    return { handle, info: this.computeStreamInfo(handle), memoryBuffer: null }
+  private async createFileStream(path: string): Promise<CreatedStream | null> {
+    try {
+      const decoder = await Decoder.openFileAsync(path, { exactDuration: true })
+      return { decoder, info: this.toStreamInfo(decoder.info), memoryBuffer: null }
+    } catch (err) {
+      console.warn(`[audio] cannot decode ${path}:`, (err as Error).message)
+      return null
+    }
   }
 
   private canUseMemoryForPlayback(
@@ -1348,16 +1358,12 @@ export class AudioEngine {
     })
   }
 
-  private canFitPlaybackFileInMemory(bytes: number): boolean {
-    const evalResult = this.canUseMemoryForPlayback(bytes)
-    return evalResult.canUse
+  /** Closes a stream that was created but never handed to the player. */
+  freeStream(stream: CreatedStream | null | undefined): void {
+    this.closeDecoder(stream?.decoder)
   }
 
-  freeStream(handle: HSTREAM): void {
-    if (handle === 0) return
-    const bass = loadBass()
-    bass.StreamFree(handle)
-  }
+  // ------------------------------------------------------------- timers
 
   private setStatus(status: PlaybackStatus): void {
     if (this.status === status) return
@@ -1384,26 +1390,18 @@ export class AudioEngine {
   }
 
   private emitProgress(): void {
-    if (!this.streamInfo) return
+    if (!this.current) return
     broadcast('audio:progress', {
       positionSec: this.getPosition(),
-      durationSec: this.streamInfo.duration,
+      durationSec: this.current.info.duration,
     })
-  }
-
-  private syncFftTimer(): void {
-    this.syncFrameTimer()
-  }
-
-  private syncMeterTimer(): void {
-    this.syncFrameTimer()
   }
 
   // Unified frame timer: a single setInterval pulses both FFT and meter at
   // their respective cadences, so the renderer doesn't get hit by two parallel
   // IPC streams when both are active at the same rate (the common case).
   private syncFrameTimer(): void {
-    const playing = this.getStatus() === 'playing' && this.currentStream !== 0
+    const playing = this.getStatus() === 'playing'
     const fftActive = playing && this.fftMode !== 'off'
     const meterActive = playing && this.meterEnabled
 
@@ -1425,11 +1423,7 @@ export class AudioEngine {
     const candidates = [fftMs, meterMs].filter(ms => ms > 0)
     const tickMs = Math.max(1, Math.min(...candidates))
 
-    if (this.frameTimer && this.frameTickMs === tickMs) {
-      // Active set may have changed (e.g. meter turned off): emit a final
-      // flatline on the channel that just stopped.
-      return
-    }
+    if (this.frameTimer && this.frameTickMs === tickMs) return
 
     this.stopFrameTimer(false, false)
     this.frameTickMs = tickMs
@@ -1441,8 +1435,7 @@ export class AudioEngine {
 
   private framePulse(): void {
     const now = Date.now()
-    const playing = this.getStatus() === 'playing' && this.currentStream !== 0
-    if (!playing) return
+    if (this.getStatus() !== 'playing') return
     if (this.fftMode !== 'off' && this.fftIntervalMs > 0 && now - this.lastFftAt >= this.fftIntervalMs - 1) {
       this.lastFftAt = now
       this.emitFft()
@@ -1470,210 +1463,15 @@ export class AudioEngine {
   }
 
   private emitFft(): void {
-    if (this.currentStream === 0) return
-    const bass = loadBass()
-    const ret = bass.ChannelGetData(this.currentStream, this.fftBuffer, BASS_DATA_FFT2048)
-    if (ret === 0xFFFFFFFF) return  // -1 as uint32 → error / stream not playing
-    // Downsample to FFT_BINS_OUT log-spaced bins with light scaling so faint
-    // mids/highs are still visible. sqrt() pushes near-zero values up; the *1.6
-    // gain keeps peaks near 1.0 for typical material.
-    for (let i = 0; i < FFT_BINS_OUT; i++) {
-      const idx = FFT_LOG_INDEX[i]
-      const amp = this.fftBuffer[idx]
-      this.fftOut[i] = Math.min(1, Math.sqrt(Math.max(0, amp)) * 1.6)
-    }
+    if (!this.player || !this.current) return
+    toDisplayBins(this.player.fft(), this.fftOut)
     broadcast('audio:fft', { bins: this.fftOut })
   }
 
   private emitLevels(): void {
-    if (this.currentStream === 0) return
-    const bass = loadBass()
-    // ChannelGetLevelEx writes one float per channel into levelBuf. STEREO → 2
-    // values [L, R]; a second call with RMS swaps peak for RMS. length is in
-    // SECONDS (not bytes like ChannelGetData). Returns FALSE when not playing.
-    const okPeak = bass.ChannelGetLevelEx(this.currentStream, this.levelBuf, METER_WINDOW_SEC, BASS_LEVEL_STEREO)
-    const peakL = okPeak ? this.levelBuf[0] : 0
-    const peakR = okPeak ? this.levelBuf[1] : 0
-    const okRms = bass.ChannelGetLevelEx(this.currentStream, this.levelBuf, METER_WINDOW_SEC, BASS_LEVEL_STEREO | BASS_LEVEL_RMS)
-    const rmsL = okRms ? this.levelBuf[0] : 0
-    const rmsR = okRms ? this.levelBuf[1] : 0
+    if (!this.player || !this.current) return
+    const [peakL, peakR, rmsL, rmsR] = this.player.levels(METER_WINDOW_SEC)
     broadcast('audio:levels', { peakL, peakR, rmsL, rmsR })
-  }
-
-  private analysisCacheKey(path: string, buckets: number): string {
-    try {
-      const st = statSync(path)
-      return `${path}:${buckets}:${st.size}:${Math.round(st.mtimeMs)}`
-    } catch {
-      return `${path}:${buckets}`
-    }
-  }
-
-  private tableBarsCacheKey(path: string): string {
-    try {
-      const st = statSync(path)
-      return `${path}:table-bars:${st.size}:${Math.round(st.mtimeMs)}`
-    } catch {
-      return `${path}:table-bars`
-    }
-  }
-
-  // Decode the whole file once on a separate decode stream and downsample to a
-  // max-abs envelope. Computes a crest-factor approximation of dynamic range and
-  // the true peak in the same pass. Yields to the event loop between reads so a
-  // long file doesn't stall playback.
-  async decodePlaybackAnalysis(path: string, buckets = WAVEFORM_DEFAULT_BUCKETS): Promise<PlaybackAnalysisResult> {
-    const cacheKey = this.analysisCacheKey(path, buckets)
-    const cached = this.analysisCache.get(cacheKey)
-    if (cached && cached.buckets === buckets) return { ...cached, source: 'decoded' }
-
-    this.ensureInit()
-    const bass = loadBass()
-    const handle = bass.StreamCreateFile(0, path, 0n, 0n, BASS_STREAM_DECODE | BASS_SAMPLE_FLOAT)
-    if (handle === 0) {
-      const code = bass.ErrorGetCode()
-      throw new Error(`Waveform decode failed for ${path}: ${bassErrorName(code)} (${code})`)
-    }
-
-    try {
-      const info = this.getInfo!(handle) as BassChannelInfo
-      const chans = Math.max(1, info.chans)
-      const lengthBytes = Number(bass.ChannelGetLength(handle, BASS_POS_BYTE))
-      const totalFrames = Math.max(1, Math.floor(lengthBytes / (4 * chans)))
-      const framesPerBucket = Math.max(1, Math.floor(totalFrames / buckets))
-
-      const peaks = new Array(buckets).fill(0)
-      const readFloats = WAVEFORM_READ_FLOATS - (WAVEFORM_READ_FLOATS % chans)
-      const buf = new Float32Array(readFloats)
-      let frameCursor = 0
-      let globalPeak = 0
-      let sumSq = 0
-      let sampleCount = 0
-
-      for (;;) {
-        const ret = bass.ChannelGetData(handle, buf, readFloats * 4)
-        if (ret === 0xFFFFFFFF) break          // error / end of stream
-        const floatsRead = ret >>> 2           // bytes → float count
-        if (floatsRead === 0) break
-        for (let i = 0; i + chans <= floatsRead; i += chans) {
-          let frameMax = 0
-          for (let c = 0; c < chans; c++) {
-            const s = buf[i + c]
-            const a = Math.abs(s)
-            if (a > frameMax) frameMax = a
-            sumSq += s * s
-          }
-          sampleCount += chans
-          if (frameMax > globalPeak) globalPeak = frameMax
-          const b = Math.min(buckets - 1, Math.floor(frameCursor / framesPerBucket))
-          if (frameMax > peaks[b]) peaks[b] = frameMax
-          frameCursor++
-        }
-        await new Promise(resolve => setImmediate(resolve))
-      }
-
-      const rms = Math.sqrt(sumSq / Math.max(1, sampleCount))
-      const peakDb = 20 * Math.log10(Math.max(1e-6, globalPeak))
-      const drApprox = 20 * Math.log10(Math.max(1e-6, globalPeak) / Math.max(1e-6, rms))
-
-      const result: PlaybackAnalysisResult = {
-        peaks,
-        drApprox,
-        peakDb,
-        buckets,
-        analysisVersion: 2,
-        source: 'decoded',
-      }
-
-      if (this.analysisCache.size >= ANALYSIS_CACHE_MAX) {
-        const oldest = this.analysisCache.keys().next().value
-        if (oldest !== undefined) this.analysisCache.delete(oldest)
-      }
-      this.analysisCache.set(cacheKey, result)
-      return result
-    } finally {
-      bass.StreamFree(handle)
-    }
-  }
-
-  async getWaveform(path: string, buckets = WAVEFORM_DEFAULT_BUCKETS): Promise<PlaybackAnalysisResult> {
-    return this.decodePlaybackAnalysis(path, buckets)
-  }
-
-  async decodeTableBars(path: string): Promise<PlaybackTableBarsResult> {
-    const cacheKey = this.tableBarsCacheKey(path)
-    const cached = this.tableBarsCache.get(cacheKey)
-    if (cached) return { ...cached, source: 'decoded' }
-
-    this.ensureInit()
-    const bass = loadBass()
-    const handle = bass.StreamCreateFile(0, path, 0n, 0n, BASS_STREAM_DECODE | BASS_STREAM_PRESCAN | BASS_SAMPLE_FLOAT)
-    if (handle === 0) {
-      const code = bass.ErrorGetCode()
-      throw new Error(`Table-bars decode failed for ${path}: ${bassErrorName(code)} (${code})`)
-    }
-
-    try {
-      const info = this.computeStreamInfo(handle)
-      const frames = Math.max(1, Math.ceil(info.duration * TABLE_BARS_FPS))
-      const values = new Array(frames * TABLE_BARS_BANDS).fill(0)
-      const fftBuffer = new Float32Array(FFT_BINS_RAW)
-      const sourceBins = new Float32Array(FFT_BINS_OUT)
-      const bands = new Float32Array(TABLE_BARS_BANDS)
-
-      for (let frame = 0; frame < frames; frame++) {
-        const seconds = Math.min(info.duration, frame / TABLE_BARS_FPS)
-        const bytes = BigInt(Math.floor(seconds * info.bytesPerSecond))
-        bass.ChannelSetPosition(handle, bytes, BASS_POS_BYTE)
-
-        const ret = bass.ChannelGetData(handle, fftBuffer, BASS_DATA_FFT2048)
-        if (ret !== 0xFFFFFFFF && ret !== 0) {
-          for (let i = 0; i < FFT_BINS_OUT; i++) {
-            const idx = FFT_LOG_INDEX[i]
-            const amp = fftBuffer[idx]
-            sourceBins[i] = Math.min(1, Math.sqrt(Math.max(0, amp)) * 1.6)
-          }
-
-          for (let b = 0; b < TABLE_BARS_BANDS; b++) {
-            const start = Math.floor((b * FFT_BINS_OUT) / TABLE_BARS_BANDS)
-            const end = Math.max(start + 1, Math.floor(((b + 1) * FFT_BINS_OUT) / TABLE_BARS_BANDS))
-            let sum = 0
-            for (let i = start; i < end; i++) sum += sourceBins[i] ?? 0
-            bands[b] = sum / (end - start)
-          }
-
-          const offset = frame * TABLE_BARS_BANDS
-          for (let b = 0; b < TABLE_BARS_BANDS; b++) {
-            const raw = Math.max(0, Math.min(1, bands[b] ?? 0))
-            values[offset + b] = Math.max(0, Math.min(1, Math.sqrt(raw * TABLE_BARS_DISPLAY_GAIN)))
-          }
-        }
-
-        if (frame % TABLE_BARS_FPS === 0) {
-          await new Promise(resolve => setImmediate(resolve))
-        }
-      }
-
-      const result: PlaybackTableBarsResult = {
-        analysisVersion: 2,
-        source: 'decoded',
-        fps: TABLE_BARS_FPS,
-        bands: TABLE_BARS_BANDS,
-        frames,
-        durationSec: info.duration,
-        complete: true,
-        values,
-      }
-
-      if (this.tableBarsCache.size >= ANALYSIS_CACHE_MAX) {
-        const oldest = this.tableBarsCache.keys().next().value
-        if (oldest !== undefined) this.tableBarsCache.delete(oldest)
-      }
-      this.tableBarsCache.set(cacheKey, result)
-      return result
-    } finally {
-      bass.StreamFree(handle)
-    }
   }
 
   private intervalFromScreenHz(screenHz: number | undefined): number {
@@ -1683,17 +1481,36 @@ export class AudioEngine {
     return Math.max(DEFAULT_SCREEN_FFT_INTERVAL_MS, Math.round(1000 / clampedHz))
   }
 
-  dispose(): void {
-    this.freeCurrent()
-    if (this.initialized) {
-      loadBass().Free()
-      this.initialized = false
-    }
+  // ----------------------------------------------------------- lifecycle
+
+  /** Release only the active track while keeping the output open. */
+  unload(): void {
+    this.cancelMemoryPromotion()
+    if (this.player) this.player.detach()
+    this.closeDecoder(this.current?.decoder)
+    this.closeDecoder(this.next?.decoder)
+    this.current = null
+    this.next = null
+    this.currentStreamSource = 'none'
+    this.resetCurrentStreamLoadResult()
+    this.stopProgressTimer()
+    this.setStatus('stopped')
   }
 
-  /** Release only the active track while keeping the shared BASS device alive. */
-  unload(): void {
-    this.freeCurrent()
+  dispose(): void {
+    this.unload()
+    if (this.eventTimer) clearInterval(this.eventTimer)
+    this.eventTimer = null
+    if (!this.initialized) return
+    // Closing the output restores the device's original rate and releases
+    // exclusive access before the process exits.
+    closeOutput()
+    this.player?.destroy()
+    this.player = null
+    for (const decoder of this.retiring.values()) decoder.close()
+    this.retiring.clear()
+    shutdownEngine()
+    this.initialized = false
   }
 }
 
@@ -1701,3 +1518,5 @@ export function getAudioEngine(): AudioEngine {
   if (!engine) engine = new AudioEngine()
   return engine
 }
+
+export type NativePlayerHandle = NativePlayer

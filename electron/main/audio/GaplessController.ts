@@ -1,22 +1,8 @@
-// Gapless dual-stream swap. We preload the next track ahead of time and use
-// BASS_SYNC_END to switch to it the moment the current stream finishes.
-//
-// CRITICAL: koffi callbacks are GC-rooted only as long as we hold a JS
-// reference to them. BASS keeps a native pointer to the callback function;
-// if the JS callback is collected before BASS_ChannelRemoveSync is called,
-// BASS will dereference garbage memory and segfault inside its audio thread.
-// We therefore keep every registered SYNCPROC alive in a module-level Map
-// keyed by the sync handle until the corresponding RemoveSync call returns.
+// Gapless playback. The renderer asks us to preload the next track ahead of
+// time; we prepare its stream (RAM copy when the budget allows) and queue it
+// in the native player, which hands over at the exact sample the current
+// track ends. Manual "next" uses the same queued stream (swapToNext).
 
-import { createRequire } from 'node:module'
-import { broadcast } from '../ipc/events'
-
-const require = createRequire(import.meta.url)
-const koffi = require('koffi') as typeof import('koffi')
-
-import { BASS_SYNC_END, BASS_SYNC_ONETIME } from './bass-constants'
-import { loadBass, SYNCPROC, type HSTREAM, type HSYNC } from './bass-ffi'
-import { isActiveEndSyncRegistration } from './endSyncOwnership'
 import { CLOUD_MEMORY_TIMEOUT_MS, PRELOAD_MEMORY_TIMEOUT_MS } from './progressiveBuffering'
 import type {
   AudioEngine,
@@ -29,7 +15,6 @@ import type {
   PreloadNextResult,
   PreloadNextSource,
   StreamLoadResult,
-  StreamInfoPayload,
 } from '@shared/types/ipc-contract'
 
 const PRELOAD_MEMORY_FAILURE_COOLDOWN_MS = 8_000
@@ -46,144 +31,45 @@ interface PreloadAttemptTelemetry {
   bufferComplete: boolean
 }
 
-interface PreloadedStream {
-  path: string
-  handle: HSTREAM
-  info: StreamInfo
-  memoryBuffer: Buffer | null
-  preload: PreloadAttemptTelemetry
-}
-
-// Module-level retention of native callbacks. We can't put these on the
-// instance because some BASS callback paths can fire after the controller
-// would otherwise be GC'd — keeping the map at module scope guarantees the
-// retention spans the entire process lifetime.
-//
-// koffi.register returns its own pointer type — we hold it as `unknown` in
-// our own types but pass through to koffi APIs that need it via casts.
-type KoffiCallbackPtr = Parameters<typeof koffi.unregister>[0]
-type RegisteredCallback = { sync: HSYNC; channel: HSTREAM; cb: KoffiCallbackPtr }
-const retainedCallbacks = new Set<RegisteredCallback>()
-
-function registerEndSync(channel: HSTREAM, handler: () => void): RegisteredCallback {
-  const bass = loadBass()
-  // The SYNCPROC signature is: (HSYNC, channel, data, user). We ignore all
-  // four args because we close over `handler` in JS.
-  const cb = koffi.register(() => {
-    try { handler() } catch (err) { console.error('[gapless] sync handler error:', err) }
-  }, koffi.pointer(SYNCPROC)) as KoffiCallbackPtr
-
-  const sync = bass.ChannelSetSync(channel, BASS_SYNC_END | BASS_SYNC_ONETIME, 0n, cb, 0n)
-  const entry: RegisteredCallback = { sync, channel, cb }
-  retainedCallbacks.add(entry)
-  return entry
-}
-
-function releaseCallback(entry: RegisteredCallback): void {
-  const bass = loadBass()
-  bass.ChannelRemoveSync(entry.channel, entry.sync)
-  retainedCallbacks.delete(entry)
-  // koffi.unregister requires the pointer we got back from register.
-  try { koffi.unregister(entry.cb) } catch { /* already unregistered */ }
-}
-
-function serializeStreamInfo(info: StreamInfo): StreamInfoPayload {
-  return {
-    freq: info.freq,
-    chans: info.chans,
-    ctype: info.ctype,
-    duration: info.duration,
-    durationBytes: Number(info.durationBytes),
-    bytesPerSecond: info.bytesPerSecond,
-  }
-}
-
 export class GaplessController {
-  private next: PreloadedStream | null = null
   private preloadGeneration = 0
-  // One callback attached to the *currently playing* stream. It performs the
-  // gapless swap when a preloaded track exists, otherwise it emits the generic
-  // track-ended event used by queueStore as fallback.
-  private currentTrackEndRegistration: RegisteredCallback | null = null
+  private preload: { path: string; telemetry: PreloadAttemptTelemetry; streamInfo: StreamInfo | null } | null = null
   private failedMemoryByPath = new Map<string, number>()
-  // Invoked after every successful swap (manual "Next" AND the native
-  // end-of-stream auto-advance), so per-stream effects that don't survive the
-  // handle change — EQ FX, the volume-leveler gain — get re-applied to the new
-  // stream. Set by the audio-channel which owns those managers.
+  // Invoked after every hand-over (manual "Next" and the native end-of-track
+  // advance) so per-track state — the volume-leveler gain — follows the new
+  // track. Set by the audio-channel.
   private onAfterSwap: (() => void) | null = null
-  // Invoked with the next track's path right before the preloaded stream is
-  // adopted/played, so the leveler gain for the NEW track is in place before the
-  // first sample. Set by the audio-channel.
-  private onBeforeSwap: ((path: string) => void) | null = null
+  // Leveler gain for a track about to be queued, so its first sample already
+  // plays at the right loudness.
+  private gainForPath: ((path: string) => number) | null = null
 
-  constructor(private engine: AudioEngine) {}
+  constructor(private engine: AudioEngine) {
+    engine.setGaplessHooks({
+      onNaturalAdvance: () => {
+        this.preload = null
+        this.onAfterSwap?.()
+      },
+      onTrackEnded: () => {
+        this.preload = null
+      },
+    })
+  }
 
   setOnAfterSwap(cb: (() => void) | null): void {
     this.onAfterSwap = cb
   }
 
-  setOnBeforeSwap(cb: ((path: string) => void) | null): void {
-    this.onBeforeSwap = cb
-  }
-
-  bindCurrentTrackEnd(): void {
-    const currentStream = this.engine.getCurrentStream()
-    if (currentStream === 0) return
-
-    if (this.currentTrackEndRegistration && this.currentTrackEndRegistration.channel === currentStream) return
-
-    if (this.currentTrackEndRegistration) {
-      releaseCallback(this.currentTrackEndRegistration)
-      this.currentTrackEndRegistration = null
-    }
-
-    let registration: RegisteredCallback | null = null
-    registration = registerEndSync(currentStream, () => {
-      // Keep the callback for the ending track fresh: if this handler is
-      // invoked via BASS's synchronous callback path, releasing/reattaching
-      // the sync inside the callback itself can cause races.
-      const endedRegistration = registration
-      // The old callback may already be queued when a delete, manual Next, or
-      // direct track selection replaces its stream. It must not consume the
-      // new stream's registration or emit a second, stale track-ended event.
-      if (!isActiveEndSyncRegistration(this.currentTrackEndRegistration, endedRegistration)) return
-      this.currentTrackEndRegistration = null
-      queueMicrotask(() => releaseCallback(endedRegistration))
-
-      if (!this.next) {
-        broadcast('audio:track-ended')
-        return
-      }
-
-      try {
-        const info = this.swapToNext()
-        if (!info) broadcast('audio:track-ended')
-      } catch {
-        broadcast('audio:track-ended')
-      }
-    })
-    this.currentTrackEndRegistration = registration
-  }
-
-  private clearCurrentTrackEndRegistration(): void {
-    if (!this.currentTrackEndRegistration) return
-    const reg = this.currentTrackEndRegistration
-    this.currentTrackEndRegistration = null
-    releaseCallback(reg)
+  setGainResolver(resolve: ((path: string) => number) | null): void {
+    this.gainForPath = resolve
   }
 
   private isUnstableIOFailure(reason: PreloadNextFailureReason | null): boolean {
     return reason === 'memory-timeout' || reason === 'memory-read-failed' || reason === 'memory-stream-failed'
   }
 
-  private cleanupExpiredMemoryFailureCooldown(path: string, now: number): void {
+  private shouldSkipMemory(path: string, now: number): boolean {
     const until = this.failedMemoryByPath.get(path)
     if (until != null && until <= now) this.failedMemoryByPath.delete(path)
-  }
-
-  private shouldSkipMemory(path: string, now: number): boolean {
-    this.cleanupExpiredMemoryFailureCooldown(path, now)
-    const until = this.failedMemoryByPath.get(path)
     return until != null && until > now
   }
 
@@ -192,7 +78,7 @@ export class GaplessController {
     this.failedMemoryByPath.set(path, now + PRELOAD_MEMORY_FAILURE_COOLDOWN_MS)
   }
 
-  private createTelemetryFromResult(result: StreamCreateResult): PreloadAttemptTelemetry {
+  private telemetryFrom(result: StreamCreateResult): PreloadAttemptTelemetry {
     return {
       attempted: result.attemptedMemory,
       source: result.source === 'none' ? 'none' : result.source,
@@ -206,157 +92,86 @@ export class GaplessController {
     }
   }
 
-  private toPreloadResult(result: StreamCreateResult, streamInfo: StreamInfo | null): PreloadNextResult {
-    return {
-      ...this.createTelemetryFromResult(result),
-      streamInfo: streamInfo ? serializeStreamInfo(streamInfo) : null,
-    }
+  private toResult(telemetry: PreloadAttemptTelemetry, streamInfo: StreamInfo | null): PreloadNextResult {
+    return { ...telemetry, streamInfo }
   }
 
-  // Preload a track. Idempotent for the same path. The end-of-stream sync is
-  // attached to the CURRENT stream so that when it finishes we swap to the
-  // preloaded one and start playback in the same audio thread tick.
+  // Preload a track. Idempotent for the same path.
   async preloadNext(
     path: string,
     cloud?: { cloudRef: CloudTrackRef; cloudSizeBytes: number },
   ): Promise<PreloadNextResult> {
-    if (this.next && this.next.path === path) {
-      return {
-        attempted: this.next.preload.attempted,
-        source: this.next.preload.source,
-        reason: this.next.preload.reason,
-        durationMs: this.next.preload.durationMs,
-        sizeBytes: this.next.preload.sizeBytes,
-        streamInfo: serializeStreamInfo(this.next.info),
-        bufferedBytes: this.next.preload.bufferedBytes,
-        totalBytes: this.next.preload.totalBytes,
-        bufferedSec: this.next.preload.bufferedSec,
-        bufferComplete: this.next.preload.bufferComplete,
-      }
+    if (this.preload && this.preload.path === path && this.engine.getNextPath() === path) {
+      return this.toResult(this.preload.telemetry, this.preload.streamInfo)
     }
     const generation = ++this.preloadGeneration
-    this.discardNext()
+    this.preload = null
+    this.engine.clearNext()
 
     const now = Date.now()
-    const skipMemory = this.shouldSkipMemory(path, now)
     const created = await this.engine.createStream(path, {
-      skipMemory,
+      skipMemory: this.shouldSkipMemory(path, now),
       memoryOnly: false,
       memoryReadTimeoutMs: cloud ? CLOUD_MEMORY_TIMEOUT_MS : PRELOAD_MEMORY_TIMEOUT_MS,
       isPreload: true,
       cloudRef: cloud?.cloudRef,
       cloudSizeBytes: cloud?.cloudSizeBytes,
     })
+    const telemetry = this.telemetryFrom(created)
 
     if (generation !== this.preloadGeneration) {
-      if (created.stream) this.engine.freeStream(created.stream.handle)
-      return this.toPreloadResult({ ...created, stream: null }, null)
+      this.engine.freeStream(created.stream)
+      return this.toResult(telemetry, null)
     }
-    const preloadData = this.createTelemetryFromResult(created)
+    if (created.attemptedMemory) this.rememberUnstableMemoryFailure(path, created.reason, now)
+    if (!created.stream) return this.toResult(telemetry, null)
 
-    if (created.attemptedMemory) {
-      this.rememberUnstableMemoryFailure(path, created.reason, now)
+    this.failedMemoryByPath.delete(path)
+    const gain = this.gainForPath?.(path) ?? 1
+    const queued = await this.engine.queueNext(path, created, gain)
+    if (generation !== this.preloadGeneration || !queued) {
+      if (!queued) this.engine.freeStream(created.stream)
+      return this.toResult(telemetry, null)
     }
-
-    if (created.stream) {
-      this.failedMemoryByPath.delete(path)
-      this.next = {
-        path,
-        handle: created.stream.handle,
-        info: created.stream.info,
-        memoryBuffer: created.stream.memoryBuffer,
-        preload: preloadData,
-      }
-      this.bindCurrentTrackEnd()
-      return this.toPreloadResult(created, created.stream.info)
-    }
-
-    // If no stream is available, keep no preloaded stream cached but report
-    // why fallback did not happen. The caller can continue with normal
-    // standard-load semantics.
-    return this.toPreloadResult(created, null)
+    this.preload = { path, telemetry, streamInfo: queued.streamInfo }
+    return this.toResult(telemetry, queued.streamInfo)
   }
 
-  // Forcibly swap to the preloaded stream right now (used when the user hits
-  // "Next" before the current track ends, OR fired automatically by the
-  // BASS_SYNC_END callback above).
-  swapToNext(expectedPath?: string | null): StreamLoadResult | null {
-    if (!this.next) return null
-    if (expectedPath && this.next.path !== expectedPath) return null
+  // Start the preloaded stream right now (the user pressed "Next").
+  async swapToNext(expectedPath?: string | null): Promise<StreamLoadResult | null> {
+    const preload = this.preload
+    if (!preload) return null
+    if (expectedPath && preload.path !== expectedPath) return null
     this.preloadGeneration += 1
-    const preloaded = this.next
-    this.next = null
-    const endedRegistration = this.currentTrackEndRegistration
-    this.currentTrackEndRegistration = null
-    if (endedRegistration) queueMicrotask(() => releaseCallback(endedRegistration))
-
-    const old = this.engine.releaseCurrent()
-    if (old.handle !== 0) this.engine.freeStream(old.handle)
-    // Set the new track's leveler gain BEFORE adoptStream applies the channel
-    // volume and starts playback, so the first samples don't briefly play at the
-    // previous track's gain (audible jump when the two differ a lot).
-    this.onBeforeSwap?.(preloaded.path)
-    // adoptStream() starts playback itself (so the FFT timer re-syncs against a
-    // live channel), so we don't call ChannelPlay here.
-    const info = this.engine.adoptStream(preloaded.handle, preloaded.path, preloaded.memoryBuffer, {
-      sourceResult: {
-        source: preloaded.preload.source,
-        reason: preloaded.preload.reason,
-        sizeBytes: preloaded.preload.sizeBytes,
-        durationMs: preloaded.preload.durationMs,
-        attemptedMemory: preloaded.preload.attempted,
-        buffer: {
-          bufferedBytes: preloaded.preload.bufferedBytes,
-          totalBytes: preloaded.preload.totalBytes,
-          bufferedSec: preloaded.preload.bufferedSec,
-          bufferComplete: preloaded.preload.bufferComplete,
-        },
-      },
-    })
-    this.bindCurrentTrackEnd()
-    // Re-apply per-stream effects (EQ FX, leveler gain) to the freshly adopted
-    // stream before notifying the renderer of the handoff.
+    const result = await this.engine.skipToNext(expectedPath ?? preload.path)
+    this.preload = null
+    if (!result) return null
     this.onAfterSwap?.()
-    const result: StreamLoadResult = {
-      attempted: preloaded.preload.attempted,
-      source: preloaded.preload.source,
-      reason: preloaded.preload.reason,
-      durationMs: preloaded.preload.durationMs,
-      sizeBytes: preloaded.preload.sizeBytes,
-      streamInfo: serializeStreamInfo(info),
-      bufferedBytes: preloaded.preload.bufferedBytes,
-      totalBytes: preloaded.preload.totalBytes,
-      bufferedSec: preloaded.preload.bufferedSec,
-      bufferComplete: preloaded.preload.bufferComplete,
+    return {
+      ...result,
+      attempted: preload.telemetry.attempted,
+      source: preload.telemetry.source,
+      reason: preload.telemetry.reason,
+      durationMs: preload.telemetry.durationMs,
+      sizeBytes: preload.telemetry.sizeBytes,
+      bufferedBytes: preload.telemetry.bufferedBytes,
+      totalBytes: preload.telemetry.totalBytes,
+      bufferedSec: preload.telemetry.bufferedSec,
+      bufferComplete: preload.telemetry.bufferComplete,
     }
-    broadcast('audio:gapless-fired', { path: preloaded.path, streamInfo: result.streamInfo, source: result.source })
-    return result
   }
 
   // Drop the preloaded stream without playing it (e.g. queue was modified).
   clearNext(): void {
     this.preloadGeneration += 1
-    this.discardNext()
-  }
-
-  private discardNext(): void {
-    if (!this.next) return
-    this.engine.freeStream(this.next.handle)
-    this.next = null
+    this.preload = null
+    this.engine.clearNext()
   }
 
   clear(): void {
     this.clearNext()
-    this.clearCurrentTrackEndRegistration()
   }
 
-  movePreloadedToOutputDevice(deviceId: number): boolean {
-    if (!this.next) return true
-    const moved = this.engine.moveStreamToOutputDevice(this.next.handle, deviceId)
-    if (!moved) this.clearNext()
-    return moved
-  }
-
-  hasNext(): boolean { return this.next !== null }
-  getNextPath(): string | null { return this.next?.path ?? null }
+  hasNext(): boolean { return this.engine.hasNext() }
+  getNextPath(): string | null { return this.engine.getNextPath() }
 }

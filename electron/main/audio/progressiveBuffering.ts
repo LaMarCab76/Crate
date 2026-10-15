@@ -1,7 +1,7 @@
 export const PRELOAD_MEMORY_TIMEOUT_MS = 3000
 export const BACKGROUND_MEMORY_PROMOTION_TIMEOUT_MS = 120_000
 // OneDrive playback downloads a complete track into RAM before handing it to
-// BASS. Keep this as a safety ceiling, not a fast local-file fallback timeout.
+// the decoder. Keep this as a safety ceiling, not a fast local-file fallback timeout.
 export const CLOUD_MEMORY_TIMEOUT_MS = 5 * 60_000
 export const PLAYBACK_MEMORY_READ_CHUNK_BYTES = 8 * 1024 * 1024
 export const PLAYBACK_MEMORY_RESERVE_BYTES = 512 * 1024 * 1024

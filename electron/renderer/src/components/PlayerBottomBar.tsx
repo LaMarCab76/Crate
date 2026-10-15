@@ -26,6 +26,7 @@ import {
 } from '@renderer/stores/libraryStore'
 import { usePlaybackStore } from '@renderer/stores/playbackStore'
 import { useQueueIndex, useQueueStore, useQueueUpNext } from '@renderer/stores/queueStore'
+import { OutputPathRow } from '@renderer/components/OutputPathRow'
 import type { AudioOutputDevice, ExclusiveModeState } from '@shared/types/ipc-contract'
 import type { Album, Artist, Track } from '@shared/types/library'
 
@@ -811,6 +812,7 @@ export function PlayerBottomBar({
                           {deviceMenuOpen && (
                             <div className={`output-device-menu upward ${exclusiveBusy ? 'transitioning' : ''}`} role="menu">
                               <div className="output-device-title">Audio Output</div>
+                          <OutputPathRow />
                               {deviceLoading && <div className="output-device-state">Loading outputs...</div>}
                               {deviceError && <div className="output-device-state error">{deviceError}</div>}
                               {!deviceLoading && !deviceError && outputDevices.length === 0 && (
@@ -981,7 +983,11 @@ function ExclusiveToggleRow({ enabled, supported, busy, error, onToggle }: Exclu
             {busy && <span className="exclusive-toggle-spinner" aria-hidden="true" />}
           </div>
           <div className="exclusive-toggle-sub">
-            {supported ? 'Bypass the macOS mixer' : 'Not supported on this device'}
+            {!supported
+              ? 'Not supported on this device'
+              : window.api.meta.platform === 'windows'
+                ? 'Bypass the Windows mixer (experimental)'
+                : 'Bypass the macOS mixer'}
           </div>
         </div>
         <span className={`exclusive-toggle-switch ${enabled ? 'on' : ''}`} aria-hidden="true">

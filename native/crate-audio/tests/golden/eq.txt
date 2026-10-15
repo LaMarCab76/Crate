@@ -1,0 +1,5 @@
+# name rate center_hz gain_db bandwidth_octaves
+1000hz-plus6-bw1 44100 1000 6 1
+100hz-minus9-bw05 44100 100 -9 0.5
+8000hz-plus12-bw2 44100 8000 12 2
+16000hz-plus15-bw067 44100 16000 15 0.67

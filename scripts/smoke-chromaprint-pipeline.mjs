@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// End-to-end native smoke: decode a Unicode-path WAV through BASS as bounded
-// int16 PCM, stream it into Chromaprint, and compare the frozen raw fingerprint.
+// End-to-end native smoke: decode a Unicode-path WAV through crate-audio
+// (FFmpeg) as bounded int16 PCM, stream it into Chromaprint, and compare the
+// frozen raw fingerprint.
 
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
@@ -9,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromaprintLibraryName } from './chromaprint-config.mjs'
+import { crateAudioLibraryName } from './crate-audio-config.mjs'
 import {
   EXPECTED_SMOKE_ITEMS,
   EXPECTED_SMOKE_SHA256,
@@ -25,14 +27,8 @@ function flag(name) {
 }
 
 const LIBRARY_DIR = resolve(REPO_ROOT, flag('--dir') ?? join('native', 'libs'))
-const BASS_DIR = resolve(REPO_ROOT, flag('--bass-dir') ?? LIBRARY_DIR)
+const CRATE_AUDIO_DIR = resolve(REPO_ROOT, flag('--crate-audio-dir') ?? LIBRARY_DIR)
 const CHROMAPRINT_DIR = resolve(REPO_ROOT, flag('--chromaprint-dir') ?? LIBRARY_DIR)
-
-function bassLibraryName() {
-  if (process.platform === 'win32') return 'bass.dll'
-  if (process.platform === 'linux') return 'libbass.so'
-  return 'libbass.dylib'
-}
 
 function wavFromMono16(sampleRate, samples) {
   const dataBytes = samples.length * Int16Array.BYTES_PER_ELEMENT
@@ -65,16 +61,14 @@ function digestRaw(values) {
 
 async function main() {
   const koffi = require('koffi')
-  const bass = koffi.load(join(BASS_DIR, bassLibraryName()))
+  const engine = koffi.load(join(CRATE_AUDIO_DIR, crateAudioLibraryName(process.platform)))
   const chromaprint = koffi.load(join(CHROMAPRINT_DIR, chromaprintLibraryName(process.platform)))
 
-  const BassInit = bass.func('int32_t BASS_Init(int32_t, uint32_t, uint32_t, uint64_t, uint64_t)')
-  const BassFree = bass.func('int32_t BASS_Free(void)')
-  const BassError = bass.func('int32_t BASS_ErrorGetCode(void)')
-  const BassCreateUtf8 = bass.func('uint32_t BASS_StreamCreateFile(int32_t, const char *, uint64_t, uint64_t, uint32_t)')
-  const BassCreateUtf16 = bass.func('BASS_StreamCreateFile', 'uint32_t', ['int32_t', 'str16', 'uint64_t', 'uint64_t', 'uint32_t'])
-  const BassRead = bass.func('BASS_ChannelGetData', 'uint32_t', ['uint32_t', koffi.out(koffi.pointer('int16_t')), 'uint32_t'])
-  const BassStreamFree = bass.func('int32_t BASS_StreamFree(uint32_t)')
+  koffi.struct('PipelineDecodeOpts', { sample_format: 'int32_t', sample_rate: 'int32_t', channels: 'int32_t', flags: 'int32_t' })
+  const DecoderOpen = engine.func('void *ca_decoder_open_file(const char *path, const PipelineDecodeOpts *opts)')
+  const DecoderRead = engine.func('ca_decoder_read', 'int64_t', ['void *', koffi.out(koffi.pointer('int16_t')), 'int64_t'])
+  const DecoderClose = engine.func('void ca_decoder_close(void *dec)')
+  const LastError = engine.func('const char *ca_last_error(void)')
 
   const Context = koffi.opaque('PipelineChromaprintContext')
   const ContextPointer = koffi.pointer(Context)
@@ -91,34 +85,32 @@ async function main() {
   const Dealloc = chromaprint.func('chromaprint_dealloc', 'void', ['void *'])
 
   const temporary = await mkdtemp(join(tmpdir(), 'crate-native-pipeline-'))
-  let stream = 0
+  let decoder = null
   let context = null
   let rawPointer = null
   try {
     const { sampleRate, samples } = makeSmokePcm()
     const audioPath = join(temporary, 'canción-音.wav')
     await writeFile(audioPath, wavFromMono16(sampleRate, samples), { flag: 'wx' })
-    if (!BassInit(0, sampleRate, 0, 0n, 0n)) throw new Error(`BASS_Init(0) failed (${BassError()})`)
-    const flags = (0x200000 | (process.platform === 'win32' ? 0x80000000 : 0)) >>> 0
-    stream = process.platform === 'win32'
-      ? BassCreateUtf16(0, audioPath, 0n, 0n, flags)
-      : BassCreateUtf8(0, audioPath, 0n, 0n, flags)
-    if (!stream) throw new Error(`BASS could not open the Unicode smoke path (${BassError()})`)
+    // UTF-8 paths work on every platform, including Windows.
+    decoder = DecoderOpen(audioPath, { sample_format: 2, sample_rate: 0, channels: 0, flags: 0 })
+    if (!decoder) throw new Error(`crate-audio could not open the Unicode smoke path (${LastError()})`)
 
     context = New(1)
     if (!context || !Start(context, sampleRate, 1)) throw new Error('Chromaprint pipeline start failed')
     const pcm = new Int16Array(4096)
     let decodedSamples = 0
     for (;;) {
-      const bytes = BassRead(stream, pcm, pcm.byteLength)
-      if (bytes === 0xffffffff || bytes === 0) break
-      if (bytes > pcm.byteLength || bytes % 2 !== 0) throw new Error(`BASS returned invalid PCM length ${bytes}`)
-      const count = bytes / 2
+      const frames = Number(DecoderRead(decoder, pcm, pcm.length))
+      if (frames < 0) throw new Error(`crate-audio decode failed (${LastError()})`)
+      if (frames === 0) break
+      if (frames > pcm.length) throw new Error(`crate-audio returned invalid PCM length ${frames}`)
+      const count = frames
       if (!Feed(context, pcm.subarray(0, count), count)) throw new Error('Chromaprint pipeline feed failed')
       decodedSamples += count
     }
     if (decodedSamples !== samples.length) {
-      throw new Error(`BASS pipeline decoded ${decodedSamples}/${samples.length} samples`)
+      throw new Error(`crate-audio pipeline decoded ${decodedSamples}/${samples.length} samples`)
     }
     if (!Finish(context)) throw new Error('Chromaprint pipeline finish failed')
     const pointerOut = [null]
@@ -128,14 +120,13 @@ async function main() {
     const values = koffi.decode(rawPointer, 'uint32_t', sizeOut[0])
     const digest = digestRaw(values)
     if (sizeOut[0] !== EXPECTED_SMOKE_ITEMS || digest !== EXPECTED_SMOKE_SHA256) {
-      throw new Error(`BASS/Chromaprint frozen fingerprint mismatch (${sizeOut[0]} items, ${digest})`)
+      throw new Error(`crate-audio/Chromaprint frozen fingerprint mismatch (${sizeOut[0]} items, ${digest})`)
     }
-    console.log(`[smoke-chromaprint-pipeline] BASS int16 -> Chromaprint passed (${decodedSamples} samples, ${digest})`)
+    console.log(`[smoke-chromaprint-pipeline] crate-audio int16 -> Chromaprint passed (${decodedSamples} samples, ${digest})`)
   } finally {
     if (rawPointer) Dealloc(rawPointer)
     if (context) Free(context)
-    if (stream) BassStreamFree(stream)
-    BassFree()
+    if (decoder) DecoderClose(decoder)
     await rm(temporary, { recursive: true, force: true })
   }
 }
