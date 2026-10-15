@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
-for (const script of ['fetch-bass.mjs', 'fetch-chromaprint.mjs']) {
+for (const script of ['fetch-crate-audio.mjs', 'fetch-chromaprint.mjs']) {
   const result = spawnSync(process.execPath, [join(scriptDirectory, script), ...process.argv.slice(2)], { stdio: 'inherit' })
   if (result.error) throw result.error
   if (result.status !== 0) process.exit(result.status ?? 1)

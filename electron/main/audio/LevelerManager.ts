@@ -4,7 +4,7 @@
 // singleton shape; the renderer is the source of truth for the config and pushes
 // it in (config is persisted renderer-side, like the EQ panel state).
 //
-// This class deliberately knows nothing about BASS or the DB — the audio-channel
+// This class deliberately knows nothing about the audio engine or the DB — the audio-channel
 // resolves a track's loudness and feeds it in, then reads currentGainLinear() to
 // drive the engine. Keeping it pure makes the gain math testable in isolation.
 

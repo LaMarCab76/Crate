@@ -20,10 +20,11 @@ files:
 extraResources:
   - from: native/libs
     to: native/libs
-    filter: ["**/*"]
+    # Crate no longer uses BASS; never ship stale copies left in native/libs.
+    filter: ["**/*", "!*bass*", "!licenses/bass/**"]
   - from: .
     to: licenses
-    filter: [LICENSE, LICENSE-BASS-EXCEPTION.md, THIRD_PARTY_NOTICES.md]
+    filter: [LICENSE, THIRD_PARTY_NOTICES.md]
   - from: licenses
     to: licenses
     filter: ["**/*"]

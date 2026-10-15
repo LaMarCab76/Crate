@@ -1623,7 +1623,7 @@ function EqPanel() {
         <div className="set-row">
           <div>
             <div className="lbl">Enable equalizer</div>
-            <div className="sub">{bandCount}-band peaking EQ applied to the BASS playback chain.</div>
+            <div className="sub">{bandCount}-band peaking EQ applied by the audio engine.</div>
           </div>
           <div
             className={`toggle ${enabled ? 'on' : ''}`}

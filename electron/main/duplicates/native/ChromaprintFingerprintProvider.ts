@@ -15,7 +15,7 @@ import { CHROMAPRINT_DEFAULT_ALGORITHM } from './chromaprint-paths.ts'
 export const CHROMAPRINT_PROVIDER_VERSION = '1.6.0'
 
 export interface ResolvedFingerprintInput {
-  /** Local file consumed by BASS; cloud resolvers should use a bounded temp file. */
+  /** Local file the decoder reads; cloud resolvers should use a bounded temp file. */
   localPath: string
   /** Revalidate ETag/size/source identity after streaming and before persistence. */
   verifyUnchanged?: () => Promise<void>
@@ -79,7 +79,7 @@ function validDuration(value: number | undefined): value is number {
 
 /**
  * Streaming adapter only. The resolver owns local authorization/OneDrive temp
- * downloads and the decoder owns BASS/utilityProcess lifecycle. This keeps the
+ * downloads and the decoder owns the audio engine lifecycle. This keeps the
  * provider independent from DB, Electron `app`, and whole-file buffers.
  */
 export class ChromaprintFingerprintProvider implements FingerprintProvider {

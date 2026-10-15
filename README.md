@@ -1,8 +1,8 @@
 # Crate
 
 Audiophile music library and player for **macOS, Windows and Linux**, built as an
-Electron + Vite + React + TypeScript desktop app on top of the
-[BASS](https://www.un4seen.com/bass.html) audio library.
+Electron + Vite + React + TypeScript desktop app with its own open-source audio
+engine (FFmpeg for decoding, miniaudio for output).
 
 > Current release: **v0.6.6** — installers and release notes live in
 > [`docs/releases/`](docs/releases/).
@@ -12,7 +12,7 @@ Electron + Vite + React + TypeScript desktop app on top of the
 ```bash
 npm install
 npm run fetch:native  # downloads the native libraries for this OS
-npm run verify:native # checks BASS + Chromaprint before launch/package
+npm run verify:native # checks the audio engine + Chromaprint before launch/package
 npm run dev          # Electron dev window with Vite HMR
 npm test             # Node test suite
 npm run typecheck    # tsc for the main + renderer projects
@@ -52,7 +52,7 @@ the operating system's secure storage.
 ```
 electron/
   main/         Electron main process (Node) — DB, audio, devices, IPC
-    audio/        BASS FFI bindings, AudioEngine, GaplessController, EQ, CoreAudio hog mode
+    audio/        koffi bindings to libcrate_audio, AudioEngine, GaplessController, EQ, exclusive mode
     db/           better-sqlite3 connection, migrator + 30 SQL migrations, repositories
     cloud/        OneDrive auth, Graph client, delta index, portable manifests
     library-mirror/ persistent local/cloud backup plans and journals
@@ -76,8 +76,8 @@ electron/
       styles/       globals.css
 shared/         Cross-process TypeScript: IPC contract, library/db/device types,
                 LRC parser, equalizer + device-sync constants
-native/libs/    BASS codecs plus the pinned Chromaprint duplicate-fingerprint library,
-                with their license texts under native/libs/licenses/
+native/crate-audio/ C source of libcrate_audio (FFmpeg + miniaudio engine), fixtures and tests
+native/libs/    Built libcrate_audio plus the pinned Chromaprint duplicate-fingerprint library
 licenses/       Apache-2.0 text for the parts derived from HiFidelity
 electron-build/ App icon, entitlements, Electron rebuild scripts
 docs/           Release notes + feature specs (e.g. lyrics-feature.md)
@@ -86,27 +86,33 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
 ## Features
 
 ### Audio engine
-- **BASS** loaded through the [koffi](https://koffi.dev) FFI in the main process,
-  with the full plugin set in `native/libs/` (FLAC, Opus, DSD, WavPack, TTA,
-  Musepack, APE, HLS, WebM, MIDI, FX) so the same engine handles MP3, AAC,
-  FLAC, ALAC, DSD, WavPack and more.
+- **libcrate_audio**, Crate's own engine (`native/crate-audio/`), loaded through
+  the [koffi](https://koffi.dev) FFI in the main process. It statically links an
+  audio-only, LGPL build of **FFmpeg** for decoding (MP3, AAC, ALAC, FLAC, Opus,
+  Vorbis, WAV/AIFF, DSD/DST, WavPack, APE, TTA, Musepack, Speex, WebM) and
+  **miniaudio** for output. Decoding, mixing, EQ and gapless hand-overs run on
+  native threads; JS only sends commands and polls events.
 - Streams are preferred **fully in memory** when the RAM budget allows; large
   files fall back to disk streaming.
-- **Gapless playback** via a dedicated `GaplessController` that preloads the
-  next track on a configurable threshold and hot-swaps the BASS stream on
-  end-of-stream, with adoption from the queue store so autoplay keeps working
-  even if preload didn't fire.
+- **Sample-accurate gapless playback**: `GaplessController` preloads the next
+  track and the engine switches to it at the exact sample the current one ends,
+  with adoption from the queue store so autoplay keeps working even if preload
+  didn't fire.
+- **Bit-perfect output** (Settings toggle, on by default): the device follows
+  each track's sample rate and bit depth up to what the DAC supports; the
+  output menu explains when the DAC limits it (e.g. 24/192 → 24/96).
 - **Crossfade** (0–12 s) and **soundcheck** toggle in Settings.
-- **Exclusive / hog mode** on macOS through a CoreAudio FFI shim
-  (`ExclusiveModeManager`) — bypasses the system mixer, releases the device on
-  quit so other apps recover the output.
+- **Exclusive mode** — CoreAudio hog mode on macOS, WASAPI exclusive on Windows
+  (experimental) — bypasses the system mixer; the device's own rate is restored
+  and exclusive access released on quit.
 - **Output device picker** with hot-reapply, plus FFT and stereo RMS level
   metering exposed to the UI at configurable cadences (mini / full / screen).
 - **Persistent playback analysis cache** (waveform peaks + track-row bars)
   stored in SQLite with a configurable disk quota, so re-opening an album does
   not re-decode every file.
-- 10-band **graphic EQ** powered by the bass_fx plugin, with per-band gain
-  shared between the renderer store and the engine.
+- Configurable **graphic EQ** (5–32 RBJ peaking bands, the same response the old
+  BASS_FX engine had), with per-band gain shared between the renderer store and
+  the engine.
 
 ### Library
 - Unified local and OneDrive libraries with per-source names, icons and badges.
@@ -216,14 +222,14 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
 
 ### Packaging & infra
 - `electron-builder` targets: **DMG (x64 + arm64), NSIS (x64), AppImage, .deb**,
-  with `native/libs/` shipped via `extraResources` + `asarUnpack` so BASS and
-  Chromaprint load at runtime.
-- `fetch:native` downloads the platform-specific BASS set, with each
-  package's license text, and the verified Chromaprint package;
-  `verify:native -- --load` validates formats, license texts, architectures,
-  provenance, dependencies and frozen native fingerprints.
-- Installers ship `LICENSE`, `LICENSE-BASS-EXCEPTION.md`,
-  `THIRD_PARTY_NOTICES.md` and `licenses/` under `Resources/licenses/`.
+  with `native/libs/` shipped via `extraResources` + `asarUnpack` so
+  libcrate_audio and Chromaprint load at runtime.
+- `fetch:native` downloads the verified libcrate_audio and Chromaprint packages
+  (`build:crate-audio` builds the engine from the pinned FFmpeg and miniaudio
+  sources instead); `verify:native -- --load` validates formats,
+  architectures, provenance, dependencies and frozen native fingerprints.
+- Installers ship `LICENSE`, `THIRD_PARTY_NOTICES.md` and `licenses/` under
+  `Resources/licenses/`.
 - GitHub Releases publish configuration emits updater metadata
   (`latest-mac.yml`, `latest.yml`, `latest-linux.yml`) and macOS zip artifacts
   required by the updater.
@@ -245,7 +251,7 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
 | 0 | Archive Swift, scaffold Electron app | ✅ |
 | 1 | UI shell — all views, theme, density, mini player, full-screen NowPlaying | ✅ |
 | 2 | Data layer — `better-sqlite3`, FTS5, schema, repositories | ✅ |
-| 3 | Audio engine — BASS via koffi FFI, gapless, EQ, exclusive mode | ✅ |
+| 3 | Audio engine — FFmpeg + miniaudio (libcrate_audio) via koffi FFI, gapless, EQ, bit-perfect, exclusive mode | ✅ |
 | 4 | Metadata + library import — `music-metadata`, chokidar watchers, reconciler | ✅ |
 | 5 | Lyrics (LRClib + sidecar), playback analysis cache, device sync | ✅ |
 | 6 | Packaging — DMG, NSIS, AppImage, .deb | ✅ |
@@ -253,17 +259,12 @@ docs/           Release notes + feature specs (e.g. lyrics-feature.md)
 
 ## License
 
-Crate's source code is licensed under **GPL-3.0-or-later** (see `LICENSE`)
-with an additional permission, under GPL section 7, to combine and distribute
-it with the proprietary BASS audio library (see `LICENSE-BASS-EXCEPTION.md`).
-
-BASS itself is not open source and is not part of this repository: it is
-downloaded from un4seen.com by `npm run fetch:native` and is free for
-non-commercial use only. Distributing Crate, or a fork, as part of a
-commercial product requires a BASS license from un4seen developments. The
-BASS add-ons have their own terms, and some of them are written by third
-parties. `THIRD_PARTY_NOTICES.md` lists them with every other third-party
-component.
+Crate's source code is licensed under **GPL-3.0-or-later** (see `LICENSE`).
+Every component it ships is open source: the audio engine, libcrate_audio,
+is built from this repository with FFmpeg (LGPL-2.1-or-later, audio
+decoders only) and miniaudio (public domain / MIT-0), and duplicate
+detection uses Chromaprint (LGPL-2.1-or-later). `THIRD_PARTY_NOTICES.md`
+lists every third-party component and its license.
 
 A few parts are derived from HiFidelity under the Apache License 2.0 (see
 `licenses/HiFidelity-Apache-2.0.txt` and the section below). Installers carry
@@ -286,19 +287,19 @@ the parity work as Crate moves through its remaining phases.
 
 ### Inherited from HiFidelity — to be corrected
 
-The base of Crate's audio engine comes from HiFidelity. HiFidelity bridged
-BASS through CBass in Swift; Crate does it through koffi FFI in Node. The
-table lists what was carried over, how close it stays to the original, and
-what is left to rework. "Derived" parts come from HiFidelity's Apache-2.0
+Crate's first audio engine came from HiFidelity: BASS, which HiFidelity
+bridged through CBass in Swift and Crate through koffi FFI in Node. That
+engine has been replaced by libcrate_audio (FFmpeg + miniaudio), so the BASS
+engine base, its decoder plugin set and the closed BASS add-ons are gone. The
+table lists what is still carried over, how close it stays to the original,
+and what is left to rework. "Derived" parts come from HiFidelity's Apache-2.0
 code and carry an attribution notice in the file. "Idea only" parts reuse a
 design, not the code.
 
 | Area | Crate files | HiFidelity origin | Relation | To correct |
 |---|---|---|---|---|
-| Engine base: BASS + decoder plugin set | `electron/main/audio/PluginLoader.ts`, `scripts/fetch-bass.mjs` | `BASSAudioEngine.swift` (`loadPlugins`) | Derived: same 11 plugins in the same order. The first BASS binaries were copied from HiFidelity's build | Build Crate's own plugin list. Longer term, evaluate an open-source engine to replace proprietary BASS |
-| BASS add-ons with LGPL code inside | `native/libs/` (BASS_FX → SoundTouch, BASS_TTA → TTA) | Same add-on set | Inherited dependency | Closed binaries embedding LGPL code. Replace them, or drop TTA support, to remove the dependency |
 | 10-band equalizer layout | `shared/constants/equalizer.ts` (`LEGACY_EQ_BAND_FREQUENCIES`), presets in `electron/main/audio/EQManager.ts` | `AudioEffectsManager.swift` | Derived: same 10 centre frequencies, originally with the same 1-octave bandwidth. Filters and presets are Crate's own | Replace with Crate's own layout and re-define the presets on it |
-| Output-device switching | `AudioEngine.setOutputDevice`, `GaplessController.movePreloadedToOutputDevice` | `BASSAudioEngine.swift` | Idea only: same sequence of BASS calls, which is also the standard BASS recipe | Review and document as Crate's own design |
-| Exclusive (hog) mode and gapless playback | `electron/main/audio/ExclusiveModeManager.ts`, `GaplessController.ts` | `DACManager.swift`, `PlaybackController+Gapless.swift` | Idea only: different implementation, triggers and thresholds | None needed for the code. Only the design lineage is noted |
+| Output-device switching | `AudioEngine.setOutputDevice` | `BASSAudioEngine.swift` | Idea only: the BASS call sequence it once followed is gone; libcrate_audio reopens the output itself | Review and document as Crate's own design |
+| Exclusive (hog) mode and gapless playback | `electron/main/audio/ExclusiveModeManager.ts`, `GaplessController.ts`, `native/crate-audio/src/ca_hal_coreaudio.c` | `DACManager.swift`, `PlaybackController+Gapless.swift` | Idea only: different implementation, triggers and thresholds | None needed for the code. Only the design lineage is noted |
 | Database schema and FTS5 search | `electron/main/db/migrations/0001_initial.sql`, `0002_fts5.sql` | `DatabaseMigrator.swift`, `DatabaseInit.swift` | Derived: ported from HiFidelity's GRDB schema | Supersede the inherited tables and triggers with Crate's own migrations |
 | Playback queue | `electron/renderer/src/stores/queueStore.ts` | `PlaybackController+Queue.swift` | Idea only: the header still names the Swift file, but the implementation is independent | Remove the reference to the Swift code |

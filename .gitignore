@@ -144,12 +144,11 @@ release/
 *.swp
 *.swo
 
-# BASS native libraries and their license texts — fetched via
-# scripts/fetch-bass.mjs. Not committed because of size + license.
+# Native libraries (crate-audio, Chromaprint) — built or fetched by the
+# scripts/*-crate-audio.mjs and *-chromaprint.mjs scripts. Not committed.
 native/libs/*.dylib
 native/libs/*.dll
 native/libs/*.so
-native/libs/licenses/bass/
 native/libs/chromaprint-manifest.json
 native/libs/licenses/chromaprint/chromaprint-*.tar.gz
 
@@ -157,6 +156,8 @@ native/libs/licenses/chromaprint/chromaprint-*.tar.gz
 native/crate-audio/.cache/
 native/libs/crate-audio-manifest.json
 native/libs/licenses/crate-audio/ffmpeg-*.tar.xz
+# Leftovers of the old BASS engine must never be packaged again.
+native/libs/licenses/bass/
 
 # Claude Code session files
 .claude/

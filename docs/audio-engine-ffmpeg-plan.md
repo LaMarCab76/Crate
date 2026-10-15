@@ -490,3 +490,18 @@ Prueba en hardware (MacBook Pro Speakers, sin reproducir audio audible):
 - al apagar bit-perfect vuelve a 48 kHz, y al cerrar queda como estaba.
 
 Capacidades leídas del FiiO KA13 del usuario: hasta 384 kHz/32 bits; formato físico actual 48 kHz/16 bits.
+
+### F6 · Eliminar BASS — completa
+
+- Se borraron `fetch-bass.mjs`, `verify-bass.mjs` (+ test) y los scripts `fetch:bass`/`verify:bass`. `fetch:native` y `verify:native` cubren crate-audio y Chromaprint. La caché de `release.yml` usa los scripts de crate-audio.
+- `electron-builder.yml` excluye cualquier archivo `*bass*` que quede en `native/libs`, para que nunca se empaquete; los binarios locales se borraron.
+- README, `native/libs/README.md` y `THIRD_PARTY_NOTICES.md` describen el motor nuevo y sus licencias.
+- Las menciones de BASS que quedan son referencias de compatibilidad (por qué el motor reproduce exactamente lo que hacía BASS) y los datos y el script de referencia en `native/crate-audio/tests/golden/`.
+- Empaquetado macOS sin firma verificado: el bundle lleva `libcrate_audio` + Chromaprint, licencias y el fuente de FFmpeg; `verify:native --packaged-root` pasa.
+
+### F7 · Pendiente
+
+- **Validación manual** con el checklist de la §4 en la Mac del usuario (escucha real; el slice x64 solo si se instala Rosetta).
+- **CI en GitHub:** correr `crate-audio-native.yml` (Linux y Windows no se compilaron con sus toolchains reales; Windows sí se cross-compiló localmente con MinGW) y publicar el release `crate-audio-native-v1.0.0-1`. `fetch:native` depende de ese release.
+- **Repo público (Crate):** portar la rama, borrar `LICENSE-BASS-EXCEPTION.md` y su mención en el README, y decidir dónde viven los assets nativos (hoy `CRATE_AUDIO_NATIVE_REPOSITORY = LaMarCab76/LocalLibrary`, que es privado).
+- Merge a `main` y versión 0.7.0.
